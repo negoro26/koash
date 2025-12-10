@@ -1,4 +1,3 @@
-#include "../include/shell.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -11,6 +10,7 @@ void shell_loop() {
     printf("-> ");
     line = read_line();
     args = split_line(line);
+    status = shell_execute(args);
 
     free(line);
     free(args);

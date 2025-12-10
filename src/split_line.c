@@ -35,8 +35,3 @@ char **split_line(char *line) {
 
   return tokens;
 }
-
-// cred ca trebuie folosit get delim aici ca sa separam tokenurile??
-// asta daca functioneaza asa, daca nu ne trebuie ceva cu strtok (proababil)
-// UPDATE : getdelim n are nicio treaba, trebuie sa invat sa descifrez
-// documentatie
