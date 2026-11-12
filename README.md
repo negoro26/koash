@@ -2,9 +2,15 @@
 
 An agent-native structured command shell written in Rust. `koa` combines POSIX-compatible pipelines with typed record streams, Hashline code anchors, transactional micro-commits, persistent sub-kernels, and headless RPC/ACP modes in a single binary.
 
-## Build
+## Install
+
+Prebuilt Linux binaries are attached on [GitHub Releases](https://github.com/negoro26/koash/releases):
 
 ```bash
+# Cargo
+cargo install --git https://github.com/negoro26/koash
+
+# Or build from source
 cargo build --release --bin koa
 ```
 
