@@ -1,0 +1,25 @@
+[package]
+name = "shell-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "koa"
+path = "src/main.rs"
+
+[dependencies]
+shell-syntax.workspace = true
+shell-value.workspace = true
+shell-kernel.workspace = true
+shell-builtins.workspace = true
+shell-rpc.workspace = true
+shell-surface.workspace = true
+shell-tui.workspace = true
+tokio.workspace = true
+nix.workspace = true
+
+[dev-dependencies]
+nix.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
