@@ -1,30 +1,109 @@
-mod env;
-mod fs;
-mod process;
-mod table;
-mod text;
-mod tx;
-mod workspace;
+pub(crate) mod common;
 
-use std::borrow::Cow;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+mod ast;
+mod cat;
+mod cd;
+mod cp;
+mod diag;
+mod discover;
+mod echo;
+mod env;
+mod export;
+mod find;
+mod first;
+mod from;
+mod grep;
+mod head;
+mod help;
+mod js;
+mod kill;
+mod last;
+mod ls;
+mod mkdir;
+mod mv;
+mod patch;
+mod prewalk;
+mod ps;
+mod pwd;
+mod py;
+mod refs;
+mod rename;
+mod rm;
+mod rollback;
+mod select;
+mod sort_by;
+mod sql;
+mod stat;
+mod tail;
+mod to;
+mod tx_log;
+mod undo;
+mod where_;
+mod which;
 
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
-use crate::discover::run_discover;
+use crate::builtin::{Builtin, Placement, Signature};
 
-pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
-    if session.kill.is_killed() {
-        return Err(StructuredDiagnostic::new(
-            "E_KILLED",
-            "command killed",
-            None,
-            None,
-        ));
-    }
-    Ok(())
+/// Order is the listing order of `help`, `discover`, and the schemas endpoint.
+pub static REGISTRY: &[&dyn Builtin] = &[
+    &cd::Cd,
+    &pwd::Pwd,
+    &export::Export,
+    &env::Env,
+    &ls::Ls,
+    &stat::Stat,
+    &cat::Cat,
+    &echo::Echo,
+    &head::Head,
+    &tail::Tail,
+    &find::Find,
+    &grep::Grep,
+    &patch::Patch,
+    &prewalk::Prewalk,
+    &ast::Ast,
+    &ps::Ps,
+    &kill::Kill,
+    &which::Which,
+    &mkdir::Mkdir,
+    &rm::Rm,
+    &cp::Cp,
+    &mv::Mv,
+    &where_::Where,
+    &select::Select,
+    &sort_by::SortBy,
+    &first::First,
+    &last::Last,
+    &from::FromFormat,
+    &to::ToFormat,
+    &discover::Discover,
+    &undo::Undo,
+    &rollback::Rollback,
+    &tx_log::TxLog,
+    &diag::Diag,
+    &refs::Refs,
+    &rename::Rename,
+    &py::Py,
+    &js::Js,
+    &sql::Sql,
+    &help::Help,
+];
+
+pub fn lookup(name: &str) -> Option<&'static dyn Builtin> {
+    REGISTRY.iter().copied().find(|b| {
+        let sig = b.signature();
+        sig.name == name || sig.aliases.contains(&name)
+    })
+}
+
+/// Commands listed by help, discover, and the schemas endpoint.
+/// Shell-control commands (`Placement::SoleStage`) are not part of the catalog.
+pub fn catalog() -> impl Iterator<Item = &'static Signature> {
+    REGISTRY
+        .iter()
+        .map(|b| b.signature())
+        .filter(|s| s.placement == Placement::Any)
 }
 
 pub fn run_builtin(
@@ -33,62 +112,9 @@ pub fn run_builtin(
     args: &[String],
     input: Value,
 ) -> Result<Value, StructuredDiagnostic> {
-    match name {
-        "cd" => env::cd(session, args),
-        "pwd" => env::pwd(session),
-        "export" => env::export(session, args),
-        "env" => env::env(session),
-        "ls" => fs::ls(session, args),
-        "stat" => fs::stat(session, args),
-        "find" => fs::find(session, args),
-        "mkdir" => fs::mkdir(session, args),
-        "rm" => fs::rm(session, args),
-        "cp" => fs::cp(session, args),
-        "mv" => fs::mv(session, args),
-        "echo" => text::echo(args),
-        "cat" => text::cat(session, args, input),
-        "head" => text::head(session, args, input),
-        "tail" => text::tail(session, args, input),
-        "grep" => text::grep(session, args, input),
-        "patch" => text::patch(session, args),
-        "where" => table::where_filter(args, input),
-        "select" => table::select(args, input),
-        "sort-by" | "sort_by" => table::sort_by(args, input),
-        "first" => table::first(args, input),
-        "last" => table::last(args, input),
-        "from" => table::from(args, input),
-        "to" => table::to(args, input),
-        "ps" => process::ps(),
-        "kill" => process::kill(args),
-        "which" => process::which(session, args),
-        "undo" => tx::undo(session),
-        "rollback" => tx::rollback(session, args),
-        "tx-log" | "tx_log" => tx::tx_log(session),
-        "diag" => workspace::diag(session),
-        "refs" => workspace::refs(session, args),
-        "rename" => workspace::rename(session, args),
-        "prewalk" => crate::code_intel::run_prewalk(session, args),
-        "ast" => crate::code_intel::run_ast(session, args),
-        "discover" => run_discover(args),
-        "help" => help(args),
-        "@sql" => crate::subkernel::run_sql_inprocess(session, &args.join(" ")),
-        "@py" => {
-            session.mark_opaque("@py".to_string());
-            crate::subkernel::run_worker(
-                session,
-                crate::subkernel::KernelKind::Python,
-                &args.join(" "),
-            )
-        }
-        "@js" => {
-            session.mark_opaque("@js".to_string());
-            crate::subkernel::run_worker(
-                session,
-                crate::subkernel::KernelKind::JavaScript,
-                &args.join(" "),
-            )
-        }
-        _ => Err(StructuredDiagnostic::new(
+    match lookup(name) {
+        Some(builtin) => builtin.run(session, args, input),
+        None => Err(StructuredDiagnostic::new(
             "E_UNKNOWN_BUILTIN",
             format!("unknown builtin `{name}`"),
             None,
@@ -98,57 +124,5 @@ pub fn run_builtin(
 }
 
 pub(crate) fn reads_stdin(name: &str, args: &[String]) -> bool {
-    crate::schema::get_schema(name).is_some_and(|s| s.reads_input) && !text::names_files(name, args)
-}
-
-pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
-    let p = Path::new(raw);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        session.cwd.join(p)
-    }
-}
-
-pub(crate) fn hashline_schema() -> Arc<[Cow<'static, str>]> {
-    Arc::new([
-        Cow::Borrowed("file"),
-        Cow::Borrowed("line"),
-        Cow::Borrowed("hash"),
-        Cow::Borrowed("text"),
-    ])
-}
-
-fn help(args: &[String]) -> Result<Value, StructuredDiagnostic> {
-    let cols: Arc<[Cow<'static, str>]> = Arc::new([
-        Cow::Borrowed("command"),
-        Cow::Borrowed("flags"),
-        Cow::Borrowed("columns"),
-        Cow::Borrowed("description"),
-    ]);
-    let filter = args.first().map(|s| s.as_str());
-    let mut batch =
-        shell_value::RecordBatch::with_capacity(cols, crate::schema::BUILTIN_SCHEMAS.len());
-    for schema in crate::schema::BUILTIN_SCHEMAS {
-        if let Some(q) = filter
-            && !schema.name.eq_ignore_ascii_case(q)
-            && !schema.name.contains(q)
-            && !schema.description.contains(q)
-        {
-            continue;
-        }
-        batch
-            .cells
-            .push(shell_value::CellVal::Str(schema.name.to_string()));
-        batch
-            .cells
-            .push(shell_value::CellVal::Str(schema.flags.join(" ")));
-        batch
-            .cells
-            .push(shell_value::CellVal::Str(schema.columns.join(", ")));
-        batch
-            .cells
-            .push(shell_value::CellVal::Str(schema.description.to_string()));
-    }
-    Ok(Value::from_batch(batch))
+    lookup(name).is_some_and(|b| b.reads_input(args))
 }
