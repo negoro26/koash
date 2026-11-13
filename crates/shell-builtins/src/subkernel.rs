@@ -50,8 +50,8 @@ for line in sys.stdin:
     try:
         exec(compile(r['code'], '<koa>', 'exec'), g)
         s = 'OK'
-    except BaseException:
-        s = 'ERR ' + json.dumps(traceback.format_exc())
+    except BaseException as e:
+        s = 'ERR ' + json.dumps(''.join(traceback.format_exception(type(e), e, e.__traceback__.tb_next)))
     sys.stdout.write(r['end'] + s + '\\n')
     sys.stdout.flush()
 ";
@@ -61,7 +61,7 @@ const rl = require('readline').createInterface({ input: process.stdin });
 rl.on('line', l => {
   const r = JSON.parse(l);
   let s = 'OK';
-  try { (0, eval)(r.code); } catch (e) { s = 'ERR ' + JSON.stringify(String((e && e.stack) || e)); }
+  try { (0, eval)(r.code); } catch (e) { s = 'ERR ' + JSON.stringify(String(e)); }
   process.stdout.write(r.end + s + '\\n');
 });
 ";

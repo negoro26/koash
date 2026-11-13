@@ -5,7 +5,9 @@ pub mod lsp;
 pub mod pipeline;
 pub mod schema;
 pub mod sink;
+pub mod special;
 pub mod subkernel;
+pub mod wiring;
 
 pub use builtins::run_builtin;
 pub use lsp::{LspDiagnostic, post_edit_diagnostics};

@@ -18,8 +18,87 @@ use crate::protocol::{
     SessionIdParams, StreamRule,
 };
 
+/// How long a killed exec gets to wind down before its session is reported busy.
+const KILL_GRACE: Duration = Duration::from_millis(500);
+const TIMEOUT_EXIT_CODE: i32 = 124;
+
+/// A session is out of its slot while an exec owns it.
+enum Slot {
+    Ready(Box<Session>),
+    Busy,
+}
+
+type Sessions = Arc<Mutex<HashMap<String, Slot>>>;
+
+fn not_found(id: &str) -> StructuredDiagnostic {
+    StructuredDiagnostic::new(
+        "E_SESSION_NOT_FOUND",
+        format!("session `{id}` not found"),
+        None,
+        None,
+    )
+}
+
+fn busy(id: &str) -> StructuredDiagnostic {
+    StructuredDiagnostic::new(
+        "E_SESSION_BUSY",
+        format!("session `{id}` is still running a previous command"),
+        None,
+        None,
+    )
+}
+
+fn ready<'a>(
+    sessions: &'a HashMap<String, Slot>,
+    id: &str,
+) -> Result<&'a Session, StructuredDiagnostic> {
+    match sessions.get(id) {
+        Some(Slot::Ready(session)) => Ok(session),
+        Some(Slot::Busy) => Err(busy(id)),
+        None => Err(not_found(id)),
+    }
+}
+
+fn ready_mut<'a>(
+    sessions: &'a mut HashMap<String, Slot>,
+    id: &str,
+) -> Result<&'a mut Session, StructuredDiagnostic> {
+    match sessions.get_mut(id) {
+        Some(Slot::Ready(session)) => Ok(session),
+        Some(Slot::Busy) => Err(busy(id)),
+        None => Err(not_found(id)),
+    }
+}
+
+fn parse_params<T: serde::de::DeserializeOwned>(
+    params: serde_json::Value,
+) -> Result<T, StructuredDiagnostic> {
+    serde_json::from_value(params)
+        .map_err(|e| StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None))
+}
+
+async fn respond<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    id: Option<serde_json::Value>,
+    result: Result<serde_json::Value, StructuredDiagnostic>,
+) -> Result<(), StructuredDiagnostic> {
+    let resp = match result {
+        Ok(value) => RpcResponse {
+            id,
+            result: Some(value),
+            error: None,
+        },
+        Err(diag) => RpcResponse {
+            id,
+            result: None,
+            error: Some(diag),
+        },
+    };
+    send_json(writer, &resp).await
+}
+
 pub struct RpcServer {
-    sessions: Arc<Mutex<HashMap<String, Session>>>,
+    sessions: Sessions,
     next_id: Arc<Mutex<u64>>,
 }
 
@@ -113,24 +192,28 @@ impl RpcServer {
     ) -> Result<(), StructuredDiagnostic> {
         match req.method.as_str() {
             "session.create" => {
-                let sid = self.alloc_session_id().await;
-                let session = Session::new(false)?;
-                self.sessions.lock().await.insert(sid.clone(), session);
-                let resp = RpcResponse {
-                    id: req.id,
-                    result: Some(serde_json::json!({ "session_id": sid })),
-                    error: None,
+                let outcome = match Session::new(false) {
+                    Ok(session) => {
+                        let sid = self.alloc_session_id().await;
+                        self.sessions
+                            .lock()
+                            .await
+                            .insert(sid.clone(), Slot::Ready(Box::new(session)));
+                        Ok(serde_json::json!({ "session_id": sid }))
+                    }
+                    Err(diag) => Err(diag),
                 };
-                send_json(writer, &resp).await
+                respond(writer, req.id, outcome).await
             }
             "session.fork" => {
-                let params: ForkParams = serde_json::from_value(req.params).map_err(|e| {
-                    StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None)
-                })?;
+                let params: ForkParams = match parse_params(req.params) {
+                    Ok(p) => p,
+                    Err(diag) => return respond(writer, req.id, Err(diag)).await,
+                };
                 let new_sid = self.alloc_session_id().await;
                 let forked = {
                     let guard = self.sessions.lock().await;
-                    guard.get(&params.session_id).map(|s| {
+                    ready(&guard, &params.session_id).and_then(|s| {
                         if params.isolated {
                             s.fork_isolated(Some(params.session_id.clone()), &new_sid)
                         } else {
@@ -138,47 +221,27 @@ impl RpcServer {
                         }
                     })
                 };
-                match forked {
-                    Some(Ok(new_sess)) => {
-                        self.sessions.lock().await.insert(new_sid.clone(), new_sess);
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: Some(serde_json::json!({ "session_id": new_sid })),
-                            error: None,
-                        };
-                        send_json(writer, &resp).await
+                let outcome = forked.map(|session| {
+                    (new_sid.clone(), session)
+                });
+                match outcome {
+                    Ok((sid, session)) => {
+                        self.sessions.lock().await.insert(sid.clone(), Slot::Ready(Box::new(session)));
+                        respond(writer, req.id, Ok(serde_json::json!({ "session_id": sid }))).await
                     }
-                    Some(Err(diag)) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(diag),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    None => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(StructuredDiagnostic::new(
-                                "E_SESSION_NOT_FOUND",
-                                format!("session `{}` not found", params.session_id),
-                                None,
-                                None,
-                            )),
-                        };
-                        send_json(writer, &resp).await
-                    }
+                    Err(diag) => respond(writer, req.id, Err(diag)).await,
                 }
             }
             "session.diff" => {
-                let params: SessionIdParams = serde_json::from_value(req.params).map_err(|e| {
-                    StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None)
-                })?;
-                let diff = {
+                let params: SessionIdParams = match parse_params(req.params) {
+                    Ok(p) => p,
+                    Err(diag) => return respond(writer, req.id, Err(diag)).await,
+                };
+                let outcome = {
                     let guard = self.sessions.lock().await;
-                    guard.get(&params.session_id).map(|s| {
-                        s.cow
+                    ready(&guard, &params.session_id).map(|s| {
+                        let entries = s
+                            .cow
                             .as_ref()
                             .map(|c| {
                                 c.diff()
@@ -186,180 +249,80 @@ impl RpcServer {
                                     .map(|(path, state)| serde_json::json!({ "path": path, "state": state }))
                                     .collect::<Vec<_>>()
                             })
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        serde_json::json!({ "changes": entries })
                     })
                 };
-                match diff {
-                    Some(entries) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: Some(serde_json::json!({ "changes": entries })),
-                            error: None,
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    None => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(StructuredDiagnostic::new(
-                                "E_SESSION_NOT_FOUND",
-                                format!("session `{}` not found", params.session_id),
-                                None,
-                                None,
-                            )),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                }
+                respond(writer, req.id, outcome).await
             }
             "session.merge" => {
-                let params: SessionIdParams = serde_json::from_value(req.params).map_err(|e| {
-                    StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None)
-                })?;
-                let merged = {
+                let params: SessionIdParams = match parse_params(req.params) {
+                    Ok(p) => p,
+                    Err(diag) => return respond(writer, req.id, Err(diag)).await,
+                };
+                let outcome = {
                     let mut guard = self.sessions.lock().await;
-                    guard.get_mut(&params.session_id).map(|s| match s.cow.as_mut() {
-                        Some(cow) => cow.merge(),
-                        None => Ok(Vec::new()),
+                    ready_mut(&mut guard, &params.session_id).and_then(|s| {
+                        let files = match s.cow.as_mut() {
+                            Some(cow) => cow.merge()?,
+                            None => Vec::new(),
+                        };
+                        Ok(serde_json::json!({ "merged": files }))
                     })
                 };
-                match merged {
-                    Some(Ok(files)) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: Some(serde_json::json!({ "merged": files })),
-                            error: None,
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    Some(Err(diag)) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(diag),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    None => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(StructuredDiagnostic::new(
-                                "E_SESSION_NOT_FOUND",
-                                format!("session `{}` not found", params.session_id),
-                                None,
-                                None,
-                            )),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                }
+                respond(writer, req.id, outcome).await
             }
             "session.snapshot" => {
-                let params: SessionIdParams = serde_json::from_value(req.params).map_err(|e| {
-                    StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None)
-                })?;
-                let snap = {
-                    let guard = self.sessions.lock().await;
-                    guard.get(&params.session_id).map(|s| s.snapshot())
+                let params: SessionIdParams = match parse_params(req.params) {
+                    Ok(p) => p,
+                    Err(diag) => return respond(writer, req.id, Err(diag)).await,
                 };
-                match snap {
-                    Some(Ok(snapshot)) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: Some(serde_json::json!({ "snapshot": snapshot })),
-                            error: None,
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    Some(Err(diag)) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(diag),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                    None => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(StructuredDiagnostic::new(
-                                "E_SESSION_NOT_FOUND",
-                                format!("session `{}` not found", params.session_id),
-                                None,
-                                None,
-                            )),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                }
+                let outcome = {
+                    let guard = self.sessions.lock().await;
+                    ready(&guard, &params.session_id)
+                        .and_then(|s| s.snapshot())
+                        .map(|snapshot| serde_json::json!({ "snapshot": snapshot }))
+                };
+                respond(writer, req.id, outcome).await
             }
             "session.restore" => {
-                let params: RestoreParams = serde_json::from_value(req.params).map_err(|e| {
-                    StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None)
-                })?;
-                match Session::restore(&params.snapshot) {
-                    Ok(sess) => {
+                let params: RestoreParams = match parse_params(req.params) {
+                    Ok(p) => p,
+                    Err(diag) => return respond(writer, req.id, Err(diag)).await,
+                };
+                let outcome = match Session::restore(&params.snapshot) {
+                    Ok(session) => {
                         let sid = self.alloc_session_id().await;
-                        self.sessions.lock().await.insert(sid.clone(), sess);
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: Some(serde_json::json!({ "session_id": sid })),
-                            error: None,
-                        };
-                        send_json(writer, &resp).await
+                        self.sessions
+                            .lock()
+                            .await
+                            .insert(sid.clone(), Slot::Ready(Box::new(session)));
+                        Ok(serde_json::json!({ "session_id": sid }))
                     }
-                    Err(diag) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(diag),
-                        };
-                        send_json(writer, &resp).await
-                    }
-                }
+                    Err(diag) => Err(diag),
+                };
+                respond(writer, req.id, outcome).await
             }
             "session.schemas" => {
-                let resp = RpcResponse {
-                    id: req.id,
-                    result: Some(serde_json::json!({ "schemas": BUILTIN_SCHEMAS })),
-                    error: None,
-                };
-                send_json(writer, &resp).await
+                respond(
+                    writer,
+                    req.id,
+                    Ok(serde_json::json!({ "schemas": BUILTIN_SCHEMAS })),
+                )
+                .await
             }
-            "exec" => {
-                let params: ExecParams = match serde_json::from_value(req.params) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let resp = RpcResponse {
-                            id: req.id,
-                            result: None,
-                            error: Some(StructuredDiagnostic::new(
-                                "E_RPC_PARAMS",
-                                e.to_string(),
-                                None,
-                                None,
-                            )),
-                        };
-                        return send_json(writer, &resp).await;
-                    }
-                };
-                self.handle_exec(req.id, params, writer).await
-            }
+            "exec" => match parse_params::<ExecParams>(req.params) {
+                Ok(params) => self.handle_exec(req.id, params, writer).await,
+                Err(diag) => respond(writer, req.id, Err(diag)).await,
+            },
             other => {
-                let resp = RpcResponse {
-                    id: req.id,
-                    result: None,
-                    error: Some(StructuredDiagnostic::new(
-                        "E_RPC_METHOD",
-                        format!("unknown method `{other}`"),
-                        None,
-                        None,
-                    )),
-                };
-                send_json(writer, &resp).await
+                let diag = StructuredDiagnostic::new(
+                    "E_RPC_METHOD",
+                    format!("unknown method `{other}`"),
+                    None,
+                    None,
+                );
+                respond(writer, req.id, Err(diag)).await
             }
         }
     }
@@ -371,60 +334,32 @@ impl RpcServer {
         writer: &mut W,
     ) -> Result<(), StructuredDiagnostic> {
         let start = Instant::now();
-        let mut guard = self.sessions.lock().await;
-        let session = match guard.get_mut(&params.session_id) {
-            Some(s) => {
-                s.touch();
-                s
-            }
-            None => {
-                let resp = RpcResponse {
-                    id,
-                    result: None,
-                    error: Some(StructuredDiagnostic::new(
-                        "E_SESSION_NOT_FOUND",
-                        format!("session `{}` not found", params.session_id),
-                        None,
-                        None,
-                    )),
+        let admission = {
+            let mut guard = self.sessions.lock().await;
+            admit(&mut guard, &params)
+        };
+        let (mut session, program) = match admission {
+            Admission::Run(session, program) => (session, program),
+            Admission::Reject(diag) => return respond(writer, id, Err(diag)).await,
+            Admission::Blocked(reason) => {
+                let blocked = RpcEvent::PolicyBlocked {
+                    id: id.clone(),
+                    reason,
+                    command: params.command.clone(),
                 };
-                return send_json(writer, &resp).await;
+                send_json(writer, &blocked).await?;
+                let completed = RpcEvent::Completed {
+                    id,
+                    exit_code: 1,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    mutated_files_manifest: Vec::new(),
+                    truncated: false,
+                    spill_uri: None,
+                    lsp_diagnostics: Vec::new(),
+                };
+                return send_json(writer, &completed).await;
             }
         };
-
-        session.mutated_files.clear();
-        session.taint = TaintLevel::TrustedLocal;
-
-        let program = match shell_syntax::parse(&params.command) {
-            Ok(p) => p,
-            Err(err) => {
-                let resp = RpcResponse {
-                    id,
-                    result: None,
-                    error: Some(err.into()),
-                };
-                return send_json(writer, &resp).await;
-            }
-        };
-
-        if let Some(reason) = check_policy(session, &program, &params.policy) {
-            let blocked = RpcEvent::PolicyBlocked {
-                id: id.clone(),
-                reason,
-                command: params.command.clone(),
-            };
-            send_json(writer, &blocked).await?;
-            let completed = RpcEvent::Completed {
-                id,
-                exit_code: 1,
-                duration_ms: start.elapsed().as_millis() as u64,
-                mutated_files_manifest: Vec::new(),
-                truncated: false,
-                spill_uri: None,
-                lsp_diagnostics: Vec::new(),
-            };
-            return send_json(writer, &completed).await;
-        }
 
         let spawned = RpcEvent::ProcessSpawned {
             id: id.clone(),
@@ -434,26 +369,85 @@ impl RpcServer {
         };
         send_json(writer, &spawned).await?;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel(1 << 20);
-        let sink = Sink::Capture(tx);
-        let exit_code = run_program(session, &program, &sink);
-        drop(sink);
-        let out = RunOutput::from_chunks(rx.try_iter());
+        session.kill.reset();
+        let kill = session.kill.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Chunk>(256);
+        let mut executor = tokio::task::spawn_blocking(move || {
+            let sink = Sink::Capture(tx);
+            let code = run_program(&mut session, &program, &sink);
+            (session, code)
+        });
+        let collector = tokio::task::spawn_blocking(move || RunOutput::from_chunks(rx));
+
+        let (finished, timed_out) = match params.timeout_ms {
+            None => (Some((&mut executor).await), false),
+            Some(ms) => match tokio::time::timeout(Duration::from_millis(ms), &mut executor).await {
+                Ok(joined) => (Some(joined), false),
+                Err(_) => {
+                    kill.kill();
+                    match tokio::time::timeout(KILL_GRACE, &mut executor).await {
+                        Ok(joined) => (Some(joined), true),
+                        Err(_) => (None, true),
+                    }
+                }
+            },
+        };
+
+        let sid = params.session_id.clone();
+        let (session, code) = match finished {
+            Some(Ok(pair)) => pair,
+            Some(Err(join_err)) => {
+                self.sessions.lock().await.remove(&sid);
+                let diag = StructuredDiagnostic::new(
+                    "E_EXEC_FAILED",
+                    format!("executor thread failed: {join_err}"),
+                    None,
+                    None,
+                );
+                return respond(writer, id, Err(diag)).await;
+            }
+            None => {
+                // The blocking task still owns the session; the slot stays Busy until it comes back.
+                let sessions = Arc::clone(&self.sessions);
+                tokio::spawn(async move {
+                    if let Ok((session, _)) = executor.await {
+                        sessions.lock().await.insert(sid, Slot::Ready(session));
+                    }
+                });
+                let completed = RpcEvent::Completed {
+                    id,
+                    exit_code: TIMEOUT_EXIT_CODE,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    mutated_files_manifest: Vec::new(),
+                    truncated: false,
+                    spill_uri: None,
+                    lsp_diagnostics: Vec::new(),
+                };
+                return send_json(writer, &completed).await;
+            }
+        };
+
+        let out = collector.await.unwrap_or_else(|_| RunOutput::empty());
         let redact_env = (session.taint == TaintLevel::UntrustedExternal)
             .then(|| session.env.materialize());
+        let cwd = session.cwd.clone();
+        let mutated_files = session.mutated_files.clone();
+        self.sessions.lock().await.insert(sid, Slot::Ready(session));
+
+        let exit_code = if timed_out { TIMEOUT_EXIT_CODE } else { code };
         let summary = send_output(writer, &id, &params, out, redact_env.as_ref(), exit_code).await?;
 
-        let lsp_diagnostics = if session.mutated_files.is_empty() {
+        let lsp_diagnostics = if mutated_files.is_empty() {
             Vec::new()
         } else {
-            post_edit_diagnostics(&session.cwd, &session.mutated_files).await
+            post_edit_diagnostics(&cwd, &mutated_files).await
         };
 
         let completed = RpcEvent::Completed {
             id,
             exit_code: summary.exit_code,
             duration_ms: start.elapsed().as_millis() as u64,
-            mutated_files_manifest: session.mutated_files.clone(),
+            mutated_files_manifest: mutated_files,
             truncated: summary.truncated,
             spill_uri: summary.spill_uri,
             lsp_diagnostics,
@@ -474,7 +468,7 @@ impl RpcServer {
                 let mut guard = sessions.lock().await;
                 let expired: Vec<String> = guard
                     .iter()
-                    .filter(|(_, s)| s.is_expired())
+                    .filter(|(_, slot)| matches!(slot, Slot::Ready(s) if s.is_expired()))
                     .map(|(k, _)| k.clone())
                     .collect();
                 for id in &expired {
@@ -484,11 +478,9 @@ impl RpcServer {
                     let active: std::collections::HashSet<String> = guard.keys().cloned().collect();
                     let orphans: Vec<String> = guard
                         .iter()
-                        .filter(|(_, s)| {
-                            s.ephemeral
-                                && s.parent_id
-                                    .as_ref()
-                                    .is_some_and(|pid| !active.contains(pid))
+                        .filter(|(_, slot)| {
+                            matches!(slot, Slot::Ready(s) if s.ephemeral
+                                && s.parent_id.as_ref().is_some_and(|pid| !active.contains(pid)))
                         })
                         .map(|(k, _)| k.clone())
                         .collect();
@@ -508,6 +500,38 @@ impl RpcServer {
         let cur = *id;
         *id += 1;
         format!("sess-{cur}")
+    }
+}
+
+enum Admission {
+    Run(Box<Session>, Program),
+    Reject(StructuredDiagnostic),
+    Blocked(String),
+}
+
+/// Checks that `params` may run and, if so, moves the session out of its slot.
+fn admit(sessions: &mut HashMap<String, Slot>, params: &ExecParams) -> Admission {
+    let id = &params.session_id;
+    let program = {
+        let session = match ready_mut(sessions, id) {
+            Ok(s) => s,
+            Err(diag) => return Admission::Reject(diag),
+        };
+        session.touch();
+        session.mutated_files.clear();
+        session.taint = TaintLevel::TrustedLocal;
+        let program = match shell_syntax::parse(&params.command) {
+            Ok(p) => p,
+            Err(err) => return Admission::Reject(err.into()),
+        };
+        if let Some(reason) = check_policy(session, &program, &params.policy) {
+            return Admission::Blocked(reason);
+        }
+        program
+    };
+    match sessions.insert(id.clone(), Slot::Busy) {
+        Some(Slot::Ready(session)) => Admission::Run(session, program),
+        _ => Admission::Reject(busy(id)),
     }
 }
 
@@ -629,12 +653,16 @@ struct RunOutput {
 }
 
 impl RunOutput {
-    fn from_chunks(chunks: impl IntoIterator<Item = Chunk>) -> Self {
-        let mut out = Self {
+    fn empty() -> Self {
+        Self {
             records: Vec::new(),
             stdout: Vec::new(),
             stderr: String::new(),
-        };
+        }
+    }
+
+    fn from_chunks(chunks: impl IntoIterator<Item = Chunk>) -> Self {
+        let mut out = Self::empty();
         for chunk in chunks {
             match chunk {
                 Chunk::Stdout(bytes) => out.stdout.extend_from_slice(&bytes),

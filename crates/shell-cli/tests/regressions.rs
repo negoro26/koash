@@ -279,3 +279,107 @@ fn undo_skips_the_empty_record_left_by_a_failed_builtin() {
     );
     assert!(!dir.join("k.txt").exists(), "k.txt created by tx_001 must be gone");
 }
+
+#[test]
+fn rpc_child_cannot_read_the_protocol_stdin() {
+    let dir = scratch_dir("rpc-stdin");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    let mut exec = |id: u64, command: &str| {
+        rpc.send(serde_json::json!({
+            "id": id,
+            "method": "exec",
+            "params": {"session_id": sid, "command": command}
+        }));
+        rpc.lines_until_completed(id, Duration::from_secs(10))
+    };
+    let first = exec(2, "/usr/bin/head -n 1");
+    assert!(
+        first.iter().any(|l| l.contains("\"completed\"")),
+        "head must see EOF on stdin and finish: {first:?}"
+    );
+    let second = exec(3, "echo still-alive");
+    assert!(
+        second.iter().any(|l| l.contains("still-alive")),
+        "the protocol stream must survive a child that reads stdin: {second:?}"
+    );
+}
+
+#[test]
+fn sigpipe_terminates_upstream_quietly() {
+    let dir = scratch_dir("sigpipe");
+    let start = Instant::now();
+    let out = koa_c(&dir, "/usr/bin/yes | /usr/bin/head -n 1", Duration::from_secs(10))
+        .expect("yes | head must terminate");
+    assert!(start.elapsed() < Duration::from_secs(5), "took {:?}", start.elapsed());
+    assert!(out.status.success(), "status of head is 0: {:?}", out.status);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "y\n");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("Broken pipe"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn unknown_command_is_127() {
+    let dir = scratch_dir("unknown-cmd");
+    let out = koa_c(&dir, "definitely-not-a-cmd-xyz", Duration::from_secs(10))
+        .expect("koa -c finishes");
+    assert_eq!(out.status.code(), Some(127));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("definitely-not-a-cmd-xyz"),
+        "stderr must name the command: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn structured_pipeline_still_works() {
+    let dir = scratch_dir("structured");
+    std::fs::write(dir.join("only.txt"), "x\n").expect("write only.txt");
+    let out = koa_c(&dir, "ls | where kind == file | first 1", Duration::from_secs(10))
+        .expect("koa -c finishes");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("only.txt"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn rpc_busy_session_after_unfinished_timeout() {
+    let dir = scratch_dir("rpc-busy");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    let mut exec = |id: u64, command: &str, timeout_ms: Option<u64>| {
+        rpc.send(serde_json::json!({
+            "id": id,
+            "method": "exec",
+            "params": {"session_id": sid, "command": command, "timeout_ms": timeout_ms}
+        }));
+        rpc.lines_until_completed(id, Duration::from_secs(10))
+    };
+    // The detached sleeper outlives the kill and keeps the capture pipe open, so the exec
+    // cannot finish inside the grace period.
+    let timed_out = exec(2, "/usr/bin/setsid -f /bin/sleep 2", Some(100));
+    assert!(
+        timed_out.iter().any(|l| l.contains("\"exit_code\":124")),
+        "timeout reports 124: {timed_out:?}"
+    );
+    let busy = exec(3, "echo too-soon", None);
+    assert!(
+        busy.iter().any(|l| l.contains("E_SESSION_BUSY")),
+        "the next exec must be refused while the task is alive: {busy:?}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let lines = exec(4, "echo back", None);
+        if lines.iter().any(|l| l.contains("back")) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "session never became ready: {lines:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

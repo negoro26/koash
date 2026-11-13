@@ -7,7 +7,10 @@ pub mod word_expand;
 
 pub use cow::{CowWorkspace, MutationState};
 pub use env::SessionEnv;
-pub use exec::{execute_pipeline, reap_background_jobs};
+pub use exec::{
+    ExternalSpec, ForegroundOutcome, SpawnError, Stopped, reap_background_jobs, spawn_external,
+    wait_foreground,
+};
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Session, TxRecord};
 pub use word_expand::expand_word;

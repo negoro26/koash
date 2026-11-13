@@ -1,15 +1,35 @@
 use std::io::Write;
-use std::process::Stdio;
 
-use shell_kernel::{Session, execute_pipeline, expand_word, reap_background_jobs};
-use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, SimpleCommand};
+use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
+use shell_syntax::{Command, ListOp, Pipeline, Program, Redirection, RedirectKind};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
 use crate::builtins::run_builtin;
 use crate::schema::is_builtin;
 use crate::sink::{Sink, diag_status};
+use crate::special::{finish_foreground, run_special};
+use crate::wiring::{
+    Flow, LaunchError, Launched, Plan, launch_external, read_all, read_redirect_file,
+};
 
-const KERNEL_COMMANDS: [&str; 5] = ["jobs", "fg", "bg", "exit", "unset"];
+/// Status reported when the kill switch ended a program early.
+pub const KILLED_STATUS: i32 = 124;
+
+const NETWORK_COMMANDS: [&str; 6] = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum StageKind {
+    Assign,
+    Builtin,
+    External,
+}
+
+pub(crate) struct Stage<'a> {
+    pub kind: StageKind,
+    pub argv: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub redirs: &'a [Redirection],
+}
 
 /// Runs a program and returns the status of its last executed list item.
 /// Builtin failures become a status; only a parse error (which never reaches here) aborts a program.
@@ -28,6 +48,10 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
             _ => false,
         };
         if !skip {
+            if session.kill.is_killed() {
+                session.last_status = KILLED_STATUS;
+                return KILLED_STATUS;
+            }
             let background = matches!(item.op, Some(ListOp::Background));
             status = run_pipeline(session, &item.pipeline, background, sink);
             session.last_status = status;
@@ -42,17 +66,36 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
 }
 
 fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, sink: &Sink) -> i32 {
-    if uses_fork_path(session, pipeline, background, sink) {
-        return match execute_pipeline(session, pipeline, background) {
-            Ok(code) => code,
-            Err(diag) => {
-                sink.diag(&diag);
-                diag_status(&diag)
-            }
-        };
+    if pipeline.commands.is_empty() {
+        return 0;
     }
+    if !background
+        && let [Command::Simple(simple)] = pipeline.commands.as_slice()
+        && let Some(status) = run_special(session, simple, sink)
+    {
+        return status;
+    }
+
     begin_pipeline_tx(session, pipeline);
-    let status = run_stages(session, pipeline, sink);
+    let stages = build_stages(session, pipeline);
+    let status = if background && stages.iter().any(|s| s.kind == StageKind::Builtin) {
+        sink.diag(&StructuredDiagnostic::new(
+            "E_BG_BUILTIN",
+            "builtins cannot run in the background yet",
+            Some(pipeline.span),
+            None,
+        ));
+        2
+    } else {
+        std::thread::scope(|scope| {
+            let plan = Plan {
+                sink,
+                scope,
+                background,
+            };
+            run_stages(session, &stages, &plan)
+        })
+    };
     session.finish_tx();
     status
 }
@@ -65,25 +108,6 @@ fn command_name(session: &Session, cmd: &Command) -> Option<String> {
             .map(|w| expand_word(w, &session.env, session.last_status)),
         Command::PosixFallback { .. } => None,
     }
-}
-
-fn uses_fork_path(session: &Session, pipeline: &Pipeline, background: bool, sink: &Sink) -> bool {
-    if sink.is_capture() {
-        return false;
-    }
-    if background {
-        return true;
-    }
-    if pipeline.commands.len() == 1
-        && command_name(session, &pipeline.commands[0])
-            .is_some_and(|name| KERNEL_COMMANDS.contains(&name.as_str()))
-    {
-        return true;
-    }
-    !pipeline
-        .commands
-        .iter()
-        .any(|cmd| command_name(session, cmd).is_some_and(|name| is_builtin(&name)))
 }
 
 fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
@@ -100,210 +124,216 @@ fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
     }
 }
 
-fn run_stages(session: &mut Session, pipeline: &Pipeline, sink: &Sink) -> i32 {
-    let mut current_val = Value::Empty;
-    let mut last_code = 0;
-    let total = pipeline.commands.len();
-
-    for (idx, cmd) in pipeline.commands.iter().enumerate() {
-        let is_last = idx + 1 == total;
-        match cmd {
+fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<'a>> {
+    let mut stages = Vec::with_capacity(pipeline.commands.len());
+    for cmd in &pipeline.commands {
+        let stage = match cmd {
             Command::PosixFallback { raw, .. } => {
                 session.mark_opaque(raw.clone());
-                match run_external_captured(
-                    session,
-                    "sh",
-                    &["-c".to_string(), raw.clone()],
-                    &[],
-                    current_val,
-                    sink,
-                ) {
-                    Ok((out, code)) => {
-                        current_val = out;
-                        last_code = code;
-                    }
-                    Err((diag, code)) => {
-                        sink.diag(&diag);
-                        current_val = Value::Empty;
-                        last_code = code;
-                    }
+                Stage {
+                    kind: StageKind::External,
+                    argv: vec!["sh".to_string(), "-c".to_string(), raw.clone()],
+                    env: Vec::new(),
+                    redirs: &[],
                 }
             }
             Command::Simple(simple) => {
-                let args: Vec<String> = simple
+                let argv: Vec<String> = simple
                     .words
                     .iter()
                     .map(|w| expand_word(w, &session.env, session.last_status))
                     .collect();
-
-                if args.is_empty() {
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        session.env.insert(assign.name.clone(), val);
+                let env: Vec<(String, String)> = simple
+                    .assignments
+                    .iter()
+                    .map(|a| {
+                        (
+                            a.name.clone(),
+                            expand_word(&a.value, &session.env, session.last_status),
+                        )
+                    })
+                    .collect();
+                match argv.first() {
+                    None => {
+                        for (name, value) in env {
+                            session.env.insert(name, value);
+                        }
+                        Stage {
+                            kind: StageKind::Assign,
+                            argv,
+                            env: Vec::new(),
+                            redirs: &[],
+                        }
                     }
-                    current_val = Value::Empty;
-                    last_code = 0;
-                    continue;
+                    Some(name) if is_builtin(name) => Stage {
+                        kind: StageKind::Builtin,
+                        argv,
+                        env: Vec::new(),
+                        redirs: &simple.redirections,
+                    },
+                    Some(name) => {
+                        if NETWORK_COMMANDS.contains(&name.as_str()) {
+                            session.taint = TaintLevel::UntrustedExternal;
+                        }
+                        session.mark_opaque(name.clone());
+                        Stage {
+                            kind: StageKind::External,
+                            argv,
+                            env,
+                            redirs: &simple.redirections,
+                        }
+                    }
                 }
+            }
+        };
+        stages.push(stage);
+    }
+    stages
+}
 
-                let name = &args[0];
-                if is_builtin(name) {
-                    match run_builtin(session, name, &args[1..], current_val) {
-                        Ok(val) => {
-                            current_val = val;
-                            last_code = 0;
-                            if is_last && !simple.redirections.is_empty() {
-                                match apply_value_redirections(session, simple, current_val) {
-                                    Ok(v) => current_val = v,
-                                    Err(diag) => {
-                                        sink.diag(&diag);
-                                        current_val = Value::Empty;
-                                        last_code = diag_status(&diag);
-                                    }
-                                }
-                            }
+fn summarize(stages: &[Stage]) -> String {
+    stages
+        .iter()
+        .map(|s| s.argv.join(" "))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Runs the stages left to right. Externals start as soon as their input is wired, so adjacent
+/// externals overlap; a builtin runs on this thread once its input is complete.
+fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> i32 {
+    let mut flow = Flow::None;
+    let mut launched = Launched::default();
+    let mut final_status: Option<i32> = None;
+    let mut last_is_launched = false;
+
+    for (idx, stage) in stages.iter().enumerate() {
+        let last = idx + 1 == stages.len();
+        if session.kill.is_killed() {
+            final_status = Some(KILLED_STATUS);
+            break;
+        }
+        last_is_launched = false;
+        match stage.kind {
+            StageKind::Assign => {
+                flow = Flow::Value(Value::Empty);
+                final_status = Some(0);
+            }
+            StageKind::Builtin => {
+                let input = take_builtin_input(session, stage, &mut flow);
+                let result = input.and_then(|value| {
+                    run_builtin(session, &stage.argv[0], &stage.argv[1..], value)
+                });
+                let status = match result {
+                    Ok(value) if last => match finish_builtin_output(session, stage, value) {
+                        Ok(value) => {
+                            plan.sink.emit(value);
+                            0
                         }
                         Err(diag) => {
-                            sink.diag(&diag);
-                            current_val = Value::Empty;
-                            last_code = diag_status(&diag);
+                            plan.sink.diag(&diag);
+                            diag_status(&diag)
                         }
+                    },
+                    Ok(value) => {
+                        flow = Flow::Value(value);
+                        0
                     }
-                } else {
-                    let mut env_pairs = Vec::new();
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        env_pairs.push((assign.name.clone(), val));
+                    Err(diag) => {
+                        plan.sink.diag(&diag);
+                        flow = Flow::Value(Value::Empty);
+                        diag_status(&diag)
                     }
-                    if matches!(
-                        name.as_str(),
-                        "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync"
-                    ) {
-                        session.taint = TaintLevel::UntrustedExternal;
+                };
+                final_status = Some(status);
+            }
+            StageKind::External => {
+                match launch_external(session, stage, &mut flow, plan, last, &mut launched) {
+                    Ok(()) => {
+                        last_is_launched = true;
+                        final_status = None;
                     }
-                    session.mark_opaque(name.clone());
-                    match run_external_captured(
-                        session,
-                        name,
-                        &args[1..],
-                        &env_pairs,
-                        current_val,
-                        sink,
-                    ) {
-                        Ok((out, code)) => {
-                            current_val = out;
-                            last_code = code;
-                            if is_last && !simple.redirections.is_empty() {
-                                match apply_value_redirections(session, simple, current_val) {
-                                    Ok(v) => current_val = v,
-                                    Err(diag) => {
-                                        sink.diag(&diag);
-                                        current_val = Value::Empty;
-                                        last_code = diag_status(&diag);
-                                    }
-                                }
-                            }
-                        }
-                        Err((diag, code)) => {
-                            sink.diag(&diag);
-                            current_val = Value::Empty;
-                            last_code = code;
-                        }
+                    Err(LaunchError { status, diag }) => {
+                        plan.sink.diag(&diag);
+                        flow = Flow::Value(Value::Empty);
+                        final_status = Some(status);
                     }
                 }
             }
         }
     }
+    drop(flow);
 
-    sink.emit(current_val);
-    last_code
+    let summary = summarize(stages);
+    let Some(pgid) = launched.pgid else {
+        return final_status.unwrap_or(0);
+    };
+    if plan.background {
+        let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
+        plan.sink.stderr_line(&format!("[{id}] {pgid}"));
+        return final_status.unwrap_or(0);
+    }
+    let watch = last_is_launched.then_some(launched.last_pid).flatten();
+    let waited = finish_foreground(session, plan.sink, pgid, &launched.pids, watch, &summary, None);
+    final_status.unwrap_or(waited)
 }
 
-fn apply_value_redirections(
-    session: &mut Session,
-    simple: &SimpleCommand,
-    val: Value,
+fn take_builtin_input(
+    session: &Session,
+    stage: &Stage,
+    flow: &mut Flow,
 ) -> Result<Value, StructuredDiagnostic> {
-    let mut current = val;
-    for redir in &simple.redirections {
-        match redir.kind {
-            RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend => {
-                if let Some(ref target_word) = redir.target {
-                    let path_str = expand_word(target_word, &session.env, session.last_status);
-                    let path = if std::path::Path::new(&path_str).is_absolute() {
-                        std::path::PathBuf::from(&path_str)
-                    } else {
-                        session.cwd.join(&path_str)
-                    };
-                    let bytes = current.into_raw_bytes();
-                    session.record_preimage(&path);
-                    let mut file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(redir.kind == RedirectKind::StdoutTrunc)
-                        .append(redir.kind == RedirectKind::StdoutAppend)
-                        .open(&path)
-                        .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
-                    file.write_all(&bytes)
-                        .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
-                    session.record_mutation(path.to_string_lossy().to_string());
-                    current = Value::Empty;
-                }
-            }
-            _ => {}
+    let from_file = stage
+        .redirs
+        .iter()
+        .rev()
+        .find(|r| r.kind == RedirectKind::Stdin);
+    let flowed = std::mem::replace(flow, Flow::None);
+    if let Some(redir) = from_file {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut read_redirect_file(session, redir)?, &mut bytes)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        return Ok(Value::Bytes(bytes));
+    }
+    match flowed {
+        Flow::None => Ok(Value::Empty),
+        Flow::Value(value) => Ok(value),
+        Flow::Pipe(fd) => read_all(fd)
+            .map(Value::Bytes)
+            .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
+    }
+}
+
+/// A last-stage builtin keeps `>` and `>>`: the value is written to the file with its preimage
+/// captured, and nothing is left to print.
+fn finish_builtin_output(
+    session: &mut Session,
+    stage: &Stage,
+    value: Value,
+) -> Result<Value, StructuredDiagnostic> {
+    let mut current = value;
+    for redir in stage.redirs {
+        if !matches!(redir.kind, RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend) {
+            continue;
         }
+        let Some(target) = &redir.target else {
+            continue;
+        };
+        let raw = expand_word(target, &session.env, session.last_status);
+        let path = session.cwd.join(raw);
+        let bytes = current.into_raw_bytes();
+        session.record_preimage(&path);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(redir.kind == RedirectKind::StdoutTrunc)
+            .append(redir.kind == RedirectKind::StdoutAppend)
+            .open(&path)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        file.write_all(&bytes)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        session.record_mutation(path.to_string_lossy().to_string());
+        current = Value::Empty;
     }
     Ok(current)
-}
-
-fn run_external_captured(
-    session: &Session,
-    prog: &str,
-    args: &[String],
-    extra_env: &[(String, String)],
-    input: Value,
-    sink: &Sink,
-) -> Result<(Value, i32), (StructuredDiagnostic, i32)> {
-    let has_input = !matches!(input, Value::Empty);
-    let input_bytes = input.into_raw_bytes();
-
-    let mut command = std::process::Command::new(prog);
-    command.args(args);
-    command.current_dir(&session.cwd);
-    command.env_clear();
-    command.envs(&session.env.materialize());
-    for (k, v) in extra_env {
-        command.env(k, v);
-    }
-    command.stdin(if has_input { Stdio::piped() } else { Stdio::null() });
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = command.spawn().map_err(|e| {
-        let status = match e.kind() {
-            std::io::ErrorKind::PermissionDenied => 126,
-            _ => 127,
-        };
-        (
-            StructuredDiagnostic::new("E_SPAWN", format!("{prog}: {e}"), None, None),
-            status,
-        )
-    })?;
-
-    if has_input
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        let _ = stdin.write_all(&input_bytes);
-    }
-
-    let output = child.wait_with_output().map_err(|e| {
-        (StructuredDiagnostic::from_io("E_WAIT", &e, None), 1)
-    })?;
-
-    if !output.stderr.is_empty() {
-        sink.stderr(output.stderr);
-    }
-
-    let code = output.status.code().unwrap_or(1);
-    Ok((Value::from_bytes(output.stdout), code))
 }

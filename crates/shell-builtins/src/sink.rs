@@ -23,6 +23,13 @@ impl Sink {
         matches!(self, Sink::Capture(_))
     }
 
+    /// Forwards a chunk produced by a reader thread; only meaningful for capture sinks.
+    pub(crate) fn chunk(&self, chunk: Chunk) {
+        if let Sink::Capture(tx) = self {
+            let _ = tx.send(chunk);
+        }
+    }
+
     pub fn emit(&self, value: Value) {
         match self {
             Sink::Tty { mode } => {
