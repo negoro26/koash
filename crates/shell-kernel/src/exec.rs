@@ -36,6 +36,19 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
         });
     };
 
+    // A failed chdir in the child is indistinguishable from a missing program, so check up front.
+    if matches!(std::fs::metadata(&session.cwd), Err(e) if e.kind() == ErrorKind::NotFound) {
+        return Err(SpawnError {
+            status: 1,
+            diag: StructuredDiagnostic::new(
+                "E_CWD",
+                format!("current directory {} no longer exists", session.cwd.display()),
+                None,
+                None,
+            ),
+        });
+    }
+
     let mut command = Command::new(program);
     command
         .args(args)

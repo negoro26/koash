@@ -598,3 +598,21 @@ fn rollback_keeps_guarding_against_an_earlier_external_mutation() {
         "the external's work must survive"
     );
 }
+
+#[test]
+fn external_in_a_deleted_directory_reports_the_directory() {
+    let dir = scratch_dir("deleted-cwd");
+    let out = koa_c(
+        &dir,
+        "mkdir d; cd d; /bin/rm -r ../d; /bin/echo still-works; echo $?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E_CWD") && stderr.contains("no longer exists"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("E_NOT_FOUND"), "stderr: {stderr}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+}
