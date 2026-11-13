@@ -51,6 +51,7 @@ koa --tsp -c "ls"
 - The RPC `policy` matches commands by name. `/usr/bin/touch` or `sh -c` get past it, so it is not a sandbox.
 - `session.fork` with isolation creates a session directory under `.koa/sessions/`, but writes are not redirected into it yet, so forked sessions are not isolated.
 - Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs or `if`/`for`/`while` run through `sh -c` as a whole. Structured output, undo tracking and RPC policy checks do not apply inside them.
+- The builtin `rm`, `cp`, `mv`, `cat` and `ls` parse flags loosely. `rm --force dir` deletes a directory without `-r`, `cp a b dir` and `mv a b dir` act on the first two operands only and ignore the rest, and `cat a - b` drops stdin. A fix is in progress; until it lands, call `/bin/rm`, `/bin/cp` or `/bin/mv` for anything beyond a single plain operand.
 - Linux only. macOS is untested.
 
 ## Workspace layout
