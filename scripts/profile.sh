@@ -22,7 +22,10 @@ case $tool in
     echo "wrote $out/flamegraph.svg"
     ;;
   samply) samply record -- "$bin" "$@" ;;
-  heaptrack) heaptrack -o "$out/heaptrack" "$bin" "$@" ;;
+  heaptrack)
+    heaptrack --record-only -o "$out/heaptrack" "$bin" "$@"
+    heaptrack_print "$out/heaptrack.zst" | head -60
+    ;;
   cachegrind)
     valgrind --tool=cachegrind --cache-sim=yes --cachegrind-out-file="$out/cachegrind.out" "$bin" "$@"
     cg_annotate "$out/cachegrind.out" | head -40

@@ -68,7 +68,7 @@ cargo nextest run                      # tests; .config/nextest.toml kills a tes
 cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
 ```
 
-Profiling builds use the `profiling` profile, which is release with symbols. `scripts/profile.sh` builds it and runs one tool against `koa`:
+Profiling builds use the `profiling` profile, which is release with symbols. `scripts/profile.sh` builds it and runs one tool against `koa`. `flamegraph` and `samply` sample through `perf_event_open`, which needs `kernel.perf_event_paranoid` set to 1 or lower.
 
 ```bash
 scripts/profile.sh flamegraph -- -c 'find crates | where ext == rs | sort-by path'
