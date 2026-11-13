@@ -2,26 +2,24 @@ use std::io::Write;
 
 use nix::unistd::Pid;
 use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
-use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection};
+use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
-use crate::builtins::{reads_stdin, run_builtin};
-use crate::schema::is_builtin;
+use crate::builtin::{Builtin, Placement, TxPolicy};
+use crate::builtins::lookup;
 use crate::sink::{Sink, diag_status};
-use crate::special::{finish_foreground, run_special};
 use crate::wiring::{
-    Flow, LaunchError, Launched, Plan, launch_external, read_all, read_all_watching,
-    read_redirect_file,
+    Flow, LaunchError, Launched, Plan, finish_foreground, launch_external, read_all,
+    read_all_watching, read_redirect_file,
 };
 
 pub const KILLED_STATUS: i32 = 124;
 
 const NETWORK_COMMANDS: [&str; 6] = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
 
-#[derive(PartialEq, Eq)]
 pub(crate) enum StageKind {
     Assign,
-    Builtin,
+    Builtin(&'static dyn Builtin),
     External,
 }
 
@@ -71,14 +69,18 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
     }
     if !background
         && let [Command::Simple(simple)] = pipeline.commands.as_slice()
-        && let Some(status) = run_special(session, simple, sink)
+        && let Some(status) = run_alone(session, simple, sink)
     {
         return status;
     }
 
     begin_pipeline_tx(session, pipeline);
     let stages = build_stages(session, pipeline);
-    let status = if background && stages.iter().any(|s| s.kind == StageKind::Builtin) {
+    let status = if background
+        && stages
+            .iter()
+            .any(|s| matches!(s.kind, StageKind::Builtin(_)))
+    {
         sink.diag(&StructuredDiagnostic::new(
             "E_BG_BUILTIN",
             "builtins cannot run in the background yet",
@@ -114,15 +116,35 @@ fn command_name(session: &Session, cmd: &Command) -> Option<String> {
     }
 }
 
+fn skips_tx(name: &str) -> bool {
+    // `tx_log`, the alias of `tx-log`, has always opened its own ledger entry.
+    lookup(name).is_some_and(|b| {
+        let sig = b.signature();
+        sig.tx == TxPolicy::Skip && sig.name == name
+    })
+}
+
+fn stage_builtin(name: &str) -> Option<&'static dyn Builtin> {
+    lookup(name).filter(|b| b.signature().placement == Placement::Any)
+}
+
+fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
+    let args: Vec<String> = simple
+        .words
+        .iter()
+        .map(|w| expand_word(w, &session.env, session.last_status))
+        .collect();
+    let builtin = lookup(args.first()?)?;
+    (builtin.signature().placement == Placement::SoleStage)
+        .then(|| builtin.run_alone(session, &args[1..], sink))
+}
+
 fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
     let first_cmd_name = pipeline
         .commands
         .first()
         .and_then(|c| command_name(session, c));
-    if !matches!(
-        first_cmd_name.as_deref(),
-        Some("undo" | "rollback" | "tx-log")
-    ) {
+    if !first_cmd_name.as_deref().is_some_and(skips_tx) {
         let summary = first_cmd_name.unwrap_or_else(|| "pipeline".to_string());
         session.begin_tx(summary);
     }
@@ -155,8 +177,9 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                         )
                     })
                     .collect();
-                match argv.first() {
-                    None => {
+                let builtin = argv.first().and_then(|name| stage_builtin(name));
+                match (argv.first(), builtin) {
+                    (None, _) => {
                         for (name, value) in env {
                             session.env.insert(name, value);
                         }
@@ -168,14 +191,14 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                             redirs: &[],
                         }
                     }
-                    Some(name) if is_builtin(name) => Stage {
-                        kind: StageKind::Builtin,
+                    (Some(name), Some(builtin)) => Stage {
+                        kind: StageKind::Builtin(builtin),
                         label: name.clone(),
                         argv,
                         env: Vec::new(),
                         redirs: &simple.redirections,
                     },
-                    Some(name) => {
+                    (Some(name), None) => {
                         if NETWORK_COMMANDS.contains(&name.as_str()) {
                             session.taint = TaintLevel::UntrustedExternal;
                         }
@@ -221,11 +244,9 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                 flow = Flow::Value(Value::Empty);
                 final_status = Some(0);
             }
-            StageKind::Builtin => {
-                let input = take_builtin_input(session, stage, &mut flow, &launched, plan);
-                let result = input.and_then(|value| {
-                    run_builtin(session, &stage.argv[0], &stage.argv[1..], value)
-                });
+            StageKind::Builtin(builtin) => {
+                let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
+                let result = input.and_then(|value| builtin.run(session, &stage.argv[1..], value));
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
@@ -291,6 +312,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
 
 fn take_builtin_input(
     session: &Session,
+    builtin: &dyn Builtin,
     stage: &Stage,
     flow: &mut Flow,
     launched: &Launched,
@@ -309,7 +331,7 @@ fn take_builtin_input(
         return Ok(Value::Bytes(bytes));
     }
     match flowed {
-        Flow::None if reads_shell_stdin(stage, plan) => {
+        Flow::None if reads_shell_stdin(builtin, stage, plan) => {
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut bytes)
                 .map_err(|e| StructuredDiagnostic::from_io("E_STDIN", &e, None))?;
@@ -326,10 +348,10 @@ fn take_builtin_input(
     }
 }
 
-fn reads_shell_stdin(stage: &Stage, plan: &Plan) -> bool {
+fn reads_shell_stdin(builtin: &dyn Builtin, stage: &Stage, plan: &Plan) -> bool {
     !plan.sink.is_capture()
         && !nix::unistd::isatty(0).unwrap_or(true)
-        && reads_stdin(&stage.argv[0], &stage.argv[1..])
+        && builtin.reads_input(&stage.argv[1..])
 }
 
 fn finish_builtin_output(

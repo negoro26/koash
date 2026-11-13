@@ -1,6 +1,7 @@
 pub(crate) mod common;
 
 mod ast;
+mod bg;
 mod cat;
 mod cd;
 mod cp;
@@ -8,13 +9,16 @@ mod diag;
 mod discover;
 mod echo;
 mod env;
+mod exit;
 mod export;
+mod fg;
 mod find;
 mod first;
 mod from;
 mod grep;
 mod head;
 mod help;
+mod jobs;
 mod js;
 mod kill;
 mod last;
@@ -38,11 +42,9 @@ mod tail;
 mod to;
 mod tx_log;
 mod undo;
+mod unset;
 mod where_;
 mod which;
-
-use shell_kernel::Session;
-use shell_value::{StructuredDiagnostic, Value};
 
 use crate::builtin::{Builtin, Placement, Signature};
 
@@ -88,6 +90,11 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &js::Js,
     &sql::Sql,
     &help::Help,
+    &unset::Unset,
+    &exit::Exit,
+    &jobs::Jobs,
+    &fg::Fg,
+    &bg::Bg,
 ];
 
 pub fn lookup(name: &str) -> Option<&'static dyn Builtin> {
@@ -106,23 +113,37 @@ pub fn catalog() -> impl Iterator<Item = &'static Signature> {
         .filter(|s| s.placement == Placement::Any)
 }
 
-pub fn run_builtin(
-    session: &mut Session,
-    name: &str,
-    args: &[String],
-    input: Value,
-) -> Result<Value, StructuredDiagnostic> {
-    match lookup(name) {
-        Some(builtin) => builtin.run(session, args, input),
-        None => Err(StructuredDiagnostic::new(
-            "E_UNKNOWN_BUILTIN",
-            format!("unknown builtin `{name}`"),
-            None,
-            None,
-        )),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
 
-pub(crate) fn reads_stdin(name: &str, args: &[String]) -> bool {
-    lookup(name).is_some_and(|b| b.reads_input(args))
+    use super::*;
+
+    #[test]
+    fn every_name_and_alias_is_unique() {
+        let mut seen = HashSet::new();
+        for builtin in REGISTRY {
+            let sig = builtin.signature();
+            for name in std::iter::once(sig.name).chain(sig.aliases.iter().copied()) {
+                assert!(seen.insert(name), "duplicate registry name `{name}`");
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_resolves_aliases_to_the_canonical_command() {
+        assert_eq!(
+            lookup("sort_by").map(|b| b.signature().name),
+            Some("sort-by")
+        );
+        assert_eq!(lookup("tx_log").map(|b| b.signature().name), Some("tx-log"));
+        assert!(lookup("no-such-command").is_none());
+    }
+
+    #[test]
+    fn catalog_leaves_out_sole_stage_commands() {
+        assert!(catalog().all(|s| s.placement == Placement::Any));
+        assert!(lookup("jobs").is_some_and(|b| b.signature().placement == Placement::SoleStage));
+        assert!(catalog().all(|s| s.name != "jobs"));
+    }
 }

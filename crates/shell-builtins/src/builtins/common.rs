@@ -8,6 +8,8 @@ use grep_searcher::sinks::UTF8;
 use shell_kernel::Session;
 use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
 
+use crate::builtin::Signature;
+
 pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
     if session.kill.is_killed() {
         return Err(StructuredDiagnostic::new(
@@ -174,4 +176,24 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let m = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if m <= 2 { 1 } else { 0 };
     (year, m, d)
+}
+
+pub(crate) fn job_index(
+    session: &Session,
+    arg: Option<&String>,
+    default: Option<usize>,
+) -> Option<usize> {
+    match arg.and_then(|s| s.trim_start_matches('%').parse::<usize>().ok()) {
+        Some(id) => session.jobs.iter().position(|j| j.id == id),
+        None => default,
+    }
+}
+
+pub(crate) fn sole_stage_only(sig: &Signature) -> StructuredDiagnostic {
+    StructuredDiagnostic::new(
+        "E_PLACEMENT",
+        format!("`{}` runs only as a whole foreground pipeline", sig.name),
+        None,
+        None,
+    )
 }
