@@ -4,18 +4,61 @@ use std::sync::Arc;
 use serde_json::Value as JsonVal;
 use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, batch_to_compact_sigil};
 
+#[derive(Clone, Copy)]
+enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Contains,
+}
+
+impl Cmp {
+    fn parse(op: &str) -> Option<Self> {
+        Some(match op {
+            "==" | "=" => Self::Eq,
+            "!=" => Self::Ne,
+            "<" => Self::Lt,
+            "<=" => Self::Le,
+            ">" => Self::Gt,
+            ">=" => Self::Ge,
+            "=~" | "contains" => Self::Contains,
+            _ => return None,
+        })
+    }
+
+    fn holds<T: PartialOrd>(self, lhs: T, rhs: T) -> bool {
+        match self {
+            Self::Eq => lhs == rhs,
+            Self::Ne => lhs != rhs,
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
+            Self::Contains => false,
+        }
+    }
+}
+
 pub(crate) fn where_filter(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
-    if args.len() < 3 {
+    let [field, op, rhs_raw] = args else {
         return Err(StructuredDiagnostic::new(
             "E_ARGS",
             "where requires `<field> <op> <value>`",
             None,
             Some("example: ls | where size > 10kb".to_string()),
         ));
-    }
-    let field = &args[0];
-    let op = &args[1];
-    let rhs_raw = &args[2];
+    };
+    let Some(cmp) = Cmp::parse(op) else {
+        return Err(StructuredDiagnostic::new(
+            "E_ARGS",
+            format!("where: unknown operator `{op}`"),
+            None,
+            Some("operators: == != < <= > >= =~".to_string()),
+        ));
+    };
     let batch = input.into_batch();
     let Some(col_idx) = batch.col_index(field) else {
         return Ok(Value::from_batch(RecordBatch::new(batch.columns)));
@@ -24,7 +67,7 @@ pub(crate) fn where_filter(args: &[String], input: Value) -> Result<Value, Struc
     let mut out_cells = Vec::new();
     for r in 0..batch.nrows() {
         let row = batch.row(r);
-        if eval_cell_predicate(&row[col_idx], op, rhs_raw) {
+        if eval_cell_predicate(&row[col_idx], cmp, rhs_raw) {
             out_cells.extend_from_slice(row);
         }
     }
@@ -34,19 +77,12 @@ pub(crate) fn where_filter(args: &[String], input: Value) -> Result<Value, Struc
     }))
 }
 
-fn eval_cell_predicate(lhs: &CellVal, op: &str, rhs_raw: &str) -> bool {
-    if let Some(lhs_num) = lhs.as_f64()
+fn eval_cell_predicate(lhs: &CellVal, cmp: Cmp, rhs_raw: &str) -> bool {
+    if !matches!(cmp, Cmp::Contains)
+        && let Some(lhs_num) = lhs.as_f64()
         && let Some(rhs_num) = parse_size_or_number(rhs_raw)
     {
-        return match op {
-            ">" => lhs_num > rhs_num,
-            ">=" => lhs_num >= rhs_num,
-            "<" => lhs_num < rhs_num,
-            "<=" => lhs_num <= rhs_num,
-            "==" | "=" => (lhs_num - rhs_num).abs() < f64::EPSILON,
-            "!=" => (lhs_num - rhs_num).abs() >= f64::EPSILON,
-            _ => false,
-        };
+        return cmp.holds(lhs_num, rhs_num);
     }
 
     let owned;
@@ -56,13 +92,9 @@ fn eval_cell_predicate(lhs: &CellVal, op: &str, rhs_raw: &str) -> bool {
         owned = lhs.format_to_string();
         &owned
     };
-    match op {
-        "==" | "=" => lhs_str == rhs_raw,
-        "!=" => lhs_str != rhs_raw,
-        "contains" | "=~" => lhs_str.contains(rhs_raw),
-        ">" => lhs_str > rhs_raw,
-        "<" => lhs_str < rhs_raw,
-        _ => false,
+    match cmp {
+        Cmp::Contains => lhs_str.contains(rhs_raw),
+        _ => cmp.holds(lhs_str, rhs_raw),
     }
 }
 

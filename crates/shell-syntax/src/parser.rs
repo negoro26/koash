@@ -169,6 +169,86 @@ impl<'a> Parser<'a> {
             && matches!(first.parts.first(), Some(WordPart::Literal { text, .. }) if text == "where")
     }
 
+    fn is_sigil_cmd(words: &[Word]) -> bool {
+        let Some(first) = words.first() else {
+            return false;
+        };
+        matches!(first.parts.as_slice(), [WordPart::Literal { text, .. }] if text.len() > 1 && text.starts_with('@'))
+    }
+
+    /// The source of a sigil command (`@sql`, `@py`, `@js`) is code in another language, so its
+    /// arguments are taken verbatim from `src` up to the end of the command. A lone word keeps
+    /// its shell meaning: it is the quoted program and may be followed by redirections.
+    fn take_sigil_source(&mut self) -> Option<Word> {
+        let is_end = |kind: &TokenKind| {
+            matches!(
+                kind,
+                TokenKind::Pipe
+                    | TokenKind::Semi
+                    | TokenKind::AndIf
+                    | TokenKind::OrIf
+                    | TokenKind::Amp
+                    | TokenKind::Newline
+                    | TokenKind::Eof
+            )
+        };
+        let rest = &self.tokens[self.pos..];
+        let len = rest.iter().take_while(|t| !is_end(&t.kind)).count();
+        let (first, last) = (rest.first()?, rest.get(len.checked_sub(1)?)?);
+        let lone_word = matches!(first.kind, TokenKind::Word(_))
+            && rest
+                .get(1)
+                .is_none_or(|t| !matches!(t.kind, TokenKind::Word(_)));
+        if lone_word {
+            return None;
+        }
+        let span = first.span.merge(last.span);
+        self.pos += len;
+        Some(Word {
+            parts: vec![WordPart::Literal {
+                text: self.src.get(span.start..span.end).unwrap_or("").to_string(),
+                span,
+            }],
+            span,
+        })
+    }
+
+    /// The lexer reads `>=` as the redirect `>` followed by the word `=`. After `where <field>`
+    /// that pair is a comparison operator, so glue it back together from the source text.
+    fn comparison_operator(&mut self, op_span: Span) -> Word {
+        let mut span = op_span;
+        if let Some(Token {
+            kind: TokenKind::Word(next),
+            span: next_span,
+        }) = self.tokens.get_mut(self.pos)
+            && next_span.start == op_span.end
+            && let Some(WordPart::Literal {
+                text,
+                span: lit_span,
+            }) = next.parts.first_mut()
+            && text.starts_with('=')
+        {
+            span = Span::new(op_span.start, op_span.end + 1);
+            text.remove(0);
+            *lit_span = Span::new(lit_span.start + 1, lit_span.end);
+            if text.is_empty() {
+                next.parts.remove(0);
+            }
+            next.span = Span::new(next.span.start + 1, next.span.end);
+            *next_span = next.span;
+            if next.parts.is_empty() {
+                self.pos += 1;
+            }
+        }
+        Word {
+            parts: vec![WordPart::Literal {
+                text: self.src.get(span.start..span.end).unwrap_or("").to_string(),
+                span,
+            }],
+            span,
+        }
+    }
+
     fn parse_pipeline(&mut self) -> Result<Pipeline, SyntaxError> {
         let first = self.parse_command()?;
         let mut span = first.span();
@@ -211,7 +291,16 @@ impl<'a> Parser<'a> {
         let mut redirections = Vec::new();
         let mut overall_span: Option<Span> = None;
 
-        while let Some(tok) = self.peek() {
+        loop {
+            if words.len() == 1
+                && Self::is_sigil_cmd(&words)
+                && let Some(code) = self.take_sigil_source()
+            {
+                overall_span = Some(overall_span.map_or(code.span, |s| s.merge(code.span)));
+                words.push(code);
+                continue;
+            }
+            let Some(tok) = self.peek() else { break };
             let tok_span = tok.span;
             match &tok.kind {
                 TokenKind::Word(word) => {
@@ -232,14 +321,9 @@ impl<'a> Parser<'a> {
                 TokenKind::RedirectIn => {
                     self.advance();
                     if Self::is_where_cmd(&words) && words.len() == 2 {
-                        words.push(Word {
-                            parts: vec![WordPart::Literal {
-                                text: "<".to_string(),
-                                span: tok_span,
-                            }],
-                            span: tok_span,
-                        });
-                        overall_span = Some(overall_span.map_or(tok_span, |s| s.merge(tok_span)));
+                        let op = self.comparison_operator(tok_span);
+                        overall_span = Some(overall_span.map_or(op.span, |s| s.merge(op.span)));
+                        words.push(op);
                     } else {
                         let redir = self.parse_redir_with_target(RedirectKind::Stdin, tok_span)?;
                         overall_span = Some(match overall_span {
@@ -252,14 +336,9 @@ impl<'a> Parser<'a> {
                 TokenKind::RedirectOut => {
                     self.advance();
                     if Self::is_where_cmd(&words) && words.len() == 2 {
-                        words.push(Word {
-                            parts: vec![WordPart::Literal {
-                                text: ">".to_string(),
-                                span: tok_span,
-                            }],
-                            span: tok_span,
-                        });
-                        overall_span = Some(overall_span.map_or(tok_span, |s| s.merge(tok_span)));
+                        let op = self.comparison_operator(tok_span);
+                        overall_span = Some(overall_span.map_or(op.span, |s| s.merge(op.span)));
+                        words.push(op);
                     } else {
                         let redir =
                             self.parse_redir_with_target(RedirectKind::StdoutTrunc, tok_span)?;
@@ -272,13 +351,19 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::RedirectAppend => {
                     self.advance();
-                    let redir =
-                        self.parse_redir_with_target(RedirectKind::StdoutAppend, tok_span)?;
-                    overall_span = Some(match overall_span {
-                        Some(s) => s.merge(redir.span),
-                        None => redir.span,
-                    });
-                    redirections.push(redir);
+                    if Self::is_where_cmd(&words) && words.len() == 2 {
+                        let op = self.comparison_operator(tok_span);
+                        overall_span = Some(overall_span.map_or(op.span, |s| s.merge(op.span)));
+                        words.push(op);
+                    } else {
+                        let redir =
+                            self.parse_redir_with_target(RedirectKind::StdoutAppend, tok_span)?;
+                        overall_span = Some(match overall_span {
+                            Some(s) => s.merge(redir.span),
+                            None => redir.span,
+                        });
+                        redirections.push(redir);
+                    }
                 }
                 TokenKind::RedirectErrOut => {
                     self.advance();
