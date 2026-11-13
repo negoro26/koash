@@ -463,7 +463,12 @@ fn rpc_busy_session_after_unfinished_timeout() {
         rpc.lines_until_completed(id, Duration::from_secs(10))
     };
     // The detached sleeper holds the capture pipe open past the kill, so the exec outlasts the grace period.
-    let timed_out = exec(2, "/usr/bin/setsid -f /bin/sleep 2", Some(100));
+    // The trailing sleep keeps the group alive for a full second so setsid has left it before the kill.
+    let timed_out = exec(
+        2,
+        "/bin/sh -c '/usr/bin/setsid -f /bin/sleep 3; exec /bin/sleep 10'",
+        Some(1000),
+    );
     assert!(
         timed_out.iter().any(|l| l.contains("\"exit_code\":124")),
         "timeout reports 124: {timed_out:?}"
