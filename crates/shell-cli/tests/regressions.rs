@@ -1021,3 +1021,121 @@ fn removing_a_fifo_still_makes_undo_refuse() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
 }
+
+fn run_koa(dir: &Path, script: &str) -> (String, String, Option<i32>) {
+    let out = koa_c(dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    )
+}
+
+fn sized_files(name: &str) -> PathBuf {
+    let dir = scratch_dir(name);
+    std::fs::write(dir.join("a.txt"), "123").expect("write a.txt");
+    std::fs::write(dir.join("b.txt"), "1234567890").expect("write b.txt");
+    dir
+}
+
+#[test]
+fn where_supports_every_comparison_operator() {
+    let dir = sized_files("where-ops");
+    for (script, kept, dropped) in [
+        ("ls | where size >= 5", "b.txt", "a.txt"),
+        ("ls | where size >=5", "b.txt", "a.txt"),
+        ("ls | where size > 5", "b.txt", "a.txt"),
+        ("ls | where size <= 5", "a.txt", "b.txt"),
+        ("ls | where size < 5", "a.txt", "b.txt"),
+        ("ls | where size == 3", "a.txt", "b.txt"),
+        ("ls | where size != 3", "b.txt", "a.txt"),
+        ("ls | where name != a.txt", "b.txt", "a.txt"),
+        ("ls | where name =~ b.", "b.txt", "a.txt"),
+    ] {
+        let (stdout, stderr, code) = run_koa(&dir, script);
+        assert_eq!(code, Some(0), "{script}: stderr {stderr}");
+        assert!(stdout.contains(kept), "{script}: stdout {stdout}");
+        assert!(!stdout.contains(dropped), "{script}: stdout {stdout}");
+    }
+}
+
+#[test]
+fn where_rejects_unknown_operators_and_malformed_expressions() {
+    let dir = sized_files("where-bad");
+    for script in [
+        "ls | where size ~~ 5",
+        "ls | where size >> 5",
+        "ls | where size",
+        "ls | where size > 5 extra",
+    ] {
+        let (stdout, stderr, code) = run_koa(&dir, script);
+        assert_eq!(code, Some(2), "{script}: stdout {stdout} stderr {stderr}");
+        assert!(stderr.contains("E_ARGS"), "{script}: stderr {stderr}");
+    }
+    assert!(!dir.join("5").exists(), "`>> 5` must not create a file");
+}
+
+#[test]
+fn redirects_still_work_around_where_syntax() {
+    let dir = sized_files("redirects");
+    let (_, stderr, code) = run_koa(&dir, "echo hi > f; cat f");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert_eq!(std::fs::read_to_string(dir.join("f")).expect("f"), "hi\n");
+
+    let (stdout, _, _) = run_koa(&dir, "echo more >> f; /bin/cat f");
+    assert_eq!(stdout, "hi\nmore\n");
+
+    let (stdout, _, _) = run_koa(&dir, "/bin/sh -c 'echo e >&2' 2>&1 | /bin/cat");
+    assert_eq!(stdout, "e\n");
+
+    let (_, stderr, code) = run_koa(&dir, "ls | where size >= 5 > out.txt");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert!(
+        std::fs::read_to_string(dir.join("out.txt"))
+            .expect("out.txt")
+            .contains("b.txt")
+    );
+}
+
+#[test]
+fn sql_keeps_the_quotes_the_user_wrote() {
+    let dir = scratch_dir("sql-quotes");
+    let (stdout, stderr, code) = run_koa(&dir, "@sql SELECT 'a' AS v");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert!(
+        stdout.contains('a') && stdout.contains('v'),
+        "stdout {stdout}"
+    );
+
+    let (stdout, stderr, code) = run_koa(&dir, r#"@sql SELECT "x" AS y"#);
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert!(stdout.contains('y'), "stdout {stdout}");
+
+    let (stdout, stderr, code) = run_koa(&dir, "@sql SELECT 5 AS n WHERE n > 1");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert!(stdout.contains('5'), "stdout {stdout}");
+    assert!(
+        !dir.join("1").exists(),
+        "`> 1` inside SQL is not a redirect"
+    );
+
+    let (stdout, stderr, code) = run_koa(&dir, "@sql \"SELECT 'q' AS w\"");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert!(stdout.contains('q'), "stdout {stdout}");
+}
+
+#[test]
+fn py_and_js_take_one_quoted_program_as_before() {
+    let dir = scratch_dir("py-js-quotes");
+    let (stdout, stderr, code) = run_koa(&dir, r#"@py 'print("a b")'"#);
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert_eq!(stdout, "a b\n");
+
+    let (stdout, stderr, code) = run_koa(&dir, r#"@js 'console.log("x")'"#);
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert_eq!(stdout, "x\n");
+
+    let (stdout, stderr, code) = run_koa(&dir, "@py 'print(1)'; @js 'console.log(2)'");
+    assert_eq!(code, Some(0), "stderr {stderr}");
+    assert_eq!(stdout, "1\n2\n");
+}
