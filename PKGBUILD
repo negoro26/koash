@@ -1,5 +1,5 @@
 pkgname=koash
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Agent-native structured command shell written in Rust (koa)'
 arch=('x86_64' 'aarch64')
@@ -13,7 +13,7 @@ sha256sums=('SKIP')
 
 build() {
   cd "$pkgname-$pkgver"
-  cargo build --release --bin koa
+  cargo build --release --locked --bin koa
 }
 
 package() {

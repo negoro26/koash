@@ -30,7 +30,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --bin koa
+        run: cargo build --release --locked --bin koa
 
       - name: Package archive
         shell: bash
