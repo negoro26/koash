@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Drive a real koa binary and save evidence.
+
+  koa-verify build
+  koa-verify doctor
+  koa-verify c     <case> <script> [--seed NAME=TEXT ...]
+  koa-verify rpc   <case> <json-line> [<json-line> ...] [--seed NAME=TEXT ...]
+  koa-verify pty   <case> <step> [<step> ...] [--seed NAME=TEXT ...]
+  koa-verify cleanup
+
+Evidence goes to target/verify/<run>/<case>/. A run id comes from KOA_VERIFY_RUN
+(default: one id per day). Every case gets a fresh scratch dir under
+/tmp/koa-verify-<run>/<case>/ seeded with --seed files. pty steps are
+send:TEXT (escapes like \\r and \\x03 allowed) and sleep:SECS.
+"""
+import codecs
+import json
+import os
+import pty
+import queue
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+KOA = os.path.join(REPO, "target", "release", "koa")
+RUN = os.environ.get("KOA_VERIFY_RUN", time.strftime("%Y%m%d"))
+EVIDENCE = os.path.join(REPO, "target", "verify", RUN)
+SCRATCH = f"/tmp/koa-verify-{RUN}"
+PIDFILE = os.path.join(EVIDENCE, "pids.txt")
+
+
+def die(msg):
+    print(f"koa-verify: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def split_seeds(args):
+    seeds, rest = {}, []
+    it = iter(args)
+    for a in it:
+        if a == "--seed":
+            name, _, text = next(it, "").partition("=")
+            if not name:
+                die("--seed needs NAME=TEXT")
+            seeds[name] = codecs.decode(text, "unicode_escape")
+        else:
+            rest.append(a)
+    return seeds, rest
+
+
+def prepare(case, seeds):
+    if not os.access(KOA, os.X_OK):
+        die(f"{KOA} missing; run `koa-verify build` first")
+    work = os.path.join(SCRATCH, case)
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    for name, text in seeds.items():
+        path = os.path.join(work, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+    out = os.path.join(EVIDENCE, case)
+    os.makedirs(out, exist_ok=True)
+    return work, out
+
+
+def track(pid):
+    os.makedirs(EVIDENCE, exist_ok=True)
+    with open(PIDFILE, "a") as f:
+        f.write(f"{pid}\n")
+
+
+def listing(work):
+    rows = []
+    for root, _, files in os.walk(work):
+        for name in sorted(files):
+            p = os.path.join(root, name)
+            with open(p, "rb") as f:
+                body = f.read(200)
+            rows.append(f"{os.path.relpath(p, work)}\t{os.stat(p).st_mode & 0o777:o}\t{body!r}")
+    return "\n".join(sorted(rows)) + "\n"
+
+
+def finish(out, work, record):
+    record["files_after"] = listing(work)
+    with open(os.path.join(out, "result.json"), "w") as f:
+        json.dump(record, f, indent=2)
+    print(json.dumps(record, indent=2))
+    print(f"evidence: {out}/result.json")
+
+
+def cmd_build():
+    subprocess.run(["cargo", "build", "--release", "--locked", "--bin", "koa"], cwd=REPO, check=True)
+    print(KOA)
+
+
+def cmd_doctor():
+    ok = True
+    if not os.access(KOA, os.X_OK):
+        print(f"FAIL binary missing: {KOA}")
+        sys.exit(1)
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    version = subprocess.run([KOA, "--version"], capture_output=True, text=True).stdout.strip()
+    newest_src = max(
+        os.path.getmtime(os.path.join(r, n))
+        for r, _, ns in os.walk(os.path.join(REPO, "crates"))
+        for n in ns
+        if n.endswith(".rs") or n == "Cargo.toml"
+    )
+    stale = os.path.getmtime(KOA) < newest_src
+    probe = subprocess.run([KOA, "-c", "echo doctor-ok"], capture_output=True, text=True, timeout=10)
+    print(f"repo HEAD      {head}{' (uncommitted changes)' if dirty else ''}")
+    print(f"binary         {KOA}")
+    print(f"version        {version}")
+    print(f"binary stale   {'YES, rebuild with koa-verify build' if stale else 'no'}")
+    print(f"probe          rc={probe.returncode} stdout={probe.stdout.strip()!r}")
+    print(f"evidence dir   {EVIDENCE}")
+    print(f"scratch dir    {SCRATCH}")
+    if stale or probe.returncode != 0 or probe.stdout.strip() != "doctor-ok":
+        ok = False
+    print("OK" if ok else "NOT OK")
+    sys.exit(0 if ok else 1)
+
+
+def cmd_c(case, script, seeds):
+    work, out = prepare(case, seeds)
+    proc = subprocess.Popen([KOA, "-c", script], cwd=work, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    track(proc.pid)
+    try:
+        stdout, stderr = proc.communicate(timeout=30)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        rc = "TIMEOUT"
+    finish(out, work, {"surface": "koa -c", "script": script, "exit_code": rc,
+                       "stdout": stdout, "stderr": stderr})
+
+
+def cmd_rpc(case, lines, seeds):
+    work, out = prepare(case, seeds)
+    proc = subprocess.Popen([KOA, "--rpc"], cwd=work, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    track(proc.pid)
+    lines_q = queue.Queue()
+    threading.Thread(target=lambda: [lines_q.put(l) for l in proc.stdout] + [lines_q.put(None)],
+                     daemon=True).start()
+    replies, sid = [], None
+    for raw in lines:
+        if sid is not None:
+            raw = raw.replace("$SID", sid)
+        req = json.loads(raw)
+        proc.stdin.write(json.dumps(req) + "\n")
+        proc.stdin.flush()
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                line = lines_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                msg = {"NON_JSON_LINE": line.rstrip("\n")}
+            replies.append(msg)
+            if msg.get("id") == req.get("id") and (msg.get("event") == "completed" or "result" in msg or "error" in msg):
+                if isinstance(msg.get("result"), dict) and "session_id" in msg["result"]:
+                    sid = msg["result"]["session_id"]
+                break
+        else:
+            replies.append({"HELPER_NOTE": f"no final reply to request id {req.get('id')} within 30 s"})
+    proc.stdin.close()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    finish(out, work, {"surface": "koa --rpc", "requests": lines, "replies": replies,
+                       "stderr": proc.stderr.read()})
+
+
+def cmd_pty(case, steps, seeds):
+    work, out = prepare(case, seeds)
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(work)
+        os.environ["TERM"] = "dumb"
+        os.environ["HOME"] = work
+        os.execv(KOA, [KOA])
+    track(pid)
+    buf = b""
+
+    def pump(secs):
+        nonlocal buf
+        end = time.time() + secs
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    buf += os.read(fd, 65536)
+                except OSError:
+                    return
+
+    pump(0.8)
+    for s in steps:
+        kind, _, val = s.partition(":")
+        if kind == "send":
+            os.write(fd, codecs.decode(val, "unicode_escape").encode("latin1"))
+            pump(0.5)
+        elif kind == "sleep":
+            pump(float(val))
+        else:
+            die(f"unknown pty step {s!r}")
+    pump(0.3)
+    alive = os.waitpid(pid, os.WNOHANG) == (0, 0)
+    if alive:
+        os.write(fd, b"exit\r")
+        pump(0.5)
+        if os.waitpid(pid, os.WNOHANG) == (0, 0):
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+    raw = buf.decode("utf-8", "replace")
+    transcript = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw).replace("\r", "")
+    with open(os.path.join(out, "transcript.raw"), "w") as f:
+        f.write(raw)
+    with open(os.path.join(out, "transcript.txt"), "w") as f:
+        f.write(transcript)
+    finish(out, work, {"surface": "koa (interactive pty)", "steps": steps,
+                       "koa_alive_after_steps": alive, "transcript": transcript})
+
+
+def cmd_cleanup():
+    killed = 0
+    if os.path.exists(PIDFILE):
+        with open(PIDFILE) as f:
+            for line in f:
+                pid = int(line)
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    continue
+                with open(f"/proc/{pid}/cmdline", "rb") as c:
+                    if not c.read().startswith(KOA.encode()):
+                        continue
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+        os.remove(PIDFILE)
+    shutil.rmtree(SCRATCH, ignore_errors=True)
+    print(f"killed {killed} koa process(es) this run started; removed {SCRATCH}; kept {EVIDENCE}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        die(__doc__)
+    sub, args = sys.argv[1], sys.argv[2:]
+    seeds, args = split_seeds(args)
+    if sub == "build":
+        cmd_build()
+    elif sub == "doctor":
+        cmd_doctor()
+    elif sub == "cleanup":
+        cmd_cleanup()
+    elif sub in ("c", "rpc", "pty") and len(args) >= 2:
+        {"c": lambda: cmd_c(args[0], args[1], seeds),
+         "rpc": lambda: cmd_rpc(args[0], args[1:], seeds),
+         "pty": lambda: cmd_pty(args[0], args[1:], seeds)}[sub]()
+    else:
+        die(__doc__)
+
+
+if __name__ == "__main__":
+    main()
