@@ -167,6 +167,7 @@ def cmd_rpc(case, lines, seeds):
             except queue.Empty:
                 continue
             if line is None:
+                replies.append({"HELPER_NOTE": f"koa closed stdout before replying to request id {req.get('id')}"})
                 break
             try:
                 msg = json.loads(line)
