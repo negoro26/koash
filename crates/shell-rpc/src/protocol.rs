@@ -10,7 +10,7 @@ pub struct RpcRequest {
     pub params: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PolicyConfig {
     #[serde(default = "default_true")]
     pub allow_network: bool,
@@ -18,6 +18,16 @@ pub struct PolicyConfig {
     pub writable_paths: Vec<String>,
     #[serde(default)]
     pub dry_run: bool,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            allow_network: true,
+            writable_paths: Vec::new(),
+            dry_run: false,
+        }
+    }
 }
 
 fn default_true() -> bool {

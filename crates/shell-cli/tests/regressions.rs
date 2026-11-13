@@ -315,6 +315,27 @@ fn rpc_policy_blocks_posix_fallback_under_dry_run() {
 }
 
 #[test]
+fn rpc_exec_without_policy_runs_posix_fallback() {
+    let dir = scratch_dir("rpc-default-policy");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    rpc.send(serde_json::json!({
+        "id": 2,
+        "method": "exec",
+        "params": {"session_id": sid, "command": "echo got-$(echo sub)"}
+    }));
+    let lines = rpc.lines_until_completed(2, Duration::from_secs(10));
+    assert!(
+        !lines.iter().any(|l| l.contains("policy_blocked")),
+        "an exec with no policy must not be restricted: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("got-sub")),
+        "command substitution output expected: {lines:?}"
+    );
+}
+
+#[test]
 fn undo_skips_the_empty_record_left_by_a_failed_builtin() {
     let dir = scratch_dir("undo-failed-rm");
     let mut rpc = RpcClient::start(&dir);

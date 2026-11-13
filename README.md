@@ -68,6 +68,8 @@ cargo nextest run                      # tests; .config/nextest.toml kills a tes
 cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
 ```
 
+With a distro Rust instead of rustup, point coverage at the system LLVM: `LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata`.
+
 Profiling builds use the `profiling` profile, which is release with symbols. `scripts/profile.sh` builds it and runs one tool against `koa`. `flamegraph` and `samply` sample through `perf_event_open`, which needs `kernel.perf_event_paranoid` set to 1 or lower.
 
 ```bash

@@ -21,7 +21,10 @@ case $tool in
     flamegraph -o "$out/flamegraph.svg" -- "$bin" "$@"
     echo "wrote $out/flamegraph.svg"
     ;;
-  samply) samply record -- "$bin" "$@" ;;
+  samply)
+    samply record --save-only -o "$out/samply.json.gz" -- "$bin" "$@"
+    echo "wrote $out/samply.json.gz; view with: samply load $out/samply.json.gz"
+    ;;
   heaptrack)
     heaptrack --record-only -o "$out/heaptrack" "$bin" "$@"
     heaptrack_print "$out/heaptrack.zst" | head -60
