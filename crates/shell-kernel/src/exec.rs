@@ -70,6 +70,16 @@ pub fn execute_pipeline(
         return Ok(status);
     }
 
+    let launched = match &pipeline.commands[0] {
+        Command::Simple(s) => s
+            .words
+            .first()
+            .map(|w| expand_word(w, &session.env, session.last_status))
+            .unwrap_or_default(),
+        Command::PosixFallback { raw, .. } => raw.clone(),
+    };
+    session.mark_opaque(launched);
+
     let num_cmds = pipeline.commands.len();
     let mut prev_read: Option<OwnedFd> = None;
     let mut pgid: Option<Pid> = None;

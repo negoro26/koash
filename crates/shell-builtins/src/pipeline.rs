@@ -192,6 +192,7 @@ pub fn execute_hybrid_pipeline_sync(
         let is_last = idx + 1 == total;
         match cmd {
             Command::PosixFallback { raw, .. } => {
+                session.mark_opaque(raw.clone());
                 let (out, code) = run_external_captured_sync(
                     session,
                     "sh",
@@ -247,6 +248,7 @@ pub fn execute_hybrid_pipeline_sync(
                     ) {
                         session.taint = TaintLevel::UntrustedExternal;
                     }
+                    session.mark_opaque(name.clone());
                     let (out, code) = run_external_captured_sync(
                         session,
                         name,
@@ -303,6 +305,7 @@ pub async fn execute_hybrid_pipeline(
         let is_last = idx + 1 == total;
         match cmd {
             Command::PosixFallback { raw, .. } => {
+                session.mark_opaque(raw.clone());
                 let (out, code) = run_external_captured(
                     session,
                     "sh",
@@ -359,6 +362,7 @@ pub async fn execute_hybrid_pipeline(
                     ) {
                         session.taint = TaintLevel::UntrustedExternal;
                     }
+                    session.mark_opaque(name.clone());
                     let (out, code) = run_external_captured(
                         session,
                         name,

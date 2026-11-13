@@ -39,6 +39,10 @@ pub(crate) fn tx_log(session: &Session) -> Result<Value, StructuredDiagnostic> {
             rec.insert("tx_id".to_string(), JsonVal::String(tx.id.clone()));
             rec.insert("command".to_string(), JsonVal::String(tx.command.clone()));
             rec.insert("files".to_string(), json!(tx.preimages.len()));
+            rec.insert(
+                "opaque_after".to_string(),
+                tx.opaque_after.clone().map_or(JsonVal::Null, JsonVal::String),
+            );
             rec
         })
         .collect();

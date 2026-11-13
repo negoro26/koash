@@ -81,6 +81,7 @@ pub async fn run_builtin(
 ) -> Result<Value, StructuredDiagnostic> {
     match name {
         "@py" => {
+            session.mark_opaque("@py".to_string());
             crate::subkernel::run_persistent_worker(
                 session,
                 crate::subkernel::KernelKind::Python,
@@ -89,6 +90,7 @@ pub async fn run_builtin(
             .await
         }
         "@js" => {
+            session.mark_opaque("@js".to_string());
             crate::subkernel::run_persistent_worker(
                 session,
                 crate::subkernel::KernelKind::JavaScript,
