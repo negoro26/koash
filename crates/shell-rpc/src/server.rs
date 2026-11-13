@@ -686,11 +686,19 @@ fn write_spill_file(bytes: &[u8], ext: &str) -> Option<String> {
 fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> Option<String> {
     let network_cmds = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
     let mutating_cmds = ["rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "patch"];
+    let restricted = policy.dry_run || !policy.allow_network || !policy.writable_paths.is_empty();
 
     for item in &program.items {
         for cmd in &item.pipeline.commands {
-            let Command::Simple(simple) = cmd else {
-                continue;
+            let simple = match cmd {
+                Command::Simple(simple) => simple,
+                Command::PosixFallback { .. } if restricted => {
+                    return Some(
+                        "opaque shell construct blocked by policy (dry_run/allow_network/writable_paths cannot be checked inside it)"
+                            .to_string(),
+                    );
+                }
+                Command::PosixFallback { .. } => continue,
             };
             let args: Vec<String> = simple
                 .words
