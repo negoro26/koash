@@ -849,3 +849,20 @@ fn file_operands_never_touch_the_shells_stdin() {
     assert!(start.elapsed() < Duration::from_secs(5));
     assert!(String::from_utf8_lossy(&out.stdout).contains("alpha"));
 }
+
+#[test]
+fn removing_a_fifo_still_makes_undo_refuse() {
+    let dir = scratch_dir("undo-fifo");
+    let made = Command::new("mkfifo").arg(dir.join("p")).status();
+    if !made.is_ok_and(|s| s.success()) {
+        return;
+    }
+    let out = koa_c(
+        &dir,
+        "echo a > f; rm p; undo; echo st=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
+}
