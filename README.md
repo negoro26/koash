@@ -1,6 +1,6 @@
 # koash (`koa`)
 
-An agent-native structured command shell written in Rust. `koa` combines POSIX-compatible pipelines with typed record streams, Hashline code anchors, transactional micro-commits, persistent sub-kernels, and headless RPC/ACP modes in a single binary.
+An agent-native structured command shell written in Rust. `koa` runs POSIX pipelines alongside typed record tables, tags lines with Hashline anchors that `patch` verifies, records file changes so `undo` can revert them, keeps `@py`/`@js`/`@sql` sub-kernels alive between commands, and serves headless RPC and ACP modes from one binary.
 
 ## Install
 
@@ -35,27 +35,37 @@ koa --socket /tmp/koa.sock
 koa --tsp -c "ls"
 ```
 
-## Key Capabilities
+## What works today
 
-- **Structured Pipelines**: In-process `RecordBatch` streams across `ls`, `stat`, `find`, `ps`, `where`, `select`, `sort-by`, `first`, `last`, `from`, and `to`, automatically bridging to raw byte streams at external binaries.
-- **Hashline Anchors & Atomic Edits**: `cat`, `grep`, and `ast` emit deterministic `line:hash` tags verified by `patch`.
-- **Code Intelligence**: In-process `prewalk` / `ast` (`tree-sitter`) and warm LSP diagnostics/refactoring via `diag`, `refs`, and `rename`.
-- **Transactional Undo**: Reversible file micro-commits via `tx-log`, `undo`, and `rollback`, plus unprivileged CoW session isolation.
-- **Persistent Sub-Kernels**: Stateful `@sql` (in-process SQLite), `@py`, and `@js` sessions.
-- **Progressive Discovery**: Built-in BM25 command search via `discover "<intent>"`.
+- **Structured pipelines.** `ls`, `stat`, `find`, `ps`, `cat`, `grep` and `env` produce tables that `where`, `select`, `sort-by`, `first`, `last`, `from` and `to` filter in-process. At an external command the table becomes NDJSON or text, and external output comes back as lines.
+- **Hashline anchors.** `cat`, `grep` and `ast` print a `line:hash` tag per line. `patch file N:hash 'text'` refuses the edit when line `N` has changed since you read it.
+- **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one and `rollback <tx>` reverts back to a point. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
+- **Sub-kernels.** `@sql` runs in an in-process SQLite database. `@py` and `@js` keep a `python3` or `node` worker alive per session, so variables survive between commands.
+- **Discovery.** `discover "<intent>"` ranks builtins by BM25 over their descriptions.
+- **Code tools.** `prewalk` and `ast` parse source with tree-sitter. `diag` runs `cargo check`. `refs` and `rename` are text search and replace over the workspace, not LSP-backed.
+- **Agent modes.** `koa --rpc` (newline-delimited JSON over stdio), `koa --socket PATH` (the same protocol over a Unix socket) and `koa --acp` (Agent Client Protocol). Each RPC session has its own state; `exec` supports `timeout_ms`, which kills the whole process group, and a `policy` object.
 
-## Workspace Layout
+## Known limits
+
+- Builtins pass whole tables between stages; they do not stream yet. A builtin in a background pipeline (`ls &`) fails with `E_BG_BUILTIN`.
+- The RPC `policy` matches commands by name. `/usr/bin/touch` or `sh -c` get past it, so it is not a sandbox.
+- `session.fork` with isolation creates a session directory under `.koa/sessions/`, but writes are not redirected into it yet, so forked sessions are not isolated.
+- Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs or `if`/`for`/`while` run through `sh -c` as a whole. Structured output, undo tracking and RPC policy checks do not apply inside them.
+- The builtin `rm`, `cp`, `mv`, `cat` and `ls` parse flags loosely. `rm --force dir` deletes a directory without `-r`, `cp a b dir` and `mv a b dir` act on the first two operands only and ignore the rest, and `cat a - b` drops stdin. A fix is in progress; until it lands, call `/bin/rm`, `/bin/cp` or `/bin/mv` for anything beyond a single plain operand.
+- Linux only. macOS is untested.
+
+## Workspace layout
 
 | Crate | Role |
 | :--- | :--- |
-| `shell-syntax` | Zero-copy recursive-descent parser |
-| `shell-value` | Hybrid `RecordBatch` / `RawStream` values, Hashline tags, taint tracking |
-| `shell-kernel` | Sessions, PTY/process groups, CoW overlay, tx ledger, policy engine |
-| `shell-builtins` | Builtin commands, pipelines, `discover`, `code_intel`, LSP, sub-kernels |
-| `shell-rpc` | Headless NDJSON `--rpc`, `--acp`, and `--socket` server |
-| `shell-surface` | Terminal tables, compact sigil format, and TSP output adapters |
-| `shell-tui` | `crossterm` line editor, AST syntax highlighting, completion |
-| `shell-cli` | Unified `koa` binary entrypoint |
+| `shell-syntax` | Lexer and recursive-descent parser |
+| `shell-value` | `Value` (`Empty`, `Bytes`, `Batch`), `RecordBatch`, Hashline tags, taint and secret redaction |
+| `shell-kernel` | `Session`, process spawning and job control, kill switch, undo ledger, CoW session directories |
+| `shell-builtins` | Builtin commands, the pipeline executor, `discover`, code tools, sub-kernels |
+| `shell-rpc` | `--rpc`, `--socket` and `--acp` servers, RPC policy checks |
+| `shell-surface` | Terminal tables, compact sigil format, TSP output |
+| `shell-tui` | `crossterm` line editor, syntax highlighting, completion |
+| `shell-cli` | The `koa` binary |
 
 ## Development
 
