@@ -256,3 +256,26 @@ fn rpc_policy_blocks_posix_fallback_under_dry_run() {
     );
     assert!(dir.join("victim.txt").exists(), "victim.txt must survive a dry_run exec");
 }
+
+#[test]
+fn undo_skips_the_empty_record_left_by_a_failed_builtin() {
+    let dir = scratch_dir("undo-failed-rm");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    let mut exec = |id: u64, command: &str| {
+        rpc.send(serde_json::json!({
+            "id": id,
+            "method": "exec",
+            "params": {"session_id": sid, "command": command}
+        }));
+        rpc.lines_until_completed(id, Duration::from_secs(10))
+    };
+    exec(2, "echo keep > k.txt");
+    exec(3, "rm nonexistent.txt");
+    let lines = exec(4, "undo");
+    assert!(
+        lines.iter().any(|l| l.contains("tx_001")),
+        "undo must revert the echo, not the failed rm: {lines:?}"
+    );
+    assert!(!dir.join("k.txt").exists(), "k.txt created by tx_001 must be gone");
+}

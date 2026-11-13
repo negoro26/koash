@@ -397,6 +397,7 @@ impl Session {
     }
 
     pub fn undo_last(&mut self) -> Result<Option<(String, usize)>, StructuredDiagnostic> {
+        self.finish_tx();
         let Some(last) = self.tx_log.last() else {
             return Ok(None);
         };
