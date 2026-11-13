@@ -204,6 +204,7 @@ impl AcpServer {
                     let mut session = session;
                     session.touch();
                     session.kill.reset();
+                    session.should_exit = None;
                     let sink = Sink::Capture(tx);
                     run_program(&mut session, &program, &sink);
                     session

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use shell_builtins::{BUILTIN_SCHEMAS, Chunk, Sink, post_edit_diagnostics, run_program};
-use shell_kernel::{CowWorkspace, Session, expand_word};
+use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
 use shell_value::{
     StructuredDiagnostic, StructuredRecord, TaintLevel, records_to_compact_sigil, redact_secrets,
@@ -336,10 +336,10 @@ impl RpcServer {
         let start = Instant::now();
         let admission = {
             let mut guard = self.sessions.lock().await;
-            admit(&mut guard, &params)
+            admit(&self.sessions, &mut guard, &params)
         };
-        let (mut session, program) = match admission {
-            Admission::Run(session, program) => (session, program),
+        let (lease, program) = match admission {
+            Admission::Run(lease, program) => (lease, program),
             Admission::Reject(diag) => return respond(writer, id, Err(diag)).await,
             Admission::Blocked(reason) => {
                 let blocked = RpcEvent::PolicyBlocked {
@@ -365,17 +365,25 @@ impl RpcServer {
             id: id.clone(),
             pid: std::process::id(),
             argv: vec![params.command.clone()],
-            cwd: session.cwd.to_string_lossy().to_string(),
+            cwd: lease.cwd.to_string_lossy().to_string(),
         };
         send_json(writer, &spawned).await?;
 
-        session.kill.reset();
-        let kill = session.kill.clone();
+        lease.kill.reset();
+        let kill = lease.kill.clone();
         let (tx, rx) = std::sync::mpsc::sync_channel::<Chunk>(256);
         let mut executor = tokio::task::spawn_blocking(move || {
-            let sink = Sink::Capture(tx);
-            let code = run_program(&mut session, &program, &sink);
-            (session, code)
+            lease.run_blocking(|session| {
+                let sink = Sink::Capture(tx);
+                let code = run_program(session, &program, &sink);
+                RunSummary {
+                    code,
+                    redact_env: (session.taint == TaintLevel::UntrustedExternal)
+                        .then(|| session.env.materialize()),
+                    cwd: session.cwd.clone(),
+                    mutated_files: session.mutated_files.clone(),
+                }
+            })
         });
         let collector = tokio::task::spawn_blocking(move || RunOutput::from_chunks(rx));
 
@@ -393,11 +401,18 @@ impl RpcServer {
             },
         };
 
-        let sid = params.session_id.clone();
-        let (session, code) = match finished {
-            Some(Ok(pair)) => pair,
+        let run = match finished {
+            Some(Ok(Some(run))) => run,
+            Some(Ok(None)) => {
+                let diag = StructuredDiagnostic::new(
+                    "E_EXEC_FAILED",
+                    "executor lost its session",
+                    None,
+                    None,
+                );
+                return respond(writer, id, Err(diag)).await;
+            }
             Some(Err(join_err)) => {
-                self.sessions.lock().await.remove(&sid);
                 let diag = StructuredDiagnostic::new(
                     "E_EXEC_FAILED",
                     format!("executor thread failed: {join_err}"),
@@ -407,13 +422,7 @@ impl RpcServer {
                 return respond(writer, id, Err(diag)).await;
             }
             None => {
-                // The blocking task still owns the session; the slot stays Busy until it comes back.
-                let sessions = Arc::clone(&self.sessions);
-                tokio::spawn(async move {
-                    if let Ok((session, _)) = executor.await {
-                        sessions.lock().await.insert(sid, Slot::Ready(session));
-                    }
-                });
+                // The executor still holds the session and returns it to its slot when it finishes.
                 let completed = RpcEvent::Completed {
                     id,
                     exit_code: TIMEOUT_EXIT_CODE,
@@ -428,11 +437,12 @@ impl RpcServer {
         };
 
         let out = collector.await.unwrap_or_else(|_| RunOutput::empty());
-        let redact_env = (session.taint == TaintLevel::UntrustedExternal)
-            .then(|| session.env.materialize());
-        let cwd = session.cwd.clone();
-        let mutated_files = session.mutated_files.clone();
-        self.sessions.lock().await.insert(sid, Slot::Ready(session));
+        let RunSummary {
+            code,
+            redact_env,
+            cwd,
+            mutated_files,
+        } = run;
 
         let exit_code = if timed_out { TIMEOUT_EXIT_CODE } else { code };
         let summary = send_output(writer, &id, &params, out, redact_env.as_ref(), exit_code).await?;
@@ -504,22 +514,80 @@ impl RpcServer {
 }
 
 enum Admission {
-    Run(Box<Session>, Program),
+    Run(Lease, Program),
     Reject(StructuredDiagnostic),
     Blocked(String),
 }
 
+/// What the caller of an exec needs from the session once the program has run.
+struct RunSummary {
+    code: i32,
+    redact_env: Option<BTreeMap<String, String>>,
+    cwd: PathBuf,
+    mutated_files: Vec<String>,
+}
+
+/// Ownership of a session taken out of its slot. However the exec ends, the slot is settled:
+/// dropping the lease puts the session back, or removes the slot if the executor panicked.
+struct Lease {
+    sessions: Sessions,
+    id: String,
+    runtime: tokio::runtime::Handle,
+    session: Option<Box<Session>>,
+    kill: KillSwitch,
+    cwd: PathBuf,
+}
+
+impl Lease {
+    /// Runs `f` on the session, then makes the session available again before returning.
+    /// Must be called from a blocking thread.
+    fn run_blocking<R>(mut self, f: impl FnOnce(&mut Session) -> R) -> Option<R> {
+        let result = f(self.session.as_deref_mut()?);
+        let session = self.session.take()?;
+        self.sessions
+            .blocking_lock()
+            .insert(std::mem::take(&mut self.id), Slot::Ready(session));
+        Some(result)
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let slot = (!std::thread::panicking()).then_some(Slot::Ready(session));
+        let id = std::mem::take(&mut self.id);
+        let settle = move |sessions: &mut HashMap<String, Slot>| match slot {
+            Some(slot) => {
+                sessions.insert(id, slot);
+            }
+            None => {
+                sessions.remove(&id);
+            }
+        };
+        match self.sessions.try_lock() {
+            Ok(mut sessions) => settle(&mut sessions),
+            Err(_) => {
+                let sessions = Arc::clone(&self.sessions);
+                self.runtime.spawn(async move { settle(&mut *sessions.lock().await) });
+            }
+        }
+    }
+}
+
 /// Checks that `params` may run and, if so, moves the session out of its slot.
-fn admit(sessions: &mut HashMap<String, Slot>, params: &ExecParams) -> Admission {
+fn admit(sessions: &Sessions, slots: &mut HashMap<String, Slot>, params: &ExecParams) -> Admission {
     let id = &params.session_id;
     let program = {
-        let session = match ready_mut(sessions, id) {
+        let session = match ready_mut(slots, id) {
             Ok(s) => s,
             Err(diag) => return Admission::Reject(diag),
         };
         session.touch();
         session.mutated_files.clear();
         session.taint = TaintLevel::TrustedLocal;
+        session.should_exit = None;
         let program = match shell_syntax::parse(&params.command) {
             Ok(p) => p,
             Err(err) => return Admission::Reject(err.into()),
@@ -529,8 +597,18 @@ fn admit(sessions: &mut HashMap<String, Slot>, params: &ExecParams) -> Admission
         }
         program
     };
-    match sessions.insert(id.clone(), Slot::Busy) {
-        Some(Slot::Ready(session)) => Admission::Run(session, program),
+    match slots.insert(id.clone(), Slot::Busy) {
+        Some(Slot::Ready(session)) => Admission::Run(
+            Lease {
+                sessions: Arc::clone(sessions),
+                id: id.clone(),
+                runtime: tokio::runtime::Handle::current(),
+                kill: session.kill.clone(),
+                cwd: session.cwd.clone(),
+                session: Some(session),
+            },
+            program,
+        ),
         _ => Admission::Reject(busy(id)),
     }
 }

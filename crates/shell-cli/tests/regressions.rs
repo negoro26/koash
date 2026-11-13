@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
@@ -382,4 +383,147 @@ fn rpc_busy_session_after_unfinished_timeout() {
         assert!(Instant::now() < deadline, "session never became ready: {lines:?}");
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+fn exec_lines(
+    rpc: &mut RpcClient,
+    sid: &str,
+    id: u64,
+    command: &str,
+    timeout_ms: Option<u64>,
+) -> Vec<String> {
+    rpc.send(serde_json::json!({
+        "id": id,
+        "method": "exec",
+        "params": {"session_id": sid, "command": command, "timeout_ms": timeout_ms}
+    }));
+    rpc.lines_until_completed(id, Duration::from_secs(10))
+}
+
+fn stdout_of(lines: &[String]) -> String {
+    lines
+        .iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v["stdout"].as_str().map(str::to_string))
+        .collect()
+}
+
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn connect(sock: &Path) -> UnixStream {
+    let start = Instant::now();
+    loop {
+        match UnixStream::connect(sock) {
+            Ok(stream) => return stream,
+            Err(e) => assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "socket never came up: {e}"
+            ),
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn socket_lines_until_final(reader: &mut BufReader<UnixStream>, id: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    loop {
+        let mut line = String::new();
+        if !matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
+            return out;
+        }
+        let line = line.trim_end().to_string();
+        let done = serde_json::from_str::<serde_json::Value>(&line).is_ok_and(|v| {
+            v["id"] == id
+                && (v["event"] == "completed"
+                    || v.get("error").is_some()
+                    || v.get("result").is_some())
+        });
+        out.push(line);
+        if done {
+            return out;
+        }
+    }
+}
+
+#[test]
+fn rpc_client_hangup_after_exec_does_not_leave_the_session_busy() {
+    let dir = scratch_dir("rpc-hangup");
+    let sock = dir.join("koa.sock");
+    let _server = KillOnDrop(
+        Command::new(KOA)
+            .arg("--socket")
+            .arg(&sock)
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn koa --socket"),
+    );
+
+    let first = connect(&sock);
+    let mut reader = BufReader::new(first.try_clone().expect("clone socket"));
+    let mut writer = first;
+    let timeout = Some(Duration::from_secs(10));
+    writer.set_read_timeout(timeout).expect("read timeout");
+    let send = |writer: &mut UnixStream, request: serde_json::Value| {
+        writeln!(writer, "{request}").expect("send request");
+    };
+    send(&mut writer, serde_json::json!({"id": 1, "method": "session.create"}));
+    let created = socket_lines_until_final(&mut reader, 1);
+    let created: serde_json::Value =
+        serde_json::from_str(created.last().expect("session.create reply")).expect("json");
+    let sid = created["result"]["session_id"].as_str().expect("session id").to_string();
+    send(
+        &mut writer,
+        serde_json::json!({"id": 2, "method": "exec", "params": {"session_id": sid, "command": "echo warmup"}}),
+    );
+    socket_lines_until_final(&mut reader, 2);
+
+    send(
+        &mut writer,
+        serde_json::json!({"id": 3, "method": "exec", "params": {"session_id": sid, "command": "echo bye"}}),
+    );
+    drop(reader);
+    drop(writer);
+
+    let second = connect(&sock);
+    second.set_read_timeout(timeout).expect("read timeout");
+    let mut reader = BufReader::new(second.try_clone().expect("clone socket"));
+    let mut writer = second;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for id in 10.. {
+        send(
+            &mut writer,
+            serde_json::json!({"id": id, "method": "exec", "params": {"session_id": sid, "command": "echo from-b"}}),
+        );
+        let lines = socket_lines_until_final(&mut reader, id);
+        if lines.iter().any(|l| l.contains("from-b")) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the abandoned exec left the session busy: {lines:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn rpc_exit_ends_only_its_own_exec() {
+    let dir = scratch_dir("rpc-exit");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    exec_lines(&mut rpc, &sid, 2, "exit 0", None);
+    let lines = exec_lines(&mut rpc, &sid, 3, "echo a; echo b; echo c", None);
+    assert_eq!(stdout_of(&lines), "a\nb\nc\n", "{lines:?}");
+    let lines = exec_lines(&mut rpc, &sid, 4, "/bin/false; echo st=$?", None);
+    assert_eq!(stdout_of(&lines), "st=1\n", "{lines:?}");
 }
