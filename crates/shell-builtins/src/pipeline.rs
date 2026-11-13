@@ -322,7 +322,7 @@ fn finish_builtin_output(
         let raw = expand_word(target, &session.env, session.last_status);
         let path = session.cwd.join(raw);
         let bytes = current.into_raw_bytes();
-        session.record_preimage(&path);
+        session.record_output_target(&path);
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)

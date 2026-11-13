@@ -527,3 +527,74 @@ fn rpc_exit_ends_only_its_own_exec() {
     let lines = exec_lines(&mut rpc, &sid, 4, "/bin/false; echo st=$?", None);
     assert_eq!(stdout_of(&lines), "st=1\n", "{lines:?}");
 }
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).expect("stat").permissions().mode() & 0o7777
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+}
+
+#[test]
+fn undo_restores_permission_bits() {
+    let dir = scratch_dir("undo-modes");
+    std::fs::write(dir.join("script.sh"), "#!/bin/sh\n").expect("write script");
+    std::fs::write(dir.join("private"), "secret").expect("write private");
+    std::fs::create_dir_all(dir.join("tree")).expect("create tree");
+    std::fs::write(dir.join("tree/inner"), "x").expect("write inner");
+    set_mode(&dir.join("script.sh"), 0o755);
+    set_mode(&dir.join("private"), 0o600);
+    set_mode(&dir.join("tree/inner"), 0o640);
+    set_mode(&dir.join("tree"), 0o750);
+
+    let out = koa_c(
+        &dir,
+        "rm script.sh; rm private; rm -r tree; undo; undo; undo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(mode_of(&dir.join("script.sh")), 0o755);
+    assert_eq!(mode_of(&dir.join("private")), 0o600);
+    assert_eq!(mode_of(&dir.join("tree")), 0o750);
+    assert_eq!(mode_of(&dir.join("tree/inner")), 0o640);
+}
+
+#[test]
+fn writing_to_dev_null_does_not_block_undo() {
+    let dir = scratch_dir("undo-dev-null");
+    std::fs::write(dir.join("f1"), "orig\n").expect("write f1");
+    let out = koa_c(
+        &dir,
+        "echo a > f1; ls > /dev/null; undo; echo st=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("st=0"),
+        "undo must succeed: {stdout} / {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("f1")).expect("read f1"), "orig\n");
+}
+
+#[test]
+fn rollback_keeps_guarding_against_an_earlier_external_mutation() {
+    let dir = scratch_dir("rollback-opaque");
+    std::fs::write(dir.join("f1"), "orig\n").expect("write f1");
+    let script = "echo a > f1; echo b > f2; /bin/sh -c 'echo EXTERNAL > f1'; \
+                  undo; rollback tx_002; undo; echo st=$?";
+    let out = koa_c(&dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("st=1"), "the second undo must refuse: {stdout}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f1")).expect("read f1"),
+        "EXTERNAL\n",
+        "the external's work must survive"
+    );
+}

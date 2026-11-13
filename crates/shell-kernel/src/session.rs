@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +14,12 @@ use shell_value::{StructuredDiagnostic, TaintLevel};
 use crate::cow::CowWorkspace;
 use crate::env::SessionEnv;
 use crate::kill::KillSwitch;
+
+/// Reapplies the permission bits a rolled-back path had.
+fn restore_mode(path: &Path, mode: u32) -> Result<(), StructuredDiagnostic> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .map_err(|e| StructuredDiagnostic::from_io("E_ROLLBACK", &e, None))
+}
 
 fn next_session_uid() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -47,8 +54,8 @@ pub struct SessionSnapshot {
 #[derive(Debug, Clone)]
 pub enum Preimage {
     Absent,
-    File(Vec<u8>),
-    Dir,
+    File { bytes: Vec<u8>, mode: u32 },
+    Dir { mode: u32 },
 }
 
 const TX_CAPTURE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -310,7 +317,7 @@ impl Session {
             Err(e) => return Err(format!("cannot stat {}: {e}", path.display())),
         };
         if let Some(&idx) = tx.index.get(path) {
-            let was_dir = matches!(tx.preimages[idx].1, Preimage::Dir);
+            let was_dir = matches!(tx.preimages[idx].1, Preimage::Dir { .. });
             return Ok(was_dir && meta.is_some_and(|m| m.is_dir()));
         }
         if tx.preimages.len() >= TX_CAPTURE_MAX_ENTRIES {
@@ -318,7 +325,7 @@ impl Session {
         }
         let (pre, descend) = match meta {
             None => (Preimage::Absent, false),
-            Some(m) if m.is_dir() => (Preimage::Dir, true),
+            Some(m) if m.is_dir() => (Preimage::Dir { mode: m.mode() & 0o7777 }, true),
             Some(m) if m.is_file() => {
                 if tx.captured_bytes.saturating_add(m.len() as usize) > TX_CAPTURE_MAX_BYTES {
                     return Err("capture limit exceeded".to_string());
@@ -326,7 +333,13 @@ impl Session {
                 let bytes = std::fs::read(path)
                     .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
                 tx.captured_bytes += bytes.len();
-                (Preimage::File(bytes), false)
+                (
+                    Preimage::File {
+                        bytes,
+                        mode: m.mode() & 0o7777,
+                    },
+                    false,
+                )
             }
             Some(_) => {
                 return Err(format!(
@@ -338,6 +351,16 @@ impl Session {
         tx.index.insert(path.to_path_buf(), tx.preimages.len());
         tx.preimages.push((path.to_path_buf(), pre));
         Ok(descend)
+    }
+
+    /// Like `record_preimage` for a path a command writes to. Character devices and FIFOs hold no
+    /// state to restore, so writing to them (`> /dev/null`) is neither captured nor a reason to refuse `undo`.
+    pub fn record_output_target(&mut self, path: &Path) -> bool {
+        let stateless = std::fs::metadata(path).is_ok_and(|m| {
+            let kind = m.file_type();
+            kind.is_char_device() || kind.is_fifo()
+        });
+        stateless || self.record_preimage(path)
     }
 
     fn mark_capture_failed(&mut self, reason: &str) {
@@ -381,20 +404,27 @@ impl Session {
                 )
             })?;
         let drained: Vec<TxRecord> = self.tx_log.drain(pos..).collect();
+        // Rolling back does not undo what an external did after these records, so the
+        // marker must keep guarding whatever record is on top now.
+        if let Some(what) = drained.iter().rev().find_map(|t| t.opaque_after.clone()) {
+            self.mark_opaque(what);
+        }
         let mut restored = 0usize;
         for tx in drained.into_iter().rev() {
             for (path, pre) in tx.preimages.into_iter().rev() {
                 match pre {
-                    Preimage::File(bytes) => {
+                    Preimage::File { bytes, mode } => {
                         if let Some(parent) = path.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         std::fs::write(&path, bytes)
                             .map_err(|e| StructuredDiagnostic::from_io("E_ROLLBACK", &e, None))?;
+                        restore_mode(&path, mode)?;
                     }
-                    Preimage::Dir => {
+                    Preimage::Dir { mode } => {
                         std::fs::create_dir_all(&path)
                             .map_err(|e| StructuredDiagnostic::from_io("E_ROLLBACK", &e, None))?;
+                        restore_mode(&path, mode)?;
                     }
                     Preimage::Absent => match std::fs::symlink_metadata(&path) {
                         Ok(meta) if meta.is_dir() => {

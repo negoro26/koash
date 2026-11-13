@@ -134,7 +134,7 @@ fn open_for_write(
     append: bool,
 ) -> Result<File, StructuredDiagnostic> {
     let path = target_path(session, redir)?;
-    session.record_preimage(&path);
+    session.record_output_target(&path);
     let file = OpenOptions::new()
         .create(true)
         .write(true)
