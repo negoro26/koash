@@ -9,11 +9,32 @@ use std::time::{Duration, Instant};
 
 const KOA: &str = env!("CARGO_BIN_EXE_koa");
 
-fn scratch_dir(name: &str) -> PathBuf {
+struct ScratchDir(PathBuf);
+
+impl std::ops::Deref for ScratchDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for ScratchDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_dir(name: &str) -> ScratchDir {
     let dir = std::env::temp_dir().join(format!("koa-regress-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
+    ScratchDir(dir)
 }
 
 fn wait_with_deadline(mut child: Child, deadline: Duration) -> Option<Output> {
