@@ -6,8 +6,8 @@ use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
 pub(crate) fn ps() -> Result<Value, StructuredDiagnostic> {
     let mut records = Vec::new();
-    let entries = std::fs::read_dir("/proc")
-        .map_err(|e| StructuredDiagnostic::from_io("E_PS", &e, None))?;
+    let entries =
+        std::fs::read_dir("/proc").map_err(|e| StructuredDiagnostic::from_io("E_PS", &e, None))?;
 
     for entry_res in entries {
         let Ok(entry) = entry_res else {

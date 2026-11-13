@@ -23,7 +23,11 @@ pub fn highlight_line(input: &str) -> String {
         }
         let slice = tok.span.slice(input);
         match &tok.kind {
-            TokenKind::Pipe | TokenKind::AndIf | TokenKind::OrIf | TokenKind::Semi | TokenKind::Amp => {
+            TokenKind::Pipe
+            | TokenKind::AndIf
+            | TokenKind::OrIf
+            | TokenKind::Semi
+            | TokenKind::Amp => {
                 out.push_str("\x1b[35m");
                 out.push_str(slice);
                 out.push_str("\x1b[0m");
@@ -41,10 +45,12 @@ pub fn highlight_line(input: &str) -> String {
                 out.push_str("\x1b[0m");
             }
             TokenKind::Word(word) => {
-                let is_quoted = word
-                    .parts
-                    .iter()
-                    .any(|p| matches!(p, WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. }));
+                let is_quoted = word.parts.iter().any(|p| {
+                    matches!(
+                        p,
+                        WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. }
+                    )
+                });
 
                 if expect_cmd {
                     expect_cmd = false;

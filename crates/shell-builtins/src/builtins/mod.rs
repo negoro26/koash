@@ -15,11 +15,19 @@ use shell_value::{StructuredDiagnostic, Value};
 
 use crate::discover::run_discover;
 
-pub fn is_async_builtin(name: &str) -> bool {
-    matches!(name, "@py" | "@js")
+pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
+    if session.kill.is_killed() {
+        return Err(StructuredDiagnostic::new(
+            "E_KILLED",
+            "command killed",
+            None,
+            None,
+        ));
+    }
+    Ok(())
 }
 
-pub fn run_builtin_sync(
+pub fn run_builtin(
     session: &mut Session,
     name: &str,
     args: &[String],
@@ -64,6 +72,22 @@ pub fn run_builtin_sync(
         "discover" => run_discover(args),
         "help" => help(args),
         "@sql" => crate::subkernel::run_sql_inprocess(session, &args.join(" ")),
+        "@py" => {
+            session.mark_opaque("@py".to_string());
+            crate::subkernel::run_worker(
+                session,
+                crate::subkernel::KernelKind::Python,
+                &args.join(" "),
+            )
+        }
+        "@js" => {
+            session.mark_opaque("@js".to_string());
+            crate::subkernel::run_worker(
+                session,
+                crate::subkernel::KernelKind::JavaScript,
+                &args.join(" "),
+            )
+        }
         _ => Err(StructuredDiagnostic::new(
             "E_UNKNOWN_BUILTIN",
             format!("unknown builtin `{name}`"),
@@ -73,38 +97,8 @@ pub fn run_builtin_sync(
     }
 }
 
-pub async fn run_builtin(
-    session: &mut Session,
-    name: &str,
-    args: &[String],
-    input: Value,
-) -> Result<Value, StructuredDiagnostic> {
-    match name {
-        "@py" => {
-            crate::subkernel::run_persistent_worker(
-                session,
-                crate::subkernel::KernelKind::Python,
-                &args.join(" "),
-            )
-            .await
-        }
-        "@js" => {
-            crate::subkernel::run_persistent_worker(
-                session,
-                crate::subkernel::KernelKind::JavaScript,
-                &args.join(" "),
-            )
-            .await
-        }
-        _ => {
-            let mat = match input {
-                Value::RawStream(_) => Value::Bytes(input.into_raw_bytes().await?),
-                Value::RecordStream(_) => Value::Batch(input.into_batch().await?),
-                other => other,
-            };
-            run_builtin_sync(session, name, args, mat)
-        }
-    }
+pub(crate) fn reads_stdin(name: &str, args: &[String]) -> bool {
+    crate::schema::get_schema(name).is_some_and(|s| s.reads_input) && !text::names_files(name, args)
 }
 
 pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
@@ -133,10 +127,8 @@ fn help(args: &[String]) -> Result<Value, StructuredDiagnostic> {
         Cow::Borrowed("description"),
     ]);
     let filter = args.first().map(|s| s.as_str());
-    let mut batch = shell_value::RecordBatch::with_capacity(
-        cols,
-        crate::schema::BUILTIN_SCHEMAS.len(),
-    );
+    let mut batch =
+        shell_value::RecordBatch::with_capacity(cols, crate::schema::BUILTIN_SCHEMAS.len());
     for schema in crate::schema::BUILTIN_SCHEMAS {
         if let Some(q) = filter
             && !schema.name.eq_ignore_ascii_case(q)
@@ -145,10 +137,18 @@ fn help(args: &[String]) -> Result<Value, StructuredDiagnostic> {
         {
             continue;
         }
-        batch.cells.push(shell_value::CellVal::Str(schema.name.to_string()));
-        batch.cells.push(shell_value::CellVal::Str(schema.flags.join(" ")));
-        batch.cells.push(shell_value::CellVal::Str(schema.columns.join(", ")));
-        batch.cells.push(shell_value::CellVal::Str(schema.description.to_string()));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.name.to_string()));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.flags.join(" ")));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.columns.join(", ")));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.description.to_string()));
     }
     Ok(Value::from_batch(batch))
 }

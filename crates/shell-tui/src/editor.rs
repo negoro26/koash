@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Once;
 use std::time::Duration;
 
@@ -8,7 +8,6 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::queue;
 use crossterm::terminal::{self, Clear, ClearType};
 use shell_value::StructuredDiagnostic;
-use tokio::sync::mpsc;
 
 use crate::complete::complete_line;
 use crate::highlight::highlight_line;
@@ -72,48 +71,10 @@ impl LineEditor {
         let mut cur = 0usize;
         let mut hist_idx: Option<usize> = None;
         let mut saved_draft = String::new();
-        let (req_tx, mut req_rx) = mpsc::channel::<(u64, String, usize, PathBuf)>(4);
-        let (resp_tx, mut resp_rx) = mpsc::channel::<(u64, String, Vec<String>)>(4);
-        let mut latest_req_id: u64 = 0;
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let handle_clone = handle.clone();
-            handle.spawn(async move {
-                while let Some((req_id, line, pos, dir)) = req_rx.recv().await {
-                    let line_copy = line.clone();
-                    if let Ok(candidates) = handle_clone
-                        .spawn_blocking(move || complete_line(&line, pos, &dir))
-                        .await
-                        && resp_tx.send((req_id, line_copy, candidates)).await.is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-        }
 
         redraw(&mut stdout, prompt, &buf, cur)?;
 
         loop {
-            while let Ok((req_id, req_buf, candidates)) = resp_rx.try_recv() {
-                if req_id == latest_req_id && req_buf == buf {
-                    if candidates.len() == 1 {
-                        apply_completion(&mut buf, &mut cur, &candidates[0], false);
-                        redraw(&mut stdout, prompt, &buf, cur)?;
-                    } else if candidates.len() > 1 {
-                        let lcp = longest_common_prefix(&candidates);
-                        let token_start = current_token_start(&buf, cur);
-                        let current_tok = &buf[token_start..cur];
-                        if lcp.len() > current_tok.len() {
-                            apply_completion(&mut buf, &mut cur, &lcp, true);
-                        } else {
-                            let _ = write!(stdout, "\r\n{}\r\n", candidates.join("  "));
-                        }
-                        redraw(&mut stdout, prompt, &buf, cur)?;
-                    }
-                }
-            }
-
             if !event::poll(Duration::from_millis(16))
                 .map_err(|e| StructuredDiagnostic::from_io("E_TERM_POLL", &e, None))?
             {
@@ -218,26 +179,20 @@ impl LineEditor {
                     }
                 }
                 (KeyCode::Tab, _) => {
-                    latest_req_id = latest_req_id.wrapping_add(1);
-                    if req_tx
-                        .try_send((latest_req_id, buf.clone(), cur, cwd.to_path_buf()))
-                        .is_err()
-                    {
-                        let candidates = complete_line(&buf, cur, cwd);
-                        if candidates.len() == 1 {
-                            apply_completion(&mut buf, &mut cur, &candidates[0], false);
-                            redraw(&mut stdout, prompt, &buf, cur)?;
-                        } else if candidates.len() > 1 {
-                            let lcp = longest_common_prefix(&candidates);
-                            let token_start = current_token_start(&buf, cur);
-                            let current_tok = &buf[token_start..cur];
-                            if lcp.len() > current_tok.len() {
-                                apply_completion(&mut buf, &mut cur, &lcp, true);
-                            } else {
-                                let _ = write!(stdout, "\r\n{}\r\n", candidates.join("  "));
-                            }
-                            redraw(&mut stdout, prompt, &buf, cur)?;
+                    let candidates = complete_line(&buf, cur, cwd);
+                    if candidates.len() == 1 {
+                        apply_completion(&mut buf, &mut cur, &candidates[0], false);
+                        redraw(&mut stdout, prompt, &buf, cur)?;
+                    } else if candidates.len() > 1 {
+                        let lcp = longest_common_prefix(&candidates);
+                        let token_start = current_token_start(&buf, cur);
+                        let current_tok = &buf[token_start..cur];
+                        if lcp.len() > current_tok.len() {
+                            apply_completion(&mut buf, &mut cur, &lcp, true);
+                        } else {
+                            let _ = write!(stdout, "\r\n{}\r\n", candidates.join("  "));
                         }
+                        redraw(&mut stdout, prompt, &buf, cur)?;
                     }
                 }
                 (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {

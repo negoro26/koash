@@ -14,7 +14,7 @@ use shell_value::{
     hashline_tag,
 };
 
-use super::{hashline_schema, resolve_path};
+use super::{check_killed, hashline_schema, resolve_path};
 
 pub(crate) fn echo(args: &[String]) -> Result<Value, StructuredDiagnostic> {
     let mut no_newline = false;
@@ -35,11 +35,7 @@ pub(crate) fn echo(args: &[String]) -> Result<Value, StructuredDiagnostic> {
     Ok(Value::from_bytes(out))
 }
 
-pub(crate) fn cat(
-    session: &Session,
-    args: &[String],
-    input: Value,
-) -> Result<Value, StructuredDiagnostic> {
+fn cat_operands(args: &[String]) -> (bool, Vec<&String>) {
     let mut raw = false;
     let mut paths = Vec::new();
     let mut parse_flags = true;
@@ -48,13 +44,29 @@ pub(crate) fn cat(
             parse_flags = false;
         } else if parse_flags && (arg == "--raw" || arg == "-r") {
             raw = true;
-        } else if (parse_flags && matches!(arg.as_str(), "-n" | "-b" | "-u" | "-s"))
-            || arg == "-"
-        {
+        } else if (parse_flags && matches!(arg.as_str(), "-n" | "-b" | "-u" | "-s")) || arg == "-" {
         } else {
             paths.push(arg);
         }
     }
+    (raw, paths)
+}
+
+pub(crate) fn names_files(name: &str, args: &[String]) -> bool {
+    match name {
+        "cat" => !cat_operands(args).1.is_empty(),
+        "head" | "tail" => !parse_slice_args(args, 10).2.is_empty(),
+        "grep" => parse_grep_opts(args).is_ok_and(|o| o.positional.len() > 1 || o.recursive),
+        _ => false,
+    }
+}
+
+pub(crate) fn cat(
+    session: &Session,
+    args: &[String],
+    input: Value,
+) -> Result<Value, StructuredDiagnostic> {
+    let (raw, paths) = cat_operands(args);
     if paths.is_empty() {
         return Ok(input);
     }
@@ -62,8 +74,8 @@ pub(crate) fn cat(
         let mut out = Vec::new();
         for arg in paths {
             let p = resolve_path(session, arg);
-            let bytes = std::fs::read(&p)
-                .map_err(|e| StructuredDiagnostic::from_io("E_CAT", &e, None))?;
+            let bytes =
+                std::fs::read(&p).map_err(|e| StructuredDiagnostic::from_io("E_CAT", &e, None))?;
             out.extend_from_slice(&bytes);
         }
         return Ok(Value::from_bytes(out));
@@ -77,7 +89,9 @@ pub(crate) fn cat(
         for (idx, line) in content.lines().enumerate() {
             batch.cells.push(CellVal::SharedStr(Arc::clone(&file_cell)));
             batch.cells.push(CellVal::UInt((idx + 1) as u64));
-            batch.cells.push(CellVal::Hash(hashline_bytes(line.as_bytes())));
+            batch
+                .cells
+                .push(CellVal::Hash(hashline_bytes(line.as_bytes())));
             batch.cells.push(CellVal::Str(line.to_string()));
         }
     }
@@ -164,7 +178,9 @@ fn read_files_slice(
         for (idx, line) in slice.iter().enumerate() {
             batch.cells.push(CellVal::SharedStr(Arc::clone(&file_cell)));
             batch.cells.push(CellVal::UInt((start + idx + 1) as u64));
-            batch.cells.push(CellVal::Hash(hashline_bytes(line.as_bytes())));
+            batch
+                .cells
+                .push(CellVal::Hash(hashline_bytes(line.as_bytes())));
             batch.cells.push(CellVal::Str((*line).to_string()));
         }
     }
@@ -372,7 +388,9 @@ pub(crate) fn grep(
         match input {
             Value::Batch(in_batch) => {
                 let text_col = in_batch.col_index("text");
-                let file_col = in_batch.col_index("file").or_else(|| in_batch.col_index("path"));
+                let file_col = in_batch
+                    .col_index("file")
+                    .or_else(|| in_batch.col_index("path"));
                 let line_col = in_batch.col_index("line");
                 let hash_col = in_batch.col_index("hash");
 
@@ -471,7 +489,7 @@ pub(crate) fn grep(
                 return Ok(Value::from_batch(batch));
             }
             _ => {
-                let bytes = input.into_raw_bytes_sync()?;
+                let bytes = input.into_raw_bytes();
                 let stdin_cell: Arc<str> = Arc::from("<stdin>");
                 if opts.count_only {
                     let mut count: u64 = 0;
@@ -514,9 +532,13 @@ pub(crate) fn grep(
                     UTF8(|line_number, line| {
                         let trimmed = line.strip_suffix('\n').unwrap_or(line);
                         let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
-                        batch.cells.push(CellVal::SharedStr(Arc::clone(&stdin_cell)));
+                        batch
+                            .cells
+                            .push(CellVal::SharedStr(Arc::clone(&stdin_cell)));
                         batch.cells.push(CellVal::UInt(line_number));
-                        batch.cells.push(CellVal::Hash(hashline_bytes(trimmed.as_bytes())));
+                        batch
+                            .cells
+                            .push(CellVal::Hash(hashline_bytes(trimmed.as_bytes())));
                         batch.cells.push(CellVal::Str(trimmed.to_string()));
                         Ok(true)
                     }),
@@ -546,6 +568,7 @@ pub(crate) fn grep(
         let target = resolve_path(session, path_arg);
         let walker = WalkBuilder::new(&target).build();
         for entry_res in walker {
+            check_killed(session)?;
             let Ok(entry) = entry_res else {
                 continue;
             };
@@ -663,7 +686,12 @@ pub(crate) fn patch(session: &mut Session, args: &[String]) -> Result<Value, Str
         ));
     };
     let line_num = line_str.parse::<usize>().map_err(|_| {
-        StructuredDiagnostic::new("E_INVALID_ANCHOR", "line number must be positive integer", None, None)
+        StructuredDiagnostic::new(
+            "E_INVALID_ANCHOR",
+            "line number must be positive integer",
+            None,
+            None,
+        )
     })?;
     if line_num == 0 {
         return Err(StructuredDiagnostic::new(
@@ -696,7 +724,10 @@ pub(crate) fn patch(session: &mut Session, args: &[String]) -> Result<Value, Str
     if line_num > lines.len() {
         return Err(StructuredDiagnostic::new(
             "E_HASH_MISMATCH",
-            format!("line {line_num} out of bounds (file has {} lines)", lines.len()),
+            format!(
+                "line {line_num} out of bounds (file has {} lines)",
+                lines.len()
+            ),
             None,
             Some("re-read the file with `cat` or `grep` to get fresh anchors".to_string()),
         ));

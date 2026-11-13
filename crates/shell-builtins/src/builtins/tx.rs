@@ -14,7 +14,10 @@ pub(crate) fn undo(session: &mut Session) -> Result<Value, StructuredDiagnostic>
     }
 }
 
-pub(crate) fn rollback(session: &mut Session, args: &[String]) -> Result<Value, StructuredDiagnostic> {
+pub(crate) fn rollback(
+    session: &mut Session,
+    args: &[String],
+) -> Result<Value, StructuredDiagnostic> {
     let Some(tx_id) = args.first() else {
         return Err(StructuredDiagnostic::new(
             "E_ARGS",
@@ -39,6 +42,12 @@ pub(crate) fn tx_log(session: &Session) -> Result<Value, StructuredDiagnostic> {
             rec.insert("tx_id".to_string(), JsonVal::String(tx.id.clone()));
             rec.insert("command".to_string(), JsonVal::String(tx.command.clone()));
             rec.insert("files".to_string(), json!(tx.preimages.len()));
+            rec.insert(
+                "opaque_after".to_string(),
+                tx.opaque_after
+                    .clone()
+                    .map_or(JsonVal::Null, JsonVal::String),
+            );
             rec
         })
         .collect();

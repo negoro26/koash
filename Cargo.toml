@@ -1,14 +1,14 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/shell-syntax",
-    "crates/shell-value",
-    "crates/shell-kernel",
-    "crates/shell-builtins",
-    "crates/shell-rpc",
-    "crates/shell-surface",
-    "crates/shell-tui",
-    "crates/shell-cli",
+  "crates/shell-syntax",
+  "crates/shell-value",
+  "crates/shell-kernel",
+  "crates/shell-builtins",
+  "crates/shell-rpc",
+  "crates/shell-surface",
+  "crates/shell-tui",
+  "crates/shell-cli",
 ]
 
 [workspace.package]
@@ -16,6 +16,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Alex Negrescu"]
+publish = false
 
 [workspace.dependencies]
 shell-syntax = { path = "crates/shell-syntax" }
@@ -26,7 +27,14 @@ shell-rpc = { path = "crates/shell-rpc" }
 shell-surface = { path = "crates/shell-surface" }
 shell-tui = { path = "crates/shell-tui" }
 
-nix = { version = "0.29", features = ["process", "signal", "term", "fs", "ioctl", "poll"] }
+nix = { version = "0.29", features = [
+  "process",
+  "signal",
+  "term",
+  "fs",
+  "ioctl",
+  "poll",
+] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -40,10 +48,26 @@ rustc-hash = "2"
 memchr = "2"
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

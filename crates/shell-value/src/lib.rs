@@ -1,14 +1,11 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{BufWriter, Write};
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use shell_syntax::{Span, SyntaxError};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::mpsc;
 
 pub type StructuredRecord = BTreeMap<String, serde_json::Value>;
 
@@ -73,9 +70,7 @@ impl CellVal {
             CellVal::Float(n) => serde_json::Value::from(*n),
             CellVal::SharedStr(s) => serde_json::Value::String(s.to_string()),
             CellVal::Str(s) => serde_json::Value::String(s.clone()),
-            CellVal::Hash(h) => {
-                serde_json::Value::String(String::from_utf8_lossy(h).into_owned())
-            }
+            CellVal::Hash(h) => serde_json::Value::String(String::from_utf8_lossy(h).into_owned()),
             CellVal::Json(v) => v.clone(),
         }
     }
@@ -230,12 +225,10 @@ impl RecordBatch {
     }
 
     pub fn nrows(&self) -> usize {
-        let ncols = self.columns.len();
-        if ncols == 0 {
-            0
-        } else {
-            self.cells.len() / ncols
-        }
+        self.cells
+            .len()
+            .checked_div(self.columns.len())
+            .unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -371,9 +364,6 @@ pub enum Value {
     Empty,
     Bytes(Vec<u8>),
     Batch(RecordBatch),
-    RawStream(Pin<Box<dyn AsyncRead + Send>>),
-    RecordStream(mpsc::Receiver<StructuredRecord>),
-    Error(StructuredDiagnostic),
 }
 
 impl Value {
@@ -389,141 +379,30 @@ impl Value {
         Value::Bytes(bytes)
     }
 
-    pub fn into_batch_sync(self) -> Result<RecordBatch, StructuredDiagnostic> {
+    pub fn into_batch(self) -> RecordBatch {
         match self {
-            Value::Empty => Ok(RecordBatch::empty()),
-            Value::Error(diag) => Err(diag),
-            Value::Batch(batch) => Ok(batch),
-            Value::Bytes(bytes) => Ok(batch_from_raw_bytes(&bytes)),
-            Value::RawStream(_) | Value::RecordStream(_) => Err(StructuredDiagnostic::new(
-                "E_ASYNC_STREAM",
-                "async stream requires async consumer",
-                None,
-                None,
-            )),
+            Value::Empty => RecordBatch::empty(),
+            Value::Batch(batch) => batch,
+            Value::Bytes(bytes) => batch_from_raw_bytes(&bytes),
         }
     }
 
-    pub async fn into_batch(self) -> Result<RecordBatch, StructuredDiagnostic> {
+    pub fn into_raw_bytes(self) -> Vec<u8> {
         match self {
-            Value::Empty => Ok(RecordBatch::empty()),
-            Value::Error(diag) => Err(diag),
-            Value::Batch(batch) => Ok(batch),
-            Value::Bytes(bytes) => Ok(batch_from_raw_bytes(&bytes)),
-            Value::RawStream(mut reader) => {
-                let mut bytes = Vec::new();
-                reader
-                    .read_to_end(&mut bytes)
-                    .await
-                    .map_err(|e| StructuredDiagnostic::from_io("E_STREAM_READ", &e, None))?;
-                Ok(batch_from_raw_bytes(&bytes))
-            }
-            Value::RecordStream(mut rx) => {
-                let mut out = Vec::new();
-                while let Some(rec) = rx.recv().await {
-                    out.push(rec);
-                }
-                Ok(RecordBatch::from_maps(out))
-            }
+            Value::Empty => Vec::new(),
+            Value::Bytes(bytes) => bytes,
+            Value::Batch(batch) => batch_to_ndjson_bytes(&batch),
         }
     }
 
-    pub async fn into_records(self) -> Result<Vec<StructuredRecord>, StructuredDiagnostic> {
-        Ok(self.into_batch().await?.to_maps())
-    }
-
-    pub fn into_raw_bytes_sync(self) -> Result<Vec<u8>, StructuredDiagnostic> {
+    pub fn render_tty(self, writer: &mut dyn Write, color: bool) {
         match self {
-            Value::Empty => Ok(Vec::new()),
-            Value::Error(diag) => Err(diag),
-            Value::Bytes(bytes) => Ok(bytes),
-            Value::Batch(batch) => Ok(batch_to_ndjson_bytes(&batch)),
-            Value::RawStream(_) | Value::RecordStream(_) => Err(StructuredDiagnostic::new(
-                "E_ASYNC_STREAM",
-                "async stream requires async consumer",
-                None,
-                None,
-            )),
-        }
-    }
-
-    pub async fn into_raw_bytes(self) -> Result<Vec<u8>, StructuredDiagnostic> {
-        match self {
-            Value::Empty => Ok(Vec::new()),
-            Value::Error(diag) => Err(diag),
-            Value::Bytes(bytes) => Ok(bytes),
-            Value::Batch(batch) => Ok(batch_to_ndjson_bytes(&batch)),
-            Value::RawStream(mut reader) => {
-                let mut buf = Vec::new();
-                reader
-                    .read_to_end(&mut buf)
-                    .await
-                    .map_err(|e| StructuredDiagnostic::from_io("E_STREAM_READ", &e, None))?;
-                Ok(buf)
-            }
-            Value::RecordStream(mut rx) => {
-                let mut out = Vec::new();
-                while let Some(rec) = rx.recv().await {
-                    if let Ok(json) = serde_json::to_string(&rec) {
-                        out.extend_from_slice(json.as_bytes());
-                        out.push(b'\n');
-                    }
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    pub fn render_tty_sync(self, writer: &mut dyn Write, color: bool) -> Result<(), StructuredDiagnostic> {
-        match self {
-            Value::Empty => Ok(()),
-            Value::Error(diag) => Err(diag),
+            Value::Empty => {}
             Value::Bytes(bytes) => {
                 let _ = writer.write_all(&bytes);
                 let _ = writer.flush();
-                Ok(())
             }
-            Value::Batch(batch) => {
-                render_batch_table(&batch, writer, color);
-                Ok(())
-            }
-            Value::RawStream(_) | Value::RecordStream(_) => Err(StructuredDiagnostic::new(
-                "E_ASYNC_STREAM",
-                "async stream requires async renderer",
-                None,
-                None,
-            )),
-        }
-    }
-
-    pub async fn render_tty(self, writer: &mut dyn Write, color: bool) -> Result<(), StructuredDiagnostic> {
-        match self {
-            Value::Empty | Value::Bytes(_) | Value::Batch(_) | Value::Error(_) => {
-                self.render_tty_sync(writer, color)
-            }
-            Value::RawStream(mut reader) => {
-                let mut buf = [0u8; 8192];
-                loop {
-                    let n = reader
-                        .read(&mut buf)
-                        .await
-                        .map_err(|e| StructuredDiagnostic::from_io("E_STREAM_READ", &e, None))?;
-                    if n == 0 {
-                        break;
-                    }
-                    let _ = writer.write_all(&buf[..n]);
-                }
-                let _ = writer.flush();
-                Ok(())
-            }
-            Value::RecordStream(mut rx) => {
-                let mut records = Vec::new();
-                while let Some(rec) = rx.recv().await {
-                    records.push(rec);
-                }
-                render_records_table(&records, writer, color);
-                Ok(())
-            }
+            Value::Batch(batch) => render_batch_table(&batch, writer, color),
         }
     }
 }
@@ -532,12 +411,16 @@ fn batch_from_raw_bytes(bytes: &[u8]) -> RecordBatch {
     let text = String::from_utf8_lossy(bytes);
     let mut records = Vec::new();
     for line in text.lines() {
-        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(line)
+        {
             let rec: StructuredRecord = map.into_iter().collect();
             records.push(rec);
         } else {
             let mut rec = StructuredRecord::new();
-            rec.insert("line".to_string(), serde_json::Value::String(line.to_string()));
+            rec.insert(
+                "line".to_string(),
+                serde_json::Value::String(line.to_string()),
+            );
             records.push(rec);
         }
     }
@@ -554,14 +437,6 @@ fn batch_to_ndjson_bytes(batch: &RecordBatch) -> Vec<u8> {
         }
     }
     out
-}
-
-pub fn render_records_table(records: &[StructuredRecord], writer: &mut dyn Write, color: bool) {
-    if records.is_empty() {
-        return;
-    }
-    let batch = RecordBatch::from_maps(records.to_vec());
-    render_batch_table(&batch, writer, color);
 }
 
 pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bool) {

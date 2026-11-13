@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use shell_builtins::execute_program_value;
+use shell_builtins::{Chunk, Sink, run_program};
 use shell_kernel::{CowWorkspace, Session};
-use shell_value::{StructuredDiagnostic, Value};
+use shell_value::StructuredDiagnostic;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
@@ -190,27 +190,39 @@ impl AcpServer {
                         return send_acp_error(writer, req.id, -32602, &e.to_string()).await;
                     }
                 };
-                let exec_res = {
-                    let mut guard = self.sessions.lock().await;
-                    let Some(session) = guard.get_mut(&sid) else {
-                        return send_acp_error(
-                            writer,
-                            req.id,
-                            -32004,
-                            &format!("session `{sid}` not found"),
-                        )
-                        .await;
-                    };
-                    session.touch();
-                    execute_program_value(session, &program).await
+                let Some(session) = self.sessions.lock().await.remove(&sid) else {
+                    return send_acp_error(
+                        writer,
+                        req.id,
+                        -32004,
+                        &format!("session `{sid}` not found"),
+                    )
+                    .await;
                 };
+                let (tx, rx) = std::sync::mpsc::sync_channel(64);
+                let executor = tokio::task::spawn_blocking(move || {
+                    let mut session = session;
+                    session.touch();
+                    session.kill.reset();
+                    session.should_exit = None;
+                    let sink = Sink::Capture(tx);
+                    run_program(&mut session, &program, &sink);
+                    session
+                });
+                let collector =
+                    tokio::task::spawn_blocking(move || rx.iter().collect::<Vec<Chunk>>());
+                let (session, chunks) = match tokio::join!(executor, collector) {
+                    (Ok(session), Ok(chunks)) => (session, chunks),
+                    _ => {
+                        return send_acp_error(writer, req.id, -32603, "executor thread failed")
+                            .await;
+                    }
+                };
+                self.sessions.lock().await.insert(sid.clone(), session);
                 let is_cancelled = cancel_flag
                     .as_ref()
                     .is_some_and(|f| f.load(Ordering::SeqCst));
-                let text = match exec_res {
-                    Ok((val, _code)) => format_value_text(val).await,
-                    Err(diag) => format!("error [{}]: {}", diag.code, diag.message),
-                };
+                let text = render_chunks(chunks);
                 let notif = AcpNotification {
                     jsonrpc: "2.0",
                     method: "session/update",
@@ -223,7 +235,11 @@ impl AcpServer {
                     }),
                 };
                 send_acp(writer, &notif).await?;
-                let stop_reason = if is_cancelled { "cancelled" } else { "end_turn" };
+                let stop_reason = if is_cancelled {
+                    "cancelled"
+                } else {
+                    "end_turn"
+                };
                 let resp = AcpResponse {
                     jsonrpc: "2.0",
                     id: req.id,
@@ -232,7 +248,15 @@ impl AcpServer {
                 };
                 send_acp(writer, &resp).await
             }
-            other => send_acp_error(writer, req.id, -32601, &format!("method not found: {other}")).await,
+            other => {
+                send_acp_error(
+                    writer,
+                    req.id,
+                    -32601,
+                    &format!("method not found: {other}"),
+                )
+                .await
+            }
         }
     }
 
@@ -260,21 +284,23 @@ fn extract_prompt_text(params: &serde_json::Value) -> String {
     String::new()
 }
 
-async fn format_value_text(val: Value) -> String {
-    match val {
-        Value::Empty => String::new(),
-        Value::Bytes(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-        Value::Batch(batch) => serde_json::to_string_pretty(&batch.to_maps()).unwrap_or_default(),
-        Value::RecordStream(rx) => {
-            let records = Value::RecordStream(rx).into_records().await.unwrap_or_default();
-            serde_json::to_string_pretty(&records).unwrap_or_default()
+fn render_chunks(chunks: Vec<Chunk>) -> String {
+    let mut text = String::new();
+    for chunk in chunks {
+        match chunk {
+            Chunk::Stdout(bytes) | Chunk::Stderr(bytes) => {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            Chunk::Batch(batch) => {
+                text.push_str(&serde_json::to_string_pretty(&batch.to_maps()).unwrap_or_default());
+                text.push('\n');
+            }
+            Chunk::Diag(diag) => {
+                text.push_str(&format!("error [{}]: {}\n", diag.code, diag.message));
+            }
         }
-        Value::RawStream(reader) => {
-            let bytes = Value::RawStream(reader).into_raw_bytes().await.unwrap_or_default();
-            String::from_utf8_lossy(&bytes).to_string()
-        }
-        Value::Error(diag) => format!("error [{}]: {}", diag.code, diag.message),
     }
+    text
 }
 
 async fn send_acp<W: AsyncWrite + Unpin, T: Serialize>(

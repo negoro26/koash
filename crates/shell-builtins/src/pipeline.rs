@@ -1,281 +1,124 @@
 use std::io::Write;
-use std::process::Stdio;
 
-use shell_kernel::{Session, execute_pipeline, expand_word, reap_background_jobs};
-use shell_surface::{SurfaceMode, render_surface, render_surface_sync};
-use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind};
+use nix::unistd::Pid;
+use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
+use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command as TokioCommand;
 
-use crate::builtins::{is_async_builtin, run_builtin, run_builtin_sync};
+use crate::builtins::{reads_stdin, run_builtin};
 use crate::schema::is_builtin;
+use crate::sink::{Sink, diag_status};
+use crate::special::{finish_foreground, run_special};
+use crate::wiring::{
+    Flow, LaunchError, Launched, Plan, launch_external, read_all, read_all_watching,
+    read_redirect_file,
+};
 
-pub fn program_needs_async(session: &Session, program: &Program) -> bool {
-    program
-        .items
-        .iter()
-        .any(|item| pipeline_needs_async(session, &item.pipeline))
+pub const KILLED_STATUS: i32 = 124;
+
+const NETWORK_COMMANDS: [&str; 6] = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum StageKind {
+    Assign,
+    Builtin,
+    External,
 }
 
-pub fn pipeline_needs_async(session: &Session, pipeline: &Pipeline) -> bool {
-    pipeline.commands.iter().any(|cmd| {
-        if let Command::Simple(simple) = cmd
-            && let Some(first) = simple.words.first()
-        {
-            let name = expand_word(first, &session.env, session.last_status);
-            return is_async_builtin(&name);
-        }
-        false
-    })
+pub(crate) struct Stage<'a> {
+    pub kind: StageKind,
+    pub label: String,
+    pub argv: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub redirs: &'a [Redirection],
 }
 
-pub fn execute_program_surface_sync(
-    session: &mut Session,
-    program: &Program,
-    mode: SurfaceMode,
-) -> Result<i32, StructuredDiagnostic> {
-    reap_background_jobs(session);
+pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32 {
+    for notice in reap_background_jobs(session) {
+        sink.stderr_line(&notice);
+    }
 
-    let mut last_status = session.last_status;
+    let mut status = session.last_status;
     let mut prev_op: Option<ListOp> = None;
 
     for item in &program.items {
-        if let Some(op) = prev_op {
-            match op {
-                ListOp::And if last_status != 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                ListOp::Or if last_status == 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                _ => {}
+        let skip = match prev_op {
+            Some(ListOp::And) => status != 0,
+            Some(ListOp::Or) => status == 0,
+            _ => false,
+        };
+        if !skip {
+            if session.kill.is_killed() {
+                session.last_status = KILLED_STATUS;
+                return KILLED_STATUS;
+            }
+            let background = matches!(item.op, Some(ListOp::Background));
+            status = run_pipeline(session, &item.pipeline, background, sink);
+            session.last_status = status;
+            if session.should_exit.is_some() {
+                break;
             }
         }
-
-        let background = matches!(item.op, Some(ListOp::Background));
-        if background || !pipeline_uses_builtin(session, &item.pipeline) {
-            last_status = execute_pipeline(session, &item.pipeline, background)?;
-        } else {
-            let (val, code) = execute_hybrid_pipeline_sync(session, &item.pipeline)?;
-            let mut stdout = std::io::stdout();
-            render_surface_sync(val, &mut stdout, mode)?;
-            last_status = code;
-        }
-
-        session.last_status = last_status;
         prev_op = item.op;
-        if session.should_exit.is_some() {
-            break;
-        }
     }
 
-    Ok(last_status)
+    status
 }
 
-pub async fn execute_program_tty(
-    session: &mut Session,
-    program: &Program,
-    color: bool,
-) -> Result<i32, StructuredDiagnostic> {
-    let mode = SurfaceMode::detect(false, color);
-    execute_program_surface(session, program, mode).await
-}
-
-pub async fn execute_program_surface(
-    session: &mut Session,
-    program: &Program,
-    mode: SurfaceMode,
-) -> Result<i32, StructuredDiagnostic> {
-    reap_background_jobs(session);
-
-    let mut last_status = session.last_status;
-    let mut prev_op: Option<ListOp> = None;
-
-    for item in &program.items {
-        if let Some(op) = prev_op {
-            match op {
-                ListOp::And if last_status != 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                ListOp::Or if last_status == 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-
-        let background = matches!(item.op, Some(ListOp::Background));
-        if background || !pipeline_uses_builtin(session, &item.pipeline) {
-            last_status = execute_pipeline(session, &item.pipeline, background)?;
-        } else {
-            let (val, code) = execute_hybrid_pipeline(session, &item.pipeline).await?;
-            let mut stdout = std::io::stdout();
-            render_surface(val, &mut stdout, mode).await?;
-            last_status = code;
-        }
-
-        session.last_status = last_status;
-        prev_op = item.op;
-        if session.should_exit.is_some() {
-            break;
-        }
+fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, sink: &Sink) -> i32 {
+    if pipeline.commands.is_empty() {
+        return 0;
     }
-
-    Ok(last_status)
-}
-
-pub async fn execute_program_value(
-    session: &mut Session,
-    program: &Program,
-) -> Result<(Value, i32), StructuredDiagnostic> {
-    let mut last_val = Value::Empty;
-    let mut last_status = session.last_status;
-    let mut prev_op: Option<ListOp> = None;
-
-    for item in &program.items {
-        if let Some(op) = prev_op {
-            match op {
-                ListOp::And if last_status != 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                ListOp::Or if last_status == 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-
-        let (val, code) = execute_hybrid_pipeline(session, &item.pipeline).await?;
-        last_val = val;
-        last_status = code;
-        session.last_status = last_status;
-        prev_op = item.op;
-
-        if session.should_exit.is_some() {
-            break;
-        }
+    if !background
+        && let [Command::Simple(simple)] = pipeline.commands.as_slice()
+        && let Some(status) = run_special(session, simple, sink)
+    {
+        return status;
     }
-
-    Ok((last_val, last_status))
-}
-
-pub fn pipeline_uses_builtin(session: &Session, pipeline: &Pipeline) -> bool {
-    pipeline.commands.iter().any(|cmd| {
-        if let Command::Simple(simple) = cmd {
-            if let Some(first) = simple.words.first() {
-                let name = expand_word(first, &session.env, session.last_status);
-                return is_builtin(&name) && name != "jobs" && name != "fg" && name != "bg" && name != "exit";
-            }
-        }
-        false
-    })
-}
-
-pub fn execute_hybrid_pipeline_sync(
-    session: &mut Session,
-    pipeline: &Pipeline,
-) -> Result<(Value, i32), StructuredDiagnostic> {
-    let mut current_val = Value::Empty;
-    let mut last_code = 0;
-    let total = pipeline.commands.len();
 
     begin_pipeline_tx(session, pipeline);
-
-    for (idx, cmd) in pipeline.commands.iter().enumerate() {
-        let is_last = idx + 1 == total;
-        match cmd {
-            Command::PosixFallback { raw, .. } => {
-                let (out, code) = run_external_captured_sync(
-                    session,
-                    "sh",
-                    &["-c".to_string(), raw.clone()],
-                    &[],
-                    current_val,
-                )?;
-                current_val = out;
-                last_code = code;
-            }
-            Command::Simple(simple) => {
-                let args: Vec<String> = simple
-                    .words
-                    .iter()
-                    .map(|w| expand_word(w, &session.env, session.last_status))
-                    .collect();
-
-                if args.is_empty() {
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        session.env.insert(assign.name.clone(), val);
-                    }
-                    current_val = Value::Empty;
-                    last_code = 0;
-                    continue;
-                }
-
-                let name = &args[0];
-                if is_builtin(name) && !matches!(name.as_str(), "jobs" | "fg" | "bg" | "exit") {
-                    current_val = run_builtin_sync(session, name, &args[1..], current_val)?;
-                    last_code = 0;
-
-                    if is_last && !simple.redirections.is_empty() {
-                        current_val = apply_value_redirections_sync(session, simple, current_val)?;
-                    }
-                } else if is_last && matches!(current_val, Value::Empty) && simple.redirections.is_empty() {
-                    let single_pipe = Pipeline {
-                        commands: vec![cmd.clone()],
-                        span: cmd.span(),
-                    };
-                    let code = execute_pipeline(session, &single_pipe, false)?;
-                    current_val = Value::Empty;
-                    last_code = code;
-                } else {
-                    let mut env_pairs = Vec::new();
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        env_pairs.push((assign.name.clone(), val));
-                    }
-                    if matches!(
-                        name.as_str(),
-                        "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync"
-                    ) {
-                        session.taint = TaintLevel::UntrustedExternal;
-                    }
-                    let (out, code) = run_external_captured_sync(
-                        session,
-                        name,
-                        &args[1..],
-                        &env_pairs,
-                        current_val,
-                    )?;
-                    current_val = out;
-                    last_code = code;
-                    if is_last && !simple.redirections.is_empty() {
-                        current_val = apply_value_redirections_sync(session, simple, current_val)?;
-                    }
-                }
-            }
+    let stages = build_stages(session, pipeline);
+    let status = if background && stages.iter().any(|s| s.kind == StageKind::Builtin) {
+        sink.diag(&StructuredDiagnostic::new(
+            "E_BG_BUILTIN",
+            "builtins cannot run in the background yet",
+            Some(pipeline.span),
+            None,
+        ));
+        2
+    } else {
+        let (status, tracked) = std::thread::scope(|scope| {
+            let plan = Plan {
+                sink,
+                scope,
+                background,
+            };
+            run_stages(session, &stages, &plan)
+        });
+        if let Some(pgid) = tracked {
+            session.kill.untrack(pgid);
         }
-    }
-
+        status
+    };
     session.finish_tx();
-    Ok((current_val, last_code))
+    status
 }
 
-fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
-    let first_cmd_name = pipeline.commands.first().and_then(|c| match c {
-        Command::Simple(s) => s
+fn command_name(session: &Session, cmd: &Command) -> Option<String> {
+    match cmd {
+        Command::Simple(simple) => simple
             .words
             .first()
             .map(|w| expand_word(w, &session.env, session.last_status)),
-        _ => None,
-    });
+        Command::PosixFallback { .. } => None,
+    }
+}
+
+fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
+    let first_cmd_name = pipeline
+        .commands
+        .first()
+        .and_then(|c| command_name(session, c));
     if !matches!(
         first_cmd_name.as_deref(),
         Some("undo" | "rollback" | "tx-log")
@@ -285,244 +128,241 @@ fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
     }
 }
 
-pub async fn execute_hybrid_pipeline(
-    session: &mut Session,
-    pipeline: &Pipeline,
-) -> Result<(Value, i32), StructuredDiagnostic> {
-    if !pipeline_needs_async(session, pipeline) {
-        return execute_hybrid_pipeline_sync(session, pipeline);
-    }
-
-    let mut current_val = Value::Empty;
-    let mut last_code = 0;
-    let total = pipeline.commands.len();
-
-    begin_pipeline_tx(session, pipeline);
-
-    for (idx, cmd) in pipeline.commands.iter().enumerate() {
-        let is_last = idx + 1 == total;
-        match cmd {
-            Command::PosixFallback { raw, .. } => {
-                let (out, code) = run_external_captured(
-                    session,
-                    "sh",
-                    &["-c".to_string(), raw.clone()],
-                    &[],
-                    current_val,
-                )
-                .await?;
-                current_val = out;
-                last_code = code;
-            }
+fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<'a>> {
+    let mut stages = Vec::with_capacity(pipeline.commands.len());
+    for cmd in &pipeline.commands {
+        let stage = match cmd {
+            Command::PosixFallback { raw, .. } => Stage {
+                kind: StageKind::External,
+                label: raw.clone(),
+                argv: vec!["sh".to_string(), "-c".to_string(), raw.clone()],
+                env: Vec::new(),
+                redirs: &[],
+            },
             Command::Simple(simple) => {
-                let args: Vec<String> = simple
+                let argv: Vec<String> = simple
                     .words
                     .iter()
                     .map(|w| expand_word(w, &session.env, session.last_status))
                     .collect();
-
-                if args.is_empty() {
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        session.env.insert(assign.name.clone(), val);
+                let env: Vec<(String, String)> = simple
+                    .assignments
+                    .iter()
+                    .map(|a| {
+                        (
+                            a.name.clone(),
+                            expand_word(&a.value, &session.env, session.last_status),
+                        )
+                    })
+                    .collect();
+                match argv.first() {
+                    None => {
+                        for (name, value) in env {
+                            session.env.insert(name, value);
+                        }
+                        Stage {
+                            kind: StageKind::Assign,
+                            label: String::new(),
+                            argv,
+                            env: Vec::new(),
+                            redirs: &[],
+                        }
                     }
-                    current_val = Value::Empty;
-                    last_code = 0;
-                    continue;
+                    Some(name) if is_builtin(name) => Stage {
+                        kind: StageKind::Builtin,
+                        label: name.clone(),
+                        argv,
+                        env: Vec::new(),
+                        redirs: &simple.redirections,
+                    },
+                    Some(name) => {
+                        if NETWORK_COMMANDS.contains(&name.as_str()) {
+                            session.taint = TaintLevel::UntrustedExternal;
+                        }
+                        Stage {
+                            kind: StageKind::External,
+                            label: name.clone(),
+                            argv,
+                            env,
+                            redirs: &simple.redirections,
+                        }
+                    }
                 }
+            }
+        };
+        stages.push(stage);
+    }
+    stages
+}
 
-                let name = &args[0];
-                if is_builtin(name) && !matches!(name.as_str(), "jobs" | "fg" | "bg" | "exit") {
-                    current_val = run_builtin(session, name, &args[1..], current_val).await?;
-                    last_code = 0;
+fn summarize(stages: &[Stage]) -> String {
+    stages
+        .iter()
+        .map(|s| s.argv.join(" "))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
 
-                    if is_last && !simple.redirections.is_empty() {
-                        current_val = apply_value_redirections(session, simple, current_val).await?;
+fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Option<Pid>) {
+    let mut flow = Flow::None;
+    let mut launched = Launched::default();
+    let mut final_status: Option<i32> = None;
+    let mut last_is_launched = false;
+
+    for (idx, stage) in stages.iter().enumerate() {
+        let last = idx + 1 == stages.len();
+        if session.kill.is_killed() {
+            final_status = Some(KILLED_STATUS);
+            break;
+        }
+        last_is_launched = false;
+        match stage.kind {
+            StageKind::Assign => {
+                flow = Flow::Value(Value::Empty);
+                final_status = Some(0);
+            }
+            StageKind::Builtin => {
+                let input = take_builtin_input(session, stage, &mut flow, &launched, plan);
+                let result = input.and_then(|value| {
+                    run_builtin(session, &stage.argv[0], &stage.argv[1..], value)
+                });
+                let status = match result {
+                    Ok(value) if last => match finish_builtin_output(session, stage, value) {
+                        Ok(value) => {
+                            plan.sink.emit(value);
+                            0
+                        }
+                        Err(diag) => {
+                            plan.sink.diag(&diag);
+                            diag_status(&diag)
+                        }
+                    },
+                    Ok(value) => {
+                        flow = Flow::Value(value);
+                        0
                     }
-                } else if is_last && matches!(current_val, Value::Empty) && simple.redirections.is_empty() {
-                    let single_pipe = Pipeline {
-                        commands: vec![cmd.clone()],
-                        span: cmd.span(),
-                    };
-                    let code = execute_pipeline(session, &single_pipe, false)?;
-                    current_val = Value::Empty;
-                    last_code = code;
-                } else {
-                    let mut env_pairs = Vec::new();
-                    for assign in &simple.assignments {
-                        let val = expand_word(&assign.value, &session.env, session.last_status);
-                        env_pairs.push((assign.name.clone(), val));
+                    Err(diag) => {
+                        plan.sink.diag(&diag);
+                        flow = Flow::Value(Value::Empty);
+                        diag_status(&diag)
                     }
-                    if matches!(
-                        name.as_str(),
-                        "curl" | "wget" | "nc" | "ssh" | "scp" | "rsync"
-                    ) {
-                        session.taint = TaintLevel::UntrustedExternal;
+                };
+                final_status = Some(status);
+            }
+            StageKind::External => {
+                match launch_external(session, stage, &mut flow, plan, last, &mut launched) {
+                    Ok(()) => {
+                        last_is_launched = true;
+                        final_status = None;
                     }
-                    let (out, code) = run_external_captured(
-                        session,
-                        name,
-                        &args[1..],
-                        &env_pairs,
-                        current_val,
-                    )
-                    .await?;
-                    current_val = out;
-                    last_code = code;
-                    if is_last && !simple.redirections.is_empty() {
-                        current_val = apply_value_redirections(session, simple, current_val).await?;
+                    Err(LaunchError { status, diag }) => {
+                        plan.sink.diag(&diag);
+                        flow = Flow::Value(Value::Empty);
+                        final_status = Some(status);
                     }
                 }
             }
         }
     }
+    drop(flow);
 
-    session.finish_tx();
-    Ok((current_val, last_code))
+    let tracked = launched.tracked;
+    let summary = summarize(stages);
+    let Some(pgid) = launched.pgid else {
+        return (final_status.unwrap_or(0), tracked);
+    };
+    if plan.background {
+        let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
+        plan.sink.stderr_line(&format!("[{id}] {pgid}"));
+        return (final_status.unwrap_or(0), tracked);
+    }
+    let watch = last_is_launched.then_some(launched.last_pid).flatten();
+    let waited = finish_foreground(
+        session,
+        plan.sink,
+        pgid,
+        &launched.pids,
+        watch,
+        &summary,
+        None,
+    );
+    (final_status.unwrap_or(waited), tracked)
 }
 
-fn apply_value_redirections_sync(
-    session: &mut Session,
-    simple: &shell_syntax::SimpleCommand,
-    val: Value,
+fn take_builtin_input(
+    session: &Session,
+    stage: &Stage,
+    flow: &mut Flow,
+    launched: &Launched,
+    plan: &Plan,
 ) -> Result<Value, StructuredDiagnostic> {
-    let mut current = val;
-    for redir in &simple.redirections {
-        match redir.kind {
-            RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend => {
-                if let Some(ref target_word) = redir.target {
-                    let path_str = expand_word(target_word, &session.env, session.last_status);
-                    let path = if std::path::Path::new(&path_str).is_absolute() {
-                        std::path::PathBuf::from(&path_str)
-                    } else {
-                        session.cwd.join(&path_str)
-                    };
-                    let bytes = current.into_raw_bytes_sync()?;
-                    session.record_preimage(&path);
-                    let mut file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(redir.kind == RedirectKind::StdoutTrunc)
-                        .append(redir.kind == RedirectKind::StdoutAppend)
-                        .open(&path)
-                        .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
-                    file.write_all(&bytes)
-                        .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
-                    session.record_mutation(path.to_string_lossy().to_string());
-                    current = Value::Empty;
-                }
-            }
-            _ => {}
+    let from_file = stage
+        .redirs
+        .iter()
+        .rev()
+        .find(|r| r.kind == RedirectKind::Stdin);
+    let flowed = std::mem::replace(flow, Flow::None);
+    if let Some(redir) = from_file {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut read_redirect_file(session, redir)?, &mut bytes)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        return Ok(Value::Bytes(bytes));
+    }
+    match flowed {
+        Flow::None if reads_shell_stdin(stage, plan) => {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut bytes)
+                .map_err(|e| StructuredDiagnostic::from_io("E_STDIN", &e, None))?;
+            Ok(Value::Bytes(bytes))
         }
+        Flow::None => Ok(Value::Empty),
+        Flow::Value(value) => Ok(value),
+        Flow::Pipe(fd) => match launched.pgid {
+            Some(producers) if session.interactive => read_all_watching(plan, fd, producers),
+            _ => read_all(fd),
+        }
+        .map(Value::Bytes)
+        .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
+    }
+}
+
+fn reads_shell_stdin(stage: &Stage, plan: &Plan) -> bool {
+    !plan.sink.is_capture()
+        && !nix::unistd::isatty(0).unwrap_or(true)
+        && reads_stdin(&stage.argv[0], &stage.argv[1..])
+}
+
+fn finish_builtin_output(
+    session: &mut Session,
+    stage: &Stage,
+    value: Value,
+) -> Result<Value, StructuredDiagnostic> {
+    let mut current = value;
+    for redir in stage.redirs {
+        if !matches!(
+            redir.kind,
+            RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend
+        ) {
+            continue;
+        }
+        let Some(target) = &redir.target else {
+            continue;
+        };
+        let raw = expand_word(target, &session.env, session.last_status);
+        let path = session.cwd.join(raw);
+        let bytes = current.into_raw_bytes();
+        session.record_output_target(&path);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(redir.kind == RedirectKind::StdoutTrunc)
+            .append(redir.kind == RedirectKind::StdoutAppend)
+            .open(&path)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        file.write_all(&bytes)
+            .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
+        session.record_mutation(path.to_string_lossy().to_string());
+        current = Value::Empty;
     }
     Ok(current)
-}
-
-async fn apply_value_redirections(
-    session: &mut Session,
-    simple: &shell_syntax::SimpleCommand,
-    val: Value,
-) -> Result<Value, StructuredDiagnostic> {
-    let mat = match val {
-        Value::RawStream(_) => Value::Bytes(val.into_raw_bytes().await?),
-        Value::RecordStream(_) => Value::Batch(val.into_batch().await?),
-        other => other,
-    };
-    apply_value_redirections_sync(session, simple, mat)
-}
-
-fn run_external_captured_sync(
-    session: &Session,
-    prog: &str,
-    args: &[String],
-    extra_env: &[(String, String)],
-    input: Value,
-) -> Result<(Value, i32), StructuredDiagnostic> {
-    let has_input = !matches!(input, Value::Empty);
-    let input_bytes = if has_input {
-        input.into_raw_bytes_sync()?
-    } else {
-        Vec::new()
-    };
-
-    let mut command = std::process::Command::new(prog);
-    command.args(args);
-    command.current_dir(&session.cwd);
-    command.env_clear();
-    command.envs(&session.env.materialize());
-    for (k, v) in extra_env {
-        command.env(k, v);
-    }
-    command.stdin(if has_input { Stdio::piped() } else { Stdio::null() });
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = command.spawn().map_err(|e| {
-        StructuredDiagnostic::new("E_SPAWN", format!("{prog}: {e}"), None, None)
-    })?;
-
-    if has_input
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        let _ = stdin.write_all(&input_bytes);
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| StructuredDiagnostic::from_io("E_WAIT", &e, None))?;
-
-    if !output.stderr.is_empty() {
-        let _ = std::io::stderr().write_all(&output.stderr);
-    }
-
-    let code = output.status.code().unwrap_or(1);
-    Ok((Value::from_bytes(output.stdout), code))
-}
-
-async fn run_external_captured(
-    session: &Session,
-    prog: &str,
-    args: &[String],
-    extra_env: &[(String, String)],
-    input: Value,
-) -> Result<(Value, i32), StructuredDiagnostic> {
-    let has_input = !matches!(input, Value::Empty);
-    let input_bytes = if has_input {
-        input.into_raw_bytes().await?
-    } else {
-        Vec::new()
-    };
-
-    let mut command = TokioCommand::new(prog);
-    command.args(args);
-    command.current_dir(&session.cwd);
-    command.env_clear();
-    command.envs(&session.env.materialize());
-    for (k, v) in extra_env {
-        command.env(k, v);
-    }
-    command.stdin(if has_input { Stdio::piped() } else { Stdio::null() });
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = command.spawn().map_err(|e| {
-        StructuredDiagnostic::new("E_SPAWN", format!("{prog}: {e}"), None, None)
-    })?;
-
-    if has_input
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        let _ = stdin.write_all(&input_bytes).await;
-    }
-
-    let output = child.wait_with_output().await.map_err(|e| {
-        StructuredDiagnostic::from_io("E_WAIT", &e, None)
-    })?;
-
-    if !output.stderr.is_empty() {
-        let _ = std::io::stderr().write_all(&output.stderr);
-    }
-
-    let code = output.status.code().unwrap_or(1);
-    Ok((Value::from_bytes(output.stdout), code))
 }

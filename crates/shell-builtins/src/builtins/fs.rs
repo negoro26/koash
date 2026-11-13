@@ -8,7 +8,7 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
-use super::resolve_path;
+use super::{check_killed, resolve_path};
 
 fn build_ls_record(name: String, path: &Path, meta: &std::fs::Metadata) -> StructuredRecord {
     let kind = if meta.is_dir() {
@@ -170,7 +170,9 @@ pub(crate) fn find(session: &Session, args: &[String]) -> Result<Value, Structur
                     let matcher = GlobBuilder::new(pat)
                         .case_insensitive(ci)
                         .build()
-                        .map_err(|e| StructuredDiagnostic::new("E_GLOB", e.to_string(), None, None))?
+                        .map_err(|e| {
+                            StructuredDiagnostic::new("E_GLOB", e.to_string(), None, None)
+                        })?
                         .compile_matcher();
                     name_matcher = Some(matcher);
                 }
@@ -198,6 +200,7 @@ pub(crate) fn find(session: &Session, args: &[String]) -> Result<Value, Structur
     let walker = builder.build();
     let mut records = Vec::new();
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };
@@ -266,6 +269,9 @@ pub(crate) fn mkdir(session: &mut Session, args: &[String]) -> Result<Value, Str
     }
     for t in targets {
         let p = resolve_path(session, &t);
+        if let Some(top) = p.ancestors().take_while(|a| !a.exists()).last() {
+            session.record_preimage(top);
+        }
         let res = if recursive {
             std::fs::create_dir_all(&p)
         } else {
@@ -305,6 +311,11 @@ pub(crate) fn rm(session: &mut Session, args: &[String]) -> Result<Value, Struct
                 None,
                 None,
             ));
+        }
+        if p.is_dir() && !recursive {
+            session.record_preimage(&p);
+        } else {
+            session.record_tree(&p);
         }
         let res = if p.is_dir() {
             if recursive {
@@ -350,6 +361,7 @@ pub(crate) fn cp(session: &mut Session, args: &[String]) -> Result<Value, Struct
                 None,
             ));
         }
+        record_copy_targets(session, &src, &dst);
         copy_dir_recursive(&src, &dst)
             .map_err(|e| StructuredDiagnostic::from_io("E_CP", &e, None))?;
     } else {
@@ -361,11 +373,35 @@ pub(crate) fn cp(session: &mut Session, args: &[String]) -> Result<Value, Struct
         } else {
             dst.clone()
         };
+        session.record_tree(&final_dst);
         std::fs::copy(&src, &final_dst)
             .map_err(|e| StructuredDiagnostic::from_io("E_CP", &e, None))?;
     }
     session.record_mutation(dst.to_string_lossy().to_string());
     Ok(Value::Empty)
+}
+
+fn record_copy_targets(session: &mut Session, src: &Path, dst: &Path) {
+    let mut pending = vec![(src.to_path_buf(), dst.to_path_buf())];
+    while let Some((from, to)) = pending.pop() {
+        let existed = std::fs::symlink_metadata(&to).is_ok();
+        if !session.record_preimage(&to) {
+            return;
+        }
+        if !existed {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&from) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                pending.push((entry.path(), to.join(entry.file_name())));
+            } else if !session.record_preimage(&to.join(entry.file_name())) {
+                return;
+            }
+        }
+    }
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -402,6 +438,8 @@ pub(crate) fn mv(session: &mut Session, args: &[String]) -> Result<Value, Struct
     } else {
         dst
     };
+    session.record_tree(&src);
+    session.record_tree(&final_dst);
     std::fs::rename(&src, &final_dst)
         .map_err(|e| StructuredDiagnostic::from_io("E_MV", &e, None))?;
     session.record_mutation(src.to_string_lossy().to_string());
@@ -419,6 +457,7 @@ fn format_unix_iso(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
+// Howard Hinnant's civil_from_days: https://howardhinnant.github.io/date_algorithms.html#civil_from_days
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

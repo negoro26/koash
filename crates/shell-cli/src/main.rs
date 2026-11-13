@@ -2,11 +2,8 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::process::ExitCode;
 
-use shell_builtins::{
-    execute_program_surface, execute_program_surface_sync, pipeline_uses_builtin,
-    program_needs_async,
-};
-use shell_kernel::{Session, execute_program, reap_background_jobs};
+use shell_builtins::{Sink, run_program};
+use shell_kernel::{Session, reap_background_jobs};
 use shell_rpc::RpcServer;
 use shell_surface::SurfaceMode;
 use shell_syntax::parse;
@@ -147,14 +144,7 @@ fn main() -> ExitCode {
         return run_oneshot(&script, force_tsp);
     }
 
-    let rt = match build_runtime() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("koa: runtime error: {e}");
-            return ExitCode::from(1);
-        }
-    };
-    rt.block_on(run_interactive_repl(force_tsp))
+    run_interactive_repl(force_tsp)
 }
 
 fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
@@ -174,49 +164,20 @@ fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
         }
     };
 
-    let has_builtin = program
-        .items
-        .iter()
-        .any(|item| pipeline_uses_builtin(&session, &item.pipeline));
-
-    if !has_builtin {
-        return match execute_program(&mut session, &program) {
-            Ok(code) => ExitCode::from((code & 0xff) as u8),
-            Err(diag) => {
-                eprintln!("koa: {diag}");
-                ExitCode::from(1)
-            }
-        };
-    }
-
-    let mode = SurfaceMode::detect(force_tsp, false);
-    if !program_needs_async(&session, &program) {
-        return match execute_program_surface_sync(&mut session, &program, mode) {
-            Ok(code) => ExitCode::from((code & 0xff) as u8),
-            Err(diag) => {
-                eprintln!("koa: {diag}");
-                ExitCode::from(1)
-            }
-        };
-    }
-
-    let rt = match build_runtime() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("koa: runtime error: {e}");
-            return ExitCode::from(1);
-        }
+    let sink = Sink::Tty {
+        mode: SurfaceMode::detect(force_tsp, false),
     };
-    match rt.block_on(execute_program_surface(&mut session, &program, mode)) {
-        Ok(code) => ExitCode::from((code & 0xff) as u8),
-        Err(diag) => {
-            eprintln!("koa: {diag}");
-            ExitCode::from(1)
-        }
+    let code = run_program(&mut session, &program, &sink);
+    ExitCode::from((code & 0xff) as u8)
+}
+
+fn report_finished_jobs(session: &mut Session) {
+    for notice in reap_background_jobs(session) {
+        eprintln!("{notice}");
     }
 }
 
-async fn run_interactive_repl(force_tsp: bool) -> ExitCode {
+fn run_interactive_repl(force_tsp: bool) -> ExitCode {
     let mut session = match Session::new(true) {
         Ok(s) => s,
         Err(diag) => {
@@ -227,8 +188,11 @@ async fn run_interactive_repl(force_tsp: bool) -> ExitCode {
 
     if session.interactive {
         let mut editor = LineEditor::new();
+        let sink = Sink::Tty {
+            mode: SurfaceMode::detect(force_tsp, true),
+        };
         loop {
-            reap_background_jobs(&mut session);
+            report_finished_jobs(&mut session);
             let prompt = format!(
                 "{} koa> ",
                 session
@@ -244,15 +208,8 @@ async fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let mode = SurfaceMode::detect(force_tsp, true);
                     let code = match parse(trimmed) {
-                        Ok(program) => match execute_program_surface(&mut session, &program, mode).await {
-                            Ok(c) => c,
-                            Err(diag) => {
-                                eprintln!("koa: {diag}");
-                                1
-                            }
-                        },
+                        Ok(program) => run_program(&mut session, &program, &sink),
                         Err(err) => {
                             eprintln!("koa: syntax error ({}): {}", err.code, err.message);
                             2
@@ -276,10 +233,13 @@ async fn run_interactive_repl(force_tsp: bool) -> ExitCode {
     }
 
     let stdin = io::stdin();
+    let sink = Sink::Tty {
+        mode: SurfaceMode::detect(force_tsp, false),
+    };
     let mut line = String::new();
 
     loop {
-        reap_background_jobs(&mut session);
+        report_finished_jobs(&mut session);
         line.clear();
         match stdin.lock().read_line(&mut line) {
             Ok(0) => break,
@@ -288,19 +248,13 @@ async fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                 if trimmed.is_empty() {
                     continue;
                 }
-                match parse(trimmed) {
-                    Ok(program) => {
-                        let mode = SurfaceMode::detect(force_tsp, false);
-                        if let Err(diag) = execute_program_surface(&mut session, &program, mode).await {
-                            eprintln!("koa: {diag}");
-                            session.last_status = 1;
-                        }
-                    }
+                session.last_status = match parse(trimmed) {
+                    Ok(program) => run_program(&mut session, &program, &sink),
                     Err(err) => {
                         eprintln!("koa: syntax error ({}): {}", err.code, err.message);
-                        session.last_status = 2;
+                        2
                     }
-                }
+                };
                 if let Some(code) = session.should_exit {
                     return ExitCode::from((code & 0xff) as u8);
                 }

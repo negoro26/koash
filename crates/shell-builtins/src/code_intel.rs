@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::builtins::check_killed;
 use ignore::WalkBuilder;
 use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
@@ -50,6 +51,7 @@ pub fn run_prewalk(session: &Session, args: &[String]) -> Result<Value, Structur
     let mut candidates: Vec<(usize, String, String)> = Vec::new();
 
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };
@@ -125,6 +127,7 @@ pub fn run_ast(session: &Session, args: &[String]) -> Result<Value, StructuredDi
     let mut records = Vec::new();
 
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };
