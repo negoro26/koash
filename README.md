@@ -57,6 +57,30 @@ koa --tsp -c "ls"
 | `shell-tui` | `crossterm` line editor, AST syntax highlighting, completion |
 | `shell-cli` | Unified `koa` binary entrypoint |
 
+## Development
+
+`scripts/check.sh` is the gate CI runs. It runs rustfmt, taplo, typos, clippy with `-D warnings`, cargo-nextest, cargo-deny and cargo-machete. Clippy denies `unwrap`, `expect` and `panic` outside tests.
+
+```bash
+scripts/check.sh                       # full gate
+bacon clippy                           # watch mode
+cargo nextest run                      # tests; .config/nextest.toml kills a test after 60 s
+cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
+```
+
+Profiling builds use the `profiling` profile, which is release with symbols. `scripts/profile.sh` builds it and runs one tool against `koa`:
+
+```bash
+scripts/profile.sh flamegraph -- -c 'find crates | where ext == rs | sort-by path'
+scripts/profile.sh samply     -- -c '...'   # opens the Firefox Profiler
+scripts/profile.sh heaptrack  -- -c '...'   # allocations
+scripts/profile.sh cachegrind -- -c '...'   # cache misses
+scripts/profile.sh strace     -- -c '...'   # syscall counts
+hyperfine -N "target/release/koa -c 'ls | first 1'" "bash -c 'ls | head -1'"
+```
+
+To debug, use `lldb-dap` (any DAP client) or `rust-lldb` / `rust-gdb`. Load `$(rustc --print sysroot)/lib/rustlib/etc/lldb_lookup.py` in lldb-dap's `initCommands` so `Vec`, `String` and `PathBuf` print readably. Dependencies build with line tables only, and workspace crates keep full debug info.
+
 ## License
 
 MIT
