@@ -6,52 +6,11 @@ use nix::sys::signal::{SigHandler, Signal, killpg, signal};
 use nix::sys::stat::Mode;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, dup2, execvpe, fork, getpid, pipe2, setpgid, tcsetpgrp};
-use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
+use shell_syntax::{Command, Pipeline, RedirectKind, Redirection, SimpleCommand};
 use shell_value::StructuredDiagnostic;
 
 use crate::session::{JobState, Session};
 use crate::word_expand::expand_word;
-
-pub fn execute_program(session: &mut Session, program: &Program) -> Result<i32, StructuredDiagnostic> {
-    reap_background_jobs(session);
-
-    let mut last_status = session.last_status;
-    let mut skip_next = false;
-    let mut prev_op: Option<ListOp> = None;
-
-    for item in &program.items {
-        if let Some(op) = prev_op {
-            match op {
-                ListOp::And if last_status != 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                ListOp::Or if last_status == 0 => {
-                    prev_op = item.op;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-
-        if skip_next {
-            skip_next = false;
-            prev_op = item.op;
-            continue;
-        }
-
-        let background = matches!(item.op, Some(ListOp::Background));
-        last_status = execute_pipeline(session, &item.pipeline, background)?;
-        session.last_status = last_status;
-        prev_op = item.op;
-
-        if session.should_exit.is_some() {
-            break;
-        }
-    }
-
-    Ok(last_status)
-}
 
 pub fn execute_pipeline(
     session: &mut Session,
@@ -349,42 +308,43 @@ fn wait_for_foreground_job(
     Ok(last_code)
 }
 
-pub fn reap_background_jobs(session: &mut Session) {
-    loop {
-        match waitpid(
-            Pid::from_raw(-1),
-            Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED),
-        ) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                mark_pid_done(session, pid, code);
-            }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                mark_pid_done(session, pid, 128 + sig as i32);
-            }
-            Ok(WaitStatus::Stopped(pid, _)) => {
-                for job in &mut session.jobs {
-                    if job.pids.contains(&pid) {
-                        job.state = JobState::Stopped;
-                    }
+/// Collects finished and stopped background jobs, waiting on each job's own pgid only.
+/// Returns one notice line per job that finished.
+pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
+    let kill = session.kill.clone();
+    let mut notices = Vec::new();
+    for job in &mut session.jobs {
+        if matches!(job.state, JobState::Done(_)) {
+            continue;
+        }
+        loop {
+            let finished = match kill.wait_group(job.pgid, false) {
+                Ok(Some(WaitStatus::Exited(pid, code))) => Some((pid, code)),
+                Ok(Some(WaitStatus::Signaled(pid, sig, _))) => Some((pid, 128 + sig as i32)),
+                Ok(Some(WaitStatus::Stopped(..))) => {
+                    job.state = JobState::Stopped;
+                    None
+                }
+                Ok(Some(_)) => None,
+                Ok(None) => break,
+                Err(nix::errno::Errno::EINTR) => None,
+                Err(_) => {
+                    job.pids.clear();
+                    Some((Pid::from_raw(0), 0))
+                }
+            };
+            if let Some((pid, code)) = finished {
+                job.pids.retain(|&p| p != pid);
+                if job.pids.is_empty() {
+                    job.state = JobState::Done(code);
+                    notices.push(format!("[{}]+ Done ({code})               {}", job.id, job.command));
+                    break;
                 }
             }
-            _ => break,
         }
     }
     session.jobs.retain(|j| !matches!(j.state, JobState::Done(_)));
-}
-
-fn mark_pid_done(session: &mut Session, pid: Pid, code: i32) {
-    for job in &mut session.jobs {
-        if let Some(pos) = job.pids.iter().position(|&p| p == pid) {
-            job.pids.remove(pos);
-            if job.pids.is_empty() {
-                job.state = JobState::Done(code);
-                eprintln!("[{}]+ Done ({code})               {}", job.id, job.command);
-            }
-            break;
-        }
-    }
+    notices
 }
 
 fn try_run_kernel_builtin(

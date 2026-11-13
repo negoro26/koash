@@ -14,7 +14,7 @@ use shell_value::{
     hashline_tag,
 };
 
-use super::{hashline_schema, resolve_path};
+use super::{check_killed, hashline_schema, resolve_path};
 
 pub(crate) fn echo(args: &[String]) -> Result<Value, StructuredDiagnostic> {
     let mut no_newline = false;
@@ -471,7 +471,7 @@ pub(crate) fn grep(
                 return Ok(Value::from_batch(batch));
             }
             _ => {
-                let bytes = input.into_raw_bytes_sync()?;
+                let bytes = input.into_raw_bytes();
                 let stdin_cell: Arc<str> = Arc::from("<stdin>");
                 if opts.count_only {
                     let mut count: u64 = 0;
@@ -546,6 +546,7 @@ pub(crate) fn grep(
         let target = resolve_path(session, path_arg);
         let walker = WalkBuilder::new(&target).build();
         for entry_res in walker {
+            check_killed(session)?;
             let Ok(entry) = entry_res else {
                 continue;
             };

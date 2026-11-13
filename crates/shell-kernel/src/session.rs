@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::{SigHandler, Signal, signal};
@@ -11,6 +12,12 @@ use shell_value::{StructuredDiagnostic, TaintLevel};
 
 use crate::cow::CowWorkspace;
 use crate::env::SessionEnv;
+use crate::kill::KillSwitch;
+
+fn next_session_uid() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
@@ -77,6 +84,9 @@ pub struct Session {
     pub idle_ttl: Duration,
     pub ephemeral: bool,
     pub parent_id: Option<String>,
+    pub kill: KillSwitch,
+    /// Stable identity for per-session worker and database pools; unlike an address it survives moves.
+    pub uid: u64,
 }
 
 impl Session {
@@ -137,6 +147,8 @@ impl Session {
             idle_ttl: Duration::from_secs(900),
             ephemeral: false,
             parent_id: None,
+            kill: KillSwitch::default(),
+            uid: next_session_uid(),
         })
     }
 
@@ -160,6 +172,8 @@ impl Session {
             idle_ttl: Duration::from_secs(300),
             ephemeral: true,
             parent_id: None,
+            kill: KillSwitch::default(),
+            uid: next_session_uid(),
         }
     }
 
@@ -215,6 +229,8 @@ impl Session {
             idle_ttl: Duration::from_secs(900),
             ephemeral: false,
             parent_id: None,
+            kill: KillSwitch::default(),
+            uid: next_session_uid(),
         })
     }
 

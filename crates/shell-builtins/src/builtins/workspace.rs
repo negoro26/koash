@@ -5,7 +5,7 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{RecordBatch, StructuredDiagnostic, StructuredRecord, Value};
 
-use super::hashline_schema;
+use super::{check_killed, hashline_schema};
 use super::text::search_file_with_hashline;
 
 pub(crate) fn diag(session: &Session) -> Result<Value, StructuredDiagnostic> {
@@ -78,6 +78,7 @@ pub(crate) fn refs(session: &Session, args: &[String]) -> Result<Value, Structur
     let mut batch = RecordBatch::with_capacity(hashline_schema(), 32);
     let walker = WalkBuilder::new(&session.cwd).build();
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };
@@ -109,6 +110,7 @@ pub(crate) fn rename(session: &mut Session, args: &[String]) -> Result<Value, St
     let mut records = Vec::new();
 
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };

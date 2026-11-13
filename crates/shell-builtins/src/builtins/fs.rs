@@ -8,7 +8,7 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
-use super::resolve_path;
+use super::{check_killed, resolve_path};
 
 fn build_ls_record(name: String, path: &Path, meta: &std::fs::Metadata) -> StructuredRecord {
     let kind = if meta.is_dir() {
@@ -198,6 +198,7 @@ pub(crate) fn find(session: &Session, args: &[String]) -> Result<Value, Structur
     let walker = builder.build();
     let mut records = Vec::new();
     for entry_res in walker {
+        check_killed(session)?;
         let Ok(entry) = entry_res else {
             continue;
         };

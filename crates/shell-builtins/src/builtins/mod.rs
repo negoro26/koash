@@ -15,11 +15,14 @@ use shell_value::{StructuredDiagnostic, Value};
 
 use crate::discover::run_discover;
 
-pub fn is_async_builtin(name: &str) -> bool {
-    matches!(name, "@py" | "@js")
+pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
+    if session.kill.is_killed() {
+        return Err(StructuredDiagnostic::new("E_KILLED", "command killed", None, None));
+    }
+    Ok(())
 }
 
-pub fn run_builtin_sync(
+pub fn run_builtin(
     session: &mut Session,
     name: &str,
     args: &[String],
@@ -64,48 +67,20 @@ pub fn run_builtin_sync(
         "discover" => run_discover(args),
         "help" => help(args),
         "@sql" => crate::subkernel::run_sql_inprocess(session, &args.join(" ")),
+        "@py" => {
+            session.mark_opaque("@py".to_string());
+            crate::subkernel::run_worker(session, crate::subkernel::KernelKind::Python, &args.join(" "))
+        }
+        "@js" => {
+            session.mark_opaque("@js".to_string());
+            crate::subkernel::run_worker(session, crate::subkernel::KernelKind::JavaScript, &args.join(" "))
+        }
         _ => Err(StructuredDiagnostic::new(
             "E_UNKNOWN_BUILTIN",
             format!("unknown builtin `{name}`"),
             None,
             None,
         )),
-    }
-}
-
-pub async fn run_builtin(
-    session: &mut Session,
-    name: &str,
-    args: &[String],
-    input: Value,
-) -> Result<Value, StructuredDiagnostic> {
-    match name {
-        "@py" => {
-            session.mark_opaque("@py".to_string());
-            crate::subkernel::run_persistent_worker(
-                session,
-                crate::subkernel::KernelKind::Python,
-                &args.join(" "),
-            )
-            .await
-        }
-        "@js" => {
-            session.mark_opaque("@js".to_string());
-            crate::subkernel::run_persistent_worker(
-                session,
-                crate::subkernel::KernelKind::JavaScript,
-                &args.join(" "),
-            )
-            .await
-        }
-        _ => {
-            let mat = match input {
-                Value::RawStream(_) => Value::Bytes(input.into_raw_bytes().await?),
-                Value::RecordStream(_) => Value::Batch(input.into_batch().await?),
-                other => other,
-            };
-            run_builtin_sync(session, name, args, mat)
-        }
     }
 }
 

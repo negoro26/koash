@@ -94,6 +94,8 @@ pub enum RpcEvent {
         compact: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         stdout: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stderr: Option<String>,
     },
     PolicyBlocked {
         #[serde(skip_serializing_if = "Option::is_none")]

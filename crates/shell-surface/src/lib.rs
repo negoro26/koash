@@ -1,8 +1,7 @@
 use std::io::Write;
 
 use serde::Serialize;
-use shell_value::{StructuredDiagnostic, StructuredRecord, Value, format_cell};
-use tokio::io::AsyncReadExt;
+use shell_value::{StructuredRecord, Value, format_cell};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceMode {
@@ -38,37 +37,20 @@ struct TspTextFrame<'a> {
     content: &'a str,
 }
 
-pub fn render_surface_sync(
-    val: Value,
-    writer: &mut dyn Write,
-    mode: SurfaceMode,
-) -> Result<(), StructuredDiagnostic> {
+pub fn render_surface(val: Value, writer: &mut dyn Write, mode: SurfaceMode) {
     match mode {
-        SurfaceMode::AnsiTty => val.render_tty_sync(writer, true),
-        SurfaceMode::Plain => val.render_tty_sync(writer, false),
-        SurfaceMode::TernSurfaceProtocol => render_tsp_sync(val, writer),
+        SurfaceMode::AnsiTty => val.render_tty(writer, true),
+        SurfaceMode::Plain => val.render_tty(writer, false),
+        SurfaceMode::TernSurfaceProtocol => render_tsp(val, writer),
     }
 }
 
-pub async fn render_surface(
-    val: Value,
-    writer: &mut dyn Write,
-    mode: SurfaceMode,
-) -> Result<(), StructuredDiagnostic> {
-    match mode {
-        SurfaceMode::AnsiTty => val.render_tty(writer, true).await,
-        SurfaceMode::Plain => val.render_tty(writer, false).await,
-        SurfaceMode::TernSurfaceProtocol => render_tsp(val, writer).await,
-    }
-}
-
-fn render_tsp_sync(val: Value, writer: &mut dyn Write) -> Result<(), StructuredDiagnostic> {
+fn render_tsp(val: Value, writer: &mut dyn Write) {
     match val {
-        Value::Empty => Ok(()),
-        Value::Error(diag) => Err(diag),
+        Value::Empty => {}
         Value::Batch(batch) => {
             if batch.is_empty() {
-                return Ok(());
+                return;
             }
             let columns: Vec<String> = batch.columns.iter().map(|c| c.to_string()).collect();
             let records = batch.to_maps();
@@ -83,7 +65,6 @@ fn render_tsp_sync(val: Value, writer: &mut dyn Write) -> Result<(), StructuredD
                 let _ = writeln!(writer, "{}", render_unicode_preview(&columns, &records));
                 let _ = writer.flush();
             }
-            Ok(())
         }
         Value::Bytes(buf) => {
             let text = String::from_utf8_lossy(&buf);
@@ -97,69 +78,6 @@ fn render_tsp_sync(val: Value, writer: &mut dyn Write) -> Result<(), StructuredD
             }
             let _ = writer.write_all(&buf);
             let _ = writer.flush();
-            Ok(())
-        }
-        Value::RawStream(_) | Value::RecordStream(_) => Err(StructuredDiagnostic::new(
-            "E_ASYNC_STREAM",
-            "async stream requires async renderer",
-            None,
-            None,
-        )),
-    }
-}
-
-async fn render_tsp(val: Value, writer: &mut dyn Write) -> Result<(), StructuredDiagnostic> {
-    match val {
-        Value::Empty | Value::Batch(_) | Value::Bytes(_) | Value::Error(_) => {
-            render_tsp_sync(val, writer)
-        }
-        Value::RecordStream(mut rx) => {
-            let mut records = Vec::new();
-            while let Some(rec) = rx.recv().await {
-                records.push(rec);
-            }
-            if records.is_empty() {
-                return Ok(());
-            }
-            let mut columns = Vec::new();
-            for rec in &records {
-                for k in rec.keys() {
-                    if !columns.contains(k) {
-                        columns.push(k.clone());
-                    }
-                }
-            }
-            let frame = TspTableFrame {
-                tsp: "1.0",
-                kind: "table",
-                columns: &columns,
-                rows: &records,
-            };
-            if let Ok(json) = serde_json::to_string(&frame) {
-                let _ = write!(writer, "\x1b]9001;{json}\x07");
-                let _ = writeln!(writer, "{}", render_unicode_preview(&columns, &records));
-                let _ = writer.flush();
-            }
-            Ok(())
-        }
-        Value::RawStream(mut reader) => {
-            let mut buf = Vec::new();
-            reader
-                .read_to_end(&mut buf)
-                .await
-                .map_err(|e| StructuredDiagnostic::from_io("E_STREAM_READ", &e, None))?;
-            let text = String::from_utf8_lossy(&buf);
-            let frame = TspTextFrame {
-                tsp: "1.0",
-                kind: "text",
-                content: &text,
-            };
-            if let Ok(json) = serde_json::to_string(&frame) {
-                let _ = write!(writer, "\x1b]9001;{json}\x07");
-            }
-            let _ = writer.write_all(&buf);
-            let _ = writer.flush();
-            Ok(())
         }
     }
 }

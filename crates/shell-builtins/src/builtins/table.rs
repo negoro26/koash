@@ -18,7 +18,7 @@ pub(crate) fn where_filter(args: &[String], input: Value) -> Result<Value, Struc
     let field = &args[0];
     let op = &args[1];
     let rhs_raw = &args[2];
-    let batch = input.into_batch_sync()?;
+    let batch = input.into_batch();
     let Some(col_idx) = batch.col_index(field) else {
         return Ok(Value::from_batch(RecordBatch::new(batch.columns)));
     };
@@ -98,7 +98,7 @@ pub(crate) fn select(args: &[String], input: Value) -> Result<Value, StructuredD
             Some("example: ls | select name size".to_string()),
         ));
     }
-    let batch = input.into_batch_sync()?;
+    let batch = input.into_batch();
     let mut keep_cols = Vec::new();
     let mut keep_indices = Vec::new();
     for col in args {
@@ -142,7 +142,7 @@ pub(crate) fn sort_by(args: &[String], input: Value) -> Result<Value, Structured
             None,
         ));
     };
-    let batch = input.into_batch_sync()?;
+    let batch = input.into_batch();
     let Some(col_idx) = batch.col_index(&col) else {
         return Ok(Value::from_batch(batch));
     };
@@ -174,14 +174,14 @@ pub(crate) fn sort_by(args: &[String], input: Value) -> Result<Value, Structured
 
 pub(crate) fn first(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
     let n = args.first().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-    let mut batch = input.into_batch_sync()?;
+    let mut batch = input.into_batch();
     batch.truncate_rows(n);
     Ok(Value::from_batch(batch))
 }
 
 pub(crate) fn last(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
     let n = args.first().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-    let mut batch = input.into_batch_sync()?;
+    let mut batch = input.into_batch();
     batch.tail_rows(n);
     Ok(Value::from_batch(batch))
 }
@@ -196,7 +196,7 @@ pub(crate) fn from(args: &[String], input: Value) -> Result<Value, StructuredDia
             None,
         ));
     }
-    let bytes = input.into_raw_bytes_sync()?;
+    let bytes = input.into_raw_bytes();
     let text = String::from_utf8_lossy(&bytes);
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -259,7 +259,7 @@ fn batch_from_json_objects(objs: Vec<serde_json::Map<String, JsonVal>>) -> Recor
 
 pub(crate) fn to(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
     let fmt = args.first().map(|s| s.as_str()).unwrap_or("json");
-    let batch = input.into_batch_sync()?;
+    let batch = input.into_batch();
     match fmt {
         "json" => {
             let records = batch.to_maps();

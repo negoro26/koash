@@ -1,13 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use shell_builtins::{BUILTIN_SCHEMAS, execute_program_value, post_edit_diagnostics};
+use shell_builtins::{BUILTIN_SCHEMAS, Chunk, Sink, post_edit_diagnostics, run_program};
 use shell_kernel::{CowWorkspace, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
 use shell_value::{
-    StructuredDiagnostic, TaintLevel, Value, records_to_compact_sigil, redact_secrets,
+    StructuredDiagnostic, StructuredRecord, TaintLevel, records_to_compact_sigil, redact_secrets,
 };
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -434,167 +434,14 @@ impl RpcServer {
         };
         send_json(writer, &spawned).await?;
 
-        let exec_fut = execute_program_value(session, &program);
-        let result = if let Some(ms) = params.timeout_ms {
-            match tokio::time::timeout(Duration::from_millis(ms), exec_fut).await {
-                Ok(res) => res,
-                Err(_) => {
-                    let completed = RpcEvent::Completed {
-                        id,
-                        exit_code: 124,
-                        duration_ms: start.elapsed().as_millis() as u64,
-                        mutated_files_manifest: session.mutated_files.clone(),
-                        truncated: false,
-                        spill_uri: None,
-                        lsp_diagnostics: Vec::new(),
-                    };
-                    return send_json(writer, &completed).await;
-                }
-            }
-        } else {
-            exec_fut.await
-        };
-
-        let (val, mut exit_code) = match result {
-            Ok(pair) => pair,
-            Err(diag) => {
-                let resp = RpcResponse {
-                    id,
-                    result: None,
-                    error: Some(diag),
-                };
-                return send_json(writer, &resp).await;
-            }
-        };
-
-        let mut truncated = false;
-        let mut spill_uri: Option<String> = None;
-        let max_bytes = params.max_output_bytes.unwrap_or(usize::MAX);
-
-        match val {
-            Value::Empty => {}
-            Value::Error(diag) => {
-                let resp = RpcResponse {
-                    id,
-                    result: None,
-                    error: Some(diag),
-                };
-                return send_json(writer, &resp).await;
-            }
-            Value::Batch(_) | Value::RecordStream(_) => {
-                let recs = val.into_records().await?;
-                let mut total_bytes = 0usize;
-                let mut batch = Vec::new();
-                let mut spill_buf = String::new();
-                for rec in recs {
-                    let serialized = serde_json::to_string(&rec).unwrap_or_default();
-                    if let Some((rule, line)) = match_stream_rule(&params.stream_rules, &serialized) {
-                        let ev = RpcEvent::RuleTriggered {
-                            id: id.clone(),
-                            rule: rule.name.clone(),
-                            matched_line: line,
-                        };
-                        send_json(writer, &ev).await?;
-                        if rule.abort_on_match {
-                            exit_code = 1;
-                            break;
-                        }
-                    }
-                    if truncated {
-                        spill_buf.push_str(&serialized);
-                        spill_buf.push('\n');
-                        continue;
-                    }
-                    let rec_size = serialized.len() + 1;
-                    if total_bytes + rec_size > max_bytes {
-                        truncated = true;
-                        for existing in &batch {
-                            if let Ok(s) = serde_json::to_string(existing) {
-                                spill_buf.push_str(&s);
-                                spill_buf.push('\n');
-                            }
-                        }
-                        spill_buf.push_str(&serialized);
-                        spill_buf.push('\n');
-                        continue;
-                    }
-                    total_bytes += rec_size;
-                    batch.push(rec);
-                }
-                if truncated && !spill_buf.is_empty() {
-                    spill_uri = write_spill_file(spill_buf.as_bytes(), "ndjson");
-                }
-                if !batch.is_empty() {
-                    let is_compact = params.format.as_deref() == Some("compact");
-                    let chunk = if is_compact {
-                        let sigil = records_to_compact_sigil(&batch);
-                        let safe = if session.taint == TaintLevel::UntrustedExternal {
-                            redact_secrets(&sigil, &session.env.materialize())
-                        } else {
-                            sigil
-                        };
-                        RpcEvent::StreamChunk {
-                            id: id.clone(),
-                            records: None,
-                            compact: Some(safe),
-                            stdout: None,
-                        }
-                    } else {
-                        RpcEvent::StreamChunk {
-                            id: id.clone(),
-                            records: Some(batch),
-                            compact: None,
-                            stdout: None,
-                        }
-                    };
-                    send_json(writer, &chunk).await?;
-                }
-            }
-            Value::Bytes(_) | Value::RawStream(_) => {
-                let bytes = val.into_raw_bytes().await?;
-                let text_full = String::from_utf8_lossy(&bytes);
-                let mut aborted = false;
-                for line in text_full.lines() {
-                    if let Some((rule, matched)) = match_stream_rule(&params.stream_rules, line) {
-                        let ev = RpcEvent::RuleTriggered {
-                            id: id.clone(),
-                            rule: rule.name.clone(),
-                            matched_line: matched,
-                        };
-                        send_json(writer, &ev).await?;
-                        if rule.abort_on_match {
-                            exit_code = 1;
-                            aborted = true;
-                            break;
-                        }
-                    }
-                }
-                if !aborted {
-                    let slice = if bytes.len() > max_bytes {
-                        truncated = true;
-                        spill_uri = write_spill_file(&bytes, "log");
-                        &bytes[..max_bytes]
-                    } else {
-                        &bytes[..]
-                    };
-                    if !slice.is_empty() {
-                        let raw_text = String::from_utf8_lossy(slice).to_string();
-                        let text = if session.taint == TaintLevel::UntrustedExternal {
-                            redact_secrets(&raw_text, &session.env.materialize())
-                        } else {
-                            raw_text
-                        };
-                        let chunk = RpcEvent::StreamChunk {
-                            id: id.clone(),
-                            records: None,
-                            compact: None,
-                            stdout: Some(text),
-                        };
-                        send_json(writer, &chunk).await?;
-                    }
-                }
-            }
-        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(1 << 20);
+        let sink = Sink::Capture(tx);
+        let exit_code = run_program(session, &program, &sink);
+        drop(sink);
+        let out = RunOutput::from_chunks(rx.try_iter());
+        let redact_env = (session.taint == TaintLevel::UntrustedExternal)
+            .then(|| session.env.materialize());
+        let summary = send_output(writer, &id, &params, out, redact_env.as_ref(), exit_code).await?;
 
         let lsp_diagnostics = if session.mutated_files.is_empty() {
             Vec::new()
@@ -604,11 +451,11 @@ impl RpcServer {
 
         let completed = RpcEvent::Completed {
             id,
-            exit_code,
+            exit_code: summary.exit_code,
             duration_ms: start.elapsed().as_millis() as u64,
             mutated_files_manifest: session.mutated_files.clone(),
-            truncated,
-            spill_uri,
+            truncated: summary.truncated,
+            spill_uri: summary.spill_uri,
             lsp_diagnostics,
         };
         send_json(writer, &completed).await
@@ -772,6 +619,194 @@ fn resolve_abs(session: &Session, raw: &str) -> PathBuf {
 
 fn is_path_allowed(target: &Path, allowed: &[String]) -> bool {
     allowed.iter().any(|prefix| target.starts_with(Path::new(prefix)))
+}
+
+/// Everything a program wrote, gathered from the capture channel.
+struct RunOutput {
+    records: Vec<StructuredRecord>,
+    stdout: Vec<u8>,
+    stderr: String,
+}
+
+impl RunOutput {
+    fn from_chunks(chunks: impl IntoIterator<Item = Chunk>) -> Self {
+        let mut out = Self {
+            records: Vec::new(),
+            stdout: Vec::new(),
+            stderr: String::new(),
+        };
+        for chunk in chunks {
+            match chunk {
+                Chunk::Stdout(bytes) => out.stdout.extend_from_slice(&bytes),
+                Chunk::Stderr(bytes) => out.stderr.push_str(&String::from_utf8_lossy(&bytes)),
+                Chunk::Batch(batch) => out.records.extend(batch.to_maps()),
+                Chunk::Diag(diag) => {
+                    out.stderr.push_str(&diag.to_string());
+                    out.stderr.push('\n');
+                }
+            }
+        }
+        out
+    }
+}
+
+struct OutputSummary {
+    exit_code: i32,
+    truncated: bool,
+    spill_uri: Option<String>,
+}
+
+/// Applies stream rules, the byte budget, spilling and redaction to `out` and sends it as stream chunks.
+async fn send_output<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    id: &Option<serde_json::Value>,
+    params: &ExecParams,
+    out: RunOutput,
+    redact_env: Option<&BTreeMap<String, String>>,
+    mut exit_code: i32,
+) -> Result<OutputSummary, StructuredDiagnostic> {
+    let mut truncated = false;
+    let mut spill_uri: Option<String> = None;
+    let max_bytes = params.max_output_bytes.unwrap_or(usize::MAX);
+
+    if !out.records.is_empty() {
+        let mut total_bytes = 0usize;
+        let mut batch = Vec::new();
+        let mut spill_buf = String::new();
+        let mut record_truncated = false;
+        for rec in out.records {
+            let serialized = serde_json::to_string(&rec).unwrap_or_default();
+            if let Some((rule, line)) = match_stream_rule(&params.stream_rules, &serialized) {
+                let ev = RpcEvent::RuleTriggered {
+                    id: id.clone(),
+                    rule: rule.name.clone(),
+                    matched_line: line,
+                };
+                send_json(writer, &ev).await?;
+                if rule.abort_on_match {
+                    exit_code = 1;
+                    break;
+                }
+            }
+            if record_truncated {
+                spill_buf.push_str(&serialized);
+                spill_buf.push('\n');
+                continue;
+            }
+            let rec_size = serialized.len() + 1;
+            if total_bytes + rec_size > max_bytes {
+                record_truncated = true;
+                for existing in &batch {
+                    if let Ok(s) = serde_json::to_string(existing) {
+                        spill_buf.push_str(&s);
+                        spill_buf.push('\n');
+                    }
+                }
+                spill_buf.push_str(&serialized);
+                spill_buf.push('\n');
+                continue;
+            }
+            total_bytes += rec_size;
+            batch.push(rec);
+        }
+        if record_truncated {
+            truncated = true;
+            if !spill_buf.is_empty() {
+                spill_uri = write_spill_file(spill_buf.as_bytes(), "ndjson");
+            }
+        }
+        if !batch.is_empty() {
+            let chunk = if params.format.as_deref() == Some("compact") {
+                let sigil = records_to_compact_sigil(&batch);
+                let safe = match redact_env {
+                    Some(env) => redact_secrets(&sigil, env),
+                    None => sigil,
+                };
+                RpcEvent::StreamChunk {
+                    id: id.clone(),
+                    records: None,
+                    compact: Some(safe),
+                    stdout: None,
+                    stderr: None,
+                }
+            } else {
+                RpcEvent::StreamChunk {
+                    id: id.clone(),
+                    records: Some(batch),
+                    compact: None,
+                    stdout: None,
+                    stderr: None,
+                }
+            };
+            send_json(writer, &chunk).await?;
+        }
+    }
+
+    if !out.stdout.is_empty() {
+        let bytes = out.stdout;
+        let text_full = String::from_utf8_lossy(&bytes);
+        let mut aborted = false;
+        for line in text_full.lines() {
+            if let Some((rule, matched)) = match_stream_rule(&params.stream_rules, line) {
+                let ev = RpcEvent::RuleTriggered {
+                    id: id.clone(),
+                    rule: rule.name.clone(),
+                    matched_line: matched,
+                };
+                send_json(writer, &ev).await?;
+                if rule.abort_on_match {
+                    exit_code = 1;
+                    aborted = true;
+                    break;
+                }
+            }
+        }
+        if !aborted {
+            let slice = if bytes.len() > max_bytes {
+                truncated = true;
+                spill_uri = spill_uri.or_else(|| write_spill_file(&bytes, "log"));
+                &bytes[..max_bytes]
+            } else {
+                &bytes[..]
+            };
+            if !slice.is_empty() {
+                let raw_text = String::from_utf8_lossy(slice).to_string();
+                let text = match redact_env {
+                    Some(env) => redact_secrets(&raw_text, env),
+                    None => raw_text,
+                };
+                let chunk = RpcEvent::StreamChunk {
+                    id: id.clone(),
+                    records: None,
+                    compact: None,
+                    stdout: Some(text),
+                    stderr: None,
+                };
+                send_json(writer, &chunk).await?;
+            }
+        }
+    }
+
+    if !out.stderr.is_empty() {
+        let text = match redact_env {
+            Some(env) => redact_secrets(&out.stderr, env),
+            None => out.stderr,
+        };
+        let chunk = RpcEvent::StreamChunk {
+            id: id.clone(),
+            records: None,
+            compact: None,
+            stdout: None,
+            stderr: Some(text),
+        };
+        send_json(writer, &chunk).await?;
+    }
+
+    Ok(OutputSummary {
+        exit_code,
+        truncated,
+        spill_uri,
+    })
 }
 
 async fn send_json<W: AsyncWrite + Unpin, T: serde::Serialize>(
