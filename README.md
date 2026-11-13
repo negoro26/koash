@@ -66,6 +66,7 @@ scripts/check.sh                       # full gate
 bacon clippy                           # watch mode
 cargo nextest run                      # tests; .config/nextest.toml kills a test after 60 s
 cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
+scripts/verify-undo.sh                 # every command sequence up to depth 5 against the undo promise
 ```
 
 With a distro Rust instead of rustup, point coverage at the system LLVM: `LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata`.
