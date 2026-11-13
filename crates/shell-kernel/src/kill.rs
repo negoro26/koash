@@ -11,12 +11,8 @@ struct KillState {
     groups: Mutex<Vec<Pid>>,
 }
 
-/// Cancels a running program: sets a flag the walk loops poll and SIGKILLs every tracked process group.
-///
-/// A job's group stays tracked until the whole pipeline is done, which includes its output readers,
-/// not just its direct children. Members that outlive the children keep the readers blocked, and
-/// `kill` is the only way to reach them. Linux does not hand a pid out again while it is in use as
-/// a pgid, so `killpg` stays safe for as long as any member lives.
+/// Groups stay tracked until the output readers finish, not just the direct children: surviving members hold
+/// the readers open. Linux never reuses a pid while it is a live pgid, so `killpg` cannot hit a stranger.
 #[derive(Debug, Clone, Default)]
 pub struct KillSwitch(Arc<KillState>);
 
@@ -37,7 +33,6 @@ impl KillSwitch {
         }
     }
 
-    /// Registers `pgid`; kills it at once when the switch already fired.
     pub fn track(&self, pgid: Pid) {
         let mut groups = self.lock();
         if !groups.contains(&pgid) {
@@ -60,8 +55,6 @@ impl KillSwitch {
     }
 }
 
-/// Next wait event of a direct child in `pgid`, reporting stops as well. Blocks until one is
-/// available unless `block` is false, in which case `Ok(None)` means nothing happened yet.
 pub fn wait_group(pgid: Pid, block: bool) -> nix::Result<Option<WaitStatus>> {
     let mut flags = WaitPidFlag::WUNTRACED;
     if !block {

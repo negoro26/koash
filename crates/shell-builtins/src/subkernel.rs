@@ -129,9 +129,6 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
     }
 }
 
-/// Runs `code` in the session's persistent worker for `kind`. A worker is out of the pool while it
-/// runs, so slow snippets in one session never block another. An exception in user code is an
-/// error diagnostic and the worker stays alive; a dead worker is dropped and respawned next time.
 pub fn run_worker(
     session: &Session,
     kind: KernelKind,
@@ -144,8 +141,7 @@ pub fn run_worker(
         None => spawn_worker(kind)?,
     };
 
-    // In an interactive shell the worker owns the terminal for the call, so Ctrl-C reaches it
-    // and not the shell.
+    // The worker owns the terminal for the call so Ctrl-C reaches it, not the shell.
     let pgid = Pid::from_raw(worker.child.id() as i32);
     session.kill.track(pgid);
     session.give_terminal(pgid);
@@ -239,8 +235,7 @@ fn exchange(worker: &mut Worker, code: &str, cwd: &Path) -> Result<Reply, Struct
 
 type SpawnJob = (Command, mpsc::Sender<std::io::Result<Child>>);
 
-/// Workers are spawned from one thread that lives as long as the process. PDEATHSIG fires when the
-/// thread that forked the child exits, and a runtime's blocking-pool threads exit when idle.
+/// PDEATHSIG fires when the forking thread exits; pool threads exit when idle, so spawn from one long-lived thread.
 static SPAWNER: LazyLock<Option<mpsc::Sender<SpawnJob>>> = LazyLock::new(|| {
     let (jobs, queue) = mpsc::channel::<SpawnJob>();
     std::thread::Builder::new()
@@ -265,8 +260,6 @@ fn spawn_on_spawner(command: Command) -> std::io::Result<Child> {
     spawned.recv().map_err(|_| unavailable())?
 }
 
-/// Workers read requests from fd 3 and have /dev/null as stdin, so user code that reads stdin
-/// sees EOF instead of eating the protocol.
 const REQUEST_FD: i32 = 3;
 
 fn spawn_worker(kind: KernelKind) -> Result<Worker, StructuredDiagnostic> {

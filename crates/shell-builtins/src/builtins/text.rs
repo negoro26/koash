@@ -54,7 +54,6 @@ fn cat_operands(args: &[String]) -> (bool, Vec<&String>) {
     (raw, paths)
 }
 
-/// True when the call names files (or a tree to walk), so it never reads its input.
 pub(crate) fn names_files(name: &str, args: &[String]) -> bool {
     match name {
         "cat" => !cat_operands(args).1.is_empty(),

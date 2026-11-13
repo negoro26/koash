@@ -12,28 +12,20 @@ use shell_value::StructuredDiagnostic;
 use crate::kill::wait_group;
 use crate::session::{JobState, Session};
 
-/// Which process group a child lands in.
 #[derive(Debug, Clone, Copy)]
 pub enum ChildGroup {
-    /// Stay in the shell's group, like `sh -c` without job control.
     Shared,
-    /// Become the leader of a new group.
     Leader,
     Join(Pid),
 }
 
-/// What a child needs between fork and exec.
 #[derive(Debug, Clone, Copy)]
 pub struct ChildSetup {
     pub group: ChildGroup,
-    /// Terminal fd to hand to the child's own group before exec.
     pub tty: Option<RawFd>,
-    /// Kill the child when the process that spawned it dies.
     pub die_with_parent: bool,
 }
 
-/// Applies `setup` to `command`. The job-control signals the shell ignores go back to their
-/// default so the child reacts to the terminal like any other program.
 pub fn prepare_child(command: &mut Command, setup: ChildSetup) {
     match setup.group {
         ChildGroup::Shared => {}
@@ -51,8 +43,7 @@ pub fn prepare_child(command: &mut Command, setup: ChildSetup) {
         ..
     } = setup;
     let parent = std::process::id() as libc::pid_t;
-    // SAFETY: the closure runs between fork and exec and only calls async-signal-safe libc
-    // functions (tcsetpgrp, getpid, prctl, getppid, signal) without allocating.
+    // SAFETY: between fork and exec only async-signal-safe libc calls run, without allocating.
     unsafe {
         command.pre_exec(move || {
             // The shell ignores SIGTTOU, so claiming the terminal must come before the reset below.
@@ -87,7 +78,6 @@ pub struct ExternalSpec<'a> {
     pub stdout: Stdio,
     pub stderr: Stdio,
     pub group: ChildGroup,
-    /// Hand the controlling terminal to the new group.
     pub claim_terminal: bool,
 }
 
@@ -170,12 +160,11 @@ pub struct Stopped {
 
 #[derive(Debug)]
 pub struct ForegroundOutcome {
-    /// Exit status of the watched process; 0 when it never reported.
     pub watched_status: i32,
     pub stopped: Option<Stopped>,
 }
 
-/// Waits on `pgid` only (never a bare `waitpid(-1)`) until every pid in `pids` has exited or the group stops.
+/// Waits on `pgid` only, never a bare `waitpid(-1)`, so unrelated children are not reaped.
 pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> ForegroundOutcome {
     let mut alive = pids.to_vec();
     let mut watched_status = 0;
@@ -212,7 +201,6 @@ pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> Foregroun
     }
 }
 
-/// True while a member of `pgid` is stopped. The stop stays pending for a later wait.
 pub fn group_stopped(pgid: Pid) -> bool {
     matches!(
         waitid(
@@ -227,8 +215,6 @@ pub fn resume_group(pgid: Pid) {
     let _ = killpg(pgid, Signal::SIGCONT);
 }
 
-/// Collects finished and stopped background jobs, waiting on each job's own pgid only.
-/// Returns one notice line per job that finished.
 pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     let mut notices = Vec::new();
     for job in &mut session.jobs {

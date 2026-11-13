@@ -364,8 +364,7 @@ fn rpc_busy_session_after_unfinished_timeout() {
         }));
         rpc.lines_until_completed(id, Duration::from_secs(10))
     };
-    // The detached sleeper outlives the kill and keeps the capture pipe open, so the exec
-    // cannot finish inside the grace period.
+    // The detached sleeper holds the capture pipe open past the kill, so the exec outlasts the grace period.
     let timed_out = exec(2, "/usr/bin/setsid -f /bin/sleep 2", Some(100));
     assert!(
         timed_out.iter().any(|l| l.contains("\"exit_code\":124")),
@@ -650,7 +649,7 @@ fn rpc_timeout_kills_group_members_that_outlive_the_direct_child() {
     let mut rpc = RpcClient::start(&dir);
     let sid = rpc.create_session();
     let start = Instant::now();
-    // Unique per test process so concurrent test runs do not see each other's sleepers.
+    // The pid in the marker keeps concurrent test runs from seeing each other's sleepers.
     let marker = format!("30.{}", std::process::id());
     let lines = exec_lines(
         &mut rpc,

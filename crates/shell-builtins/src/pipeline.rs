@@ -14,7 +14,6 @@ use crate::wiring::{
     read_redirect_file,
 };
 
-/// Status reported when the kill switch ended a program early.
 pub const KILLED_STATUS: i32 = 124;
 
 const NETWORK_COMMANDS: [&str; 6] = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
@@ -28,15 +27,12 @@ pub(crate) enum StageKind {
 
 pub(crate) struct Stage<'a> {
     pub kind: StageKind,
-    /// What the undo ledger calls this stage when it cannot reverse it.
     pub label: String,
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
 }
 
-/// Runs a program and returns the status of its last executed list item.
-/// Builtin failures become a status; only a parse error (which never reaches here) aborts a program.
 pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32 {
     for notice in reap_background_jobs(session) {
         sink.stderr_line(&notice);
@@ -207,8 +203,6 @@ fn summarize(stages: &[Stage]) -> String {
         .join(" | ")
 }
 
-/// Runs the stages left to right. Externals start as soon as their input is wired, so adjacent
-/// externals overlap; a builtin runs on this thread once its input is complete.
 fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Option<Pid>) {
     let mut flow = Flow::None;
     let mut launched = Launched::default();
@@ -324,16 +318,12 @@ fn take_builtin_input(
     }
 }
 
-/// A first-stage builtin that consumes input reads the shell's stdin when a frontend owns it and
-/// it is not a terminal, so `echo data | koa -c 'cat | tr a-z A-Z'` behaves like sh.
 fn reads_shell_stdin(stage: &Stage, plan: &Plan) -> bool {
     !plan.sink.is_capture()
         && !nix::unistd::isatty(0).unwrap_or(true)
         && reads_stdin(&stage.argv[0], &stage.argv[1..])
 }
 
-/// A last-stage builtin keeps `>` and `>>`: the value is written to the file with its preimage
-/// captured, and nothing is left to print.
 fn finish_builtin_output(
     session: &mut Session,
     stage: &Stage,

@@ -6,7 +6,6 @@ pub struct BuiltinSchema {
     pub description: &'static str,
     pub flags: &'static [&'static str],
     pub columns: &'static [&'static str],
-    /// Consumes piped input, so with nothing piped in it reads the shell's own stdin.
     pub reads_input: bool,
 }
 

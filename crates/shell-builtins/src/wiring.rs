@@ -19,10 +19,8 @@ use shell_value::{StructuredDiagnostic, Value};
 use crate::pipeline::Stage;
 use crate::sink::{Chunk, Sink};
 
-/// How often a builtin waiting on its producers checks whether they were stopped.
 const STOP_POLL: Duration = Duration::from_millis(50);
 
-/// What the next stage reads from.
 pub(crate) enum Flow {
     None,
     Value(Value),
@@ -34,7 +32,6 @@ pub(crate) struct Launched {
     pub pgid: Option<Pid>,
     pub pids: Vec<Pid>,
     pub last_pid: Option<Pid>,
-    /// The group the kill switch is holding for this pipeline until its readers are done.
     pub tracked: Option<Pid>,
 }
 
@@ -105,7 +102,6 @@ enum OutTarget {
 
 enum ErrTarget {
     Default,
-    /// `2>&1` evaluated while stdout still pointed at its default destination.
     ToOut,
     File(File),
 }
@@ -233,8 +229,6 @@ where
         .map_err(|e| io_error("E_THREAD", "thread", &e))
 }
 
-/// Writes `bytes` to a new pipe on its own thread and returns the read end for a child's stdin.
-/// The thread owns only the bytes, so a child that never reads cannot stall the caller.
 fn feed<'scope, 'env>(
     scope: &'scope Scope<'scope, 'env>,
     bytes: Vec<u8>,
@@ -251,8 +245,7 @@ fn feed<'scope, 'env>(
     Ok(Stdio::from(reader))
 }
 
-/// Reads `fd` to EOF on a helper thread so this one can keep watching the producers' group. A producer
-/// stopped by Ctrl-Z would otherwise leave the read blocked, and the shell with it.
+/// Reads on a helper thread: a producer stopped by Ctrl-Z would leave an inline read blocked.
 pub(crate) fn read_all_watching(plan: &Plan, fd: OwnedFd, producers: Pid) -> io::Result<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new().spawn_scoped(plan.scope, move || {
@@ -275,7 +268,6 @@ pub(crate) fn read_all_watching(plan: &Plan, fd: OwnedFd, producers: Pid) -> io:
     }
 }
 
-/// Copies everything readable from `fd` into the capture channel until EOF.
 fn drain<'scope, 'env>(
     scope: &'scope Scope<'scope, 'env>,
     sink: &'env Sink,
@@ -322,8 +314,6 @@ fn default_stderr(plan: &Plan) -> Result<(Fd, Option<OwnedFd>), LaunchError> {
     Ok((Fd::Owned(writer), Some(reader)))
 }
 
-/// Starts one external stage, wiring its stdio from `flow` and the sink, and leaves what the next
-/// stage should read in `flow`.
 pub(crate) fn launch_external(
     session: &mut Session,
     stage: &Stage,
@@ -384,8 +374,7 @@ pub(crate) fn launch_external(
         drain(plan.scope, plan.sink, reader, Chunk::Stderr)?;
     }
 
-    // Only the terminal and the kill switch need groups. `koa -c` on a terminal behaves like
-    // `sh -c`: children stay in the shell's group and see the terminal's signals directly.
+    // Only the terminal and the kill switch need groups; `koa -c` stays in the shell's group like `sh -c`.
     let grouped = session.interactive || plan.sink.is_capture();
     let group = match (grouped, launched.pgid) {
         (false, _) => ChildGroup::Shared,

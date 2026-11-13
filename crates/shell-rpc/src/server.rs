@@ -18,11 +18,9 @@ use crate::protocol::{
     SessionIdParams, StreamRule,
 };
 
-/// How long a killed exec gets to wind down before its session is reported busy.
 const KILL_GRACE: Duration = Duration::from_millis(500);
 const TIMEOUT_EXIT_CODE: i32 = 124;
 
-/// A session is out of its slot while an exec owns it.
 enum Slot {
     Ready(Box<Session>),
     Busy,
@@ -519,7 +517,6 @@ enum Admission {
     Blocked(String),
 }
 
-/// What the caller of an exec needs from the session once the program has run.
 struct RunSummary {
     code: i32,
     redact_env: Option<BTreeMap<String, String>>,
@@ -527,8 +524,6 @@ struct RunSummary {
     mutated_files: Vec<String>,
 }
 
-/// Ownership of a session taken out of its slot. However the exec ends, the slot is settled:
-/// dropping the lease puts the session back, or removes the slot if the executor panicked.
 struct Lease {
     sessions: Sessions,
     id: String,
@@ -539,8 +534,7 @@ struct Lease {
 }
 
 impl Lease {
-    /// Runs `f` on the session, then makes the session available again before returning.
-    /// Must be called from a blocking thread.
+    /// Must run on a blocking thread: `blocking_lock` panics in async context.
     fn run_blocking<R>(mut self, f: impl FnOnce(&mut Session) -> R) -> Option<R> {
         let result = f(self.session.as_deref_mut()?);
         let session = self.session.take()?;
@@ -576,7 +570,6 @@ impl Drop for Lease {
     }
 }
 
-/// Checks that `params` may run and, if so, moves the session out of its slot.
 fn admit(sessions: &Sessions, slots: &mut HashMap<String, Slot>, params: &ExecParams) -> Admission {
     let id = &params.session_id;
     let program = {
@@ -723,7 +716,6 @@ fn is_path_allowed(target: &Path, allowed: &[String]) -> bool {
     allowed.iter().any(|prefix| target.starts_with(Path::new(prefix)))
 }
 
-/// Everything a program wrote, gathered from the capture channel.
 struct RunOutput {
     records: Vec<StructuredRecord>,
     stdout: Vec<u8>,
@@ -762,7 +754,6 @@ struct OutputSummary {
     spill_uri: Option<String>,
 }
 
-/// Applies stream rules, the byte budget, spilling and redaction to `out` and sends it as stream chunks.
 async fn send_output<W: AsyncWrite + Unpin>(
     writer: &mut W,
     id: &Option<serde_json::Value>,

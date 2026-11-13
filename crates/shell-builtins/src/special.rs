@@ -5,8 +5,6 @@ use shell_syntax::SimpleCommand;
 
 use crate::sink::Sink;
 
-/// Waits for a foreground group and settles the job table: a stopped group lands in it,
-/// a finished one leaves it. Returns the pipeline status.
 pub(crate) fn finish_foreground(
     session: &mut Session,
     sink: &Sink,
@@ -45,8 +43,6 @@ fn job_index(session: &Session, arg: Option<&String>, default: Option<usize>) ->
     }
 }
 
-/// Shell-state commands. They only make sense as the sole command of a list item, so they are
-/// never stages of a pipeline. `None` means `simple` is not one of them.
 pub(crate) fn run_special(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
     let args: Vec<String> = simple
         .words

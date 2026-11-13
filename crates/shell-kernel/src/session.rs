@@ -16,7 +16,6 @@ use crate::cow::CowWorkspace;
 use crate::env::SessionEnv;
 use crate::kill::KillSwitch;
 
-/// Reapplies the permission bits a rolled-back path had.
 fn restore_mode(path: &Path, mode: u32) -> Result<(), StructuredDiagnostic> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .map_err(|e| StructuredDiagnostic::from_io("E_ROLLBACK", &e, None))
@@ -51,7 +50,6 @@ pub struct SessionSnapshot {
     pub mutated_files: Vec<String>,
 }
 
-/// State of a path before a transaction touched it.
 #[derive(Debug, Clone)]
 pub enum Preimage {
     Absent,
@@ -67,7 +65,6 @@ pub struct TxRecord {
     pub id: String,
     pub command: String,
     pub preimages: Vec<(PathBuf, Preimage)>,
-    /// A command that changed the filesystem after this record in a way the ledger cannot reverse.
     pub opaque_after: Option<String>,
     index: HashMap<PathBuf, usize>,
     captured_bytes: usize,
@@ -80,7 +77,6 @@ pub struct Session {
     pub interactive: bool,
     pub shell_pgid: Pid,
     pub saved_termios: Mutex<Option<Termios>>,
-    /// The shell's own terminal, kept open past fd 0 redirections so job control can reach it.
     pub tty: Option<OwnedFd>,
     pub jobs: Vec<Job>,
     pub next_job_id: usize,
@@ -95,7 +91,6 @@ pub struct Session {
     pub ephemeral: bool,
     pub parent_id: Option<String>,
     pub kill: KillSwitch,
-    /// Stable identity for per-session worker and database pools; unlike an address it survives moves.
     pub uid: u64,
 }
 
@@ -274,7 +269,6 @@ impl Session {
         id
     }
 
-    /// Records the state of `path` itself (not its children) before a mutation.
     pub fn record_preimage(&mut self, path: &Path) -> bool {
         match self.capture_one(path) {
             Ok(_) => true,
@@ -285,8 +279,6 @@ impl Session {
         }
     }
 
-    /// Records `path` and everything below it, parents before children.
-    /// Returns false (and marks the tx opaque) when the tree cannot be captured in full.
     pub fn record_tree(&mut self, path: &Path) -> bool {
         let mut pending = vec![path.to_path_buf()];
         while let Some(next) = pending.pop() {
@@ -321,7 +313,6 @@ impl Session {
         true
     }
 
-    /// Ok(true) when `path` is a directory whose children still need capturing.
     fn capture_one(&mut self, path: &Path) -> Result<bool, String> {
         let Some(tx) = self.tx_log.last_mut() else {
             return Ok(false);
@@ -368,8 +359,7 @@ impl Session {
         Ok(descend)
     }
 
-    /// Like `record_preimage` for a path a command writes to. Character devices and FIFOs hold no
-    /// state to restore, so writing to them (`> /dev/null`) is neither captured nor a reason to refuse `undo`.
+    /// Character devices and FIFOs hold no state to restore, so writing to them never blocks `undo`.
     pub fn record_output_target(&mut self, path: &Path) -> bool {
         let stateless = std::fs::metadata(path).is_ok_and(|m| {
             let kind = m.file_type();
@@ -387,7 +377,6 @@ impl Session {
         self.mark_opaque(format!("{command}: {reason}"));
     }
 
-    /// Notes that something ran after the top record's changes that undo cannot reverse.
     pub fn mark_opaque(&mut self, what: String) {
         if let Some(tx) = self.tx_log.last_mut()
             && tx.opaque_after.is_none()
@@ -419,8 +408,7 @@ impl Session {
                 )
             })?;
         let drained: Vec<TxRecord> = self.tx_log.drain(pos..).collect();
-        // Rolling back does not undo what an external did after these records, so the
-        // marker must keep guarding whatever record is on top now.
+        // Rollback does not undo what an external did after these records, so the marker keeps guarding the new top.
         if let Some(what) = drained.iter().rev().find_map(|t| t.opaque_after.clone()) {
             self.mark_opaque(what);
         }
@@ -498,7 +486,6 @@ impl Session {
         id
     }
 
-    /// Makes `pgid` the foreground group of the shell's terminal. A no-op without one.
     pub fn give_terminal(&self, pgid: Pid) {
         if let Some(tty) = &self.tty {
             let _ = tcsetpgrp(tty, pgid);

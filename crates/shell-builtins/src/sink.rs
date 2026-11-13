@@ -12,7 +12,6 @@ pub enum Chunk {
     Diag(Box<StructuredDiagnostic>),
 }
 
-/// Where a program's output goes. `Tty` is a frontend that owns fds 0/1/2; `Capture` never touches them.
 pub enum Sink {
     Tty { mode: SurfaceMode },
     Capture(SyncSender<Chunk>),
@@ -23,7 +22,6 @@ impl Sink {
         matches!(self, Sink::Capture(_))
     }
 
-    /// Forwards a chunk produced by a reader thread; only meaningful for capture sinks.
     pub(crate) fn chunk(&self, chunk: Chunk) {
         if let Sink::Capture(tx) = self {
             let _ = tx.send(chunk);
@@ -90,7 +88,6 @@ impl Sink {
     }
 }
 
-/// Exit status a builtin failure maps to.
 pub fn diag_status(diag: &StructuredDiagnostic) -> i32 {
     match diag.code.as_str() {
         "E_ARGS" => 2,
