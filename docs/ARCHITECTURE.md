@@ -40,6 +40,7 @@ The last stage hands its value to the `Sink`.
 External stages are launched in one process group and joined to their neighbours with pipes.
 Output goes to the `Sink`, either the terminal or an RPC channel.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
+A builtin can also report failures that did not stop it; see Operand failures.
 
 ## Registry
 
@@ -52,7 +53,7 @@ Everything else is derived from the signature.
 - The executor classifies stages with `lookup` and reads `placement`, `tx`, and `reads_input`.
 - `help`, `discover`, and the RPC `session.schemas` method iterate `catalog()`.
   The catalog is the registry without `SoleStage` commands, which are shell control rather than tools.
-- Completion and highlighting use `lookup` and the signature's flags and columns.
+- Completion and highlighting use `lookup` and the signature's flag spellings and columns.
 
 Invariants:
 
@@ -60,6 +61,23 @@ Invariants:
 - `catalog()` order is the order of `REGISTRY`. `discover` breaks score ties by that order.
 - A `SoleStage` command implements `run_alone` and never runs as a pipeline stage.
 - Builtins take `&mut Session`. They do no terminal I/O except through the `Value` they return, apart from `SoleStage` commands, which get the `Sink`.
+
+## Arguments
+
+`Signature::flags` is a list of `Flag`s: a short name, a long name, whether it takes a value, and a help line.
+`args::Args::parse` is the only parser. It follows POSIX utility syntax plus GNU long options:
+short clusters (`-rf`), `-n5` and `-n 5`, exact long names (`--force`, never a prefix or a substring), `--long=value`, `--` to end options, and a lone `-` as an operand.
+An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to exit status 2, before the command touches anything.
+`Flag::predicate` declares a single-dash long option (`find -name`) and `Flag::numeric` lets `-5` stand for the flag's value (`head -5`, `kill -9`).
+`Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
+`help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
+
+## Operand failures
+
+A command that takes many operands (`rm`, `cp`, `mv`, `mkdir`, `cat`, `head`, `tail`, `stat`, `ls`, `grep`, `kill`) does not stop at the first failure.
+It calls `Session::report` for each operand that failed and carries on.
+After the command returns, the executor prints every report to the sink's stderr and turns the stage status into 1.
+A usage error is different: it is returned as `Err`, so it is fatal and exits 2 before any operand is processed.
 
 ## Tx ledger
 
@@ -79,5 +97,6 @@ It marks the newest entry `opaque_after`. `undo` then refuses, and `rollback <id
 
 Nothing else changes.
 Help, discovery, schemas, completion, highlighting, tx handling, and stdin handling follow from the signature.
-Put code shared by several commands in `builtins/common.rs`.
+Put code shared by several commands in `builtins/common.rs`, or in a module of its own when it serves a few of them (`fs_ops.rs` for `rm`, `cp`, `mv`; `slice.rs` for `head`, `tail`).
+Declare every option as a `Flag` in the signature and read it through `Args::parse`. Do not write a flag loop.
 Override `Builtin::reads_input` when the command reads stdin only without file operands.
