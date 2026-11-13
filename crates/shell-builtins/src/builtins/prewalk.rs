@@ -1,7 +1,7 @@
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Prewalk;
 
@@ -9,7 +9,10 @@ static SIGNATURE: Signature = Signature {
     name: "prewalk",
     aliases: &[],
     description: "Emit token-budgeted structural repository skeleton",
-    flags: &["--budget"],
+    flags: &[
+        Flag::long_valued("budget", "token budget for the skeleton"),
+        Flag::long_switch("deep", "include nested items"),
+    ],
     columns: &["file", "rank", "tokens", "skeleton"],
     input: InputMode::None,
     placement: Placement::Any,
@@ -27,6 +30,6 @@ impl Builtin for Prewalk {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        crate::code_intel::run_prewalk(session, args)
+        crate::code_intel::run_prewalk(session, &SIGNATURE, args)
     }
 }

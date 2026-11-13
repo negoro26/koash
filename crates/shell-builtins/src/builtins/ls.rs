@@ -7,7 +7,9 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
 use super::common::{format_unix_iso, resolve_path};
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use super::fs_ops::{describe, fail};
+use crate::args::Args;
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Ls;
 
@@ -15,7 +17,18 @@ static SIGNATURE: Signature = Signature {
     name: "ls",
     aliases: &[],
     description: "List directory entries as structured records",
-    flags: &["-a", "-l"],
+    flags: &[
+        Flag::switch('a', "all", "include entries whose name starts with a dot"),
+        Flag::switch(
+            'A',
+            "almost-all",
+            "same as -a; `.` and `..` are never listed",
+        ),
+        Flag::short_switch(
+            'l',
+            "long listing; every record already carries size, time, and mode",
+        ),
+    ],
     columns: &["name", "ext", "kind", "size", "modified", "permissions"],
     input: InputMode::None,
     placement: Placement::Any,
@@ -27,60 +40,38 @@ impl Builtin for Ls {
         &SIGNATURE
     }
 
+    /// A directory operand is listed, and so is a symlink that points at one (uutils ls.rs:848-851,
+    /// `DirArgs`). Every operand is attempted; an unreadable one is reported, not dropped.
     fn run(
         &self,
         session: &mut Session,
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        let mut show_all = false;
-        let mut targets: Vec<&str> = Vec::new();
-        let mut parse_flags = true;
-
-        for arg in args {
-            if parse_flags && arg == "--" {
-                parse_flags = false;
-            } else if parse_flags && arg.starts_with('-') && arg.len() > 1 {
-                if arg.contains('a') {
-                    show_all = true;
-                }
-            } else {
-                targets.push(arg.as_str());
-            }
-        }
-
-        if targets.is_empty() {
-            targets.push(".");
-        }
+        let args = Args::parse(&SIGNATURE, args)?;
+        let show_all = args.has("all") || args.has("almost-all");
+        let targets: Vec<&str> = if args.operands.is_empty() {
+            vec!["."]
+        } else {
+            args.operands.clone()
+        };
 
         let mut records = Vec::new();
         for target in targets {
-            let resolved = if target == "." {
-                session.cwd.clone()
-            } else {
-                resolve_path(session, target)
-            };
-            let meta = std::fs::symlink_metadata(&resolved)
-                .map_err(|e| StructuredDiagnostic::from_io("E_LS", &e, None))?;
-            if !meta.is_dir() {
-                records.push(build_ls_record(target.to_string(), &resolved, &meta));
+            let resolved = resolve_path(session, target);
+            if std::fs::metadata(&resolved).is_ok_and(|m| m.is_dir()) {
+                list_dir(session, &resolved, target, show_all, &mut records);
                 continue;
             }
-
-            let entries = std::fs::read_dir(&resolved)
-                .map_err(|e| StructuredDiagnostic::from_io("E_LS", &e, None))?;
-            for entry_res in entries {
-                let Ok(entry) = entry_res else {
-                    continue;
-                };
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !show_all && name.starts_with('.') {
-                    continue;
+            match std::fs::symlink_metadata(&resolved) {
+                Ok(meta) => records.push(build_ls_record(target.to_string(), &resolved, &meta)),
+                Err(e) => {
+                    fail(
+                        session,
+                        "E_LS",
+                        format!("cannot access '{target}': {}", describe(&e)),
+                    );
                 }
-                let Ok(entry_meta) = entry.metadata() else {
-                    continue;
-                };
-                records.push(build_ls_record(name, &entry.path(), &entry_meta));
             }
         }
 
@@ -91,6 +82,53 @@ impl Builtin for Ls {
         });
 
         Ok(Value::from_records(records))
+    }
+}
+
+fn list_dir(
+    session: &mut Session,
+    dir: &Path,
+    label: &str,
+    show_all: bool,
+    records: &mut Vec<StructuredRecord>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            fail(
+                session,
+                "E_LS",
+                format!("cannot open directory '{label}': {}", describe(&e)),
+            );
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                fail(
+                    session,
+                    "E_LS",
+                    format!("cannot read directory '{label}': {}", describe(&e)),
+                );
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !show_all && name.starts_with('.') {
+            continue;
+        }
+        match entry.metadata() {
+            Ok(meta) => records.push(build_ls_record(name, &entry.path(), &meta)),
+            Err(e) => {
+                fail(
+                    session,
+                    "E_LS",
+                    format!("cannot access '{label}/{name}': {}", describe(&e)),
+                );
+            }
+        }
     }
 }
 

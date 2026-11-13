@@ -5,7 +5,8 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
 use super::catalog;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::args::Args;
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy, flag_spellings};
 
 pub(super) struct Discover;
 
@@ -13,7 +14,7 @@ static SIGNATURE: Signature = Signature {
     name: "discover",
     aliases: &[],
     description: "BM25 progressive command discovery by natural language intent",
-    flags: &["--limit"],
+    flags: &[Flag::long_valued("limit", "how many commands to return")],
     columns: &["command", "score", "description", "flags", "columns"],
     input: InputMode::None,
     placement: Placement::Any,
@@ -31,22 +32,11 @@ impl Builtin for Discover {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        let mut limit: usize = 3;
-        let mut query_parts = Vec::new();
-        let mut iter = args.iter();
-
-        while let Some(arg) = iter.next() {
-            if arg == "--limit"
-                && let Some(val) = iter.next()
-                && let Ok(n) = val.parse::<usize>()
-            {
-                limit = n.max(1);
-            } else if !arg.starts_with('-') {
-                query_parts.push(arg.as_str());
-            }
-        }
-
-        let query = query_parts.join(" ");
+        let args = Args::parse(&SIGNATURE, args)?;
+        let limit = args
+            .number::<usize>(&SIGNATURE, "limit")?
+            .map_or(3, |n| n.max(1));
+        let query = args.operands.join(" ");
         let q_terms = tokenize_terms(&query);
         if q_terms.is_empty() {
             return Err(StructuredDiagnostic::new(
@@ -63,8 +53,10 @@ impl Builtin for Discover {
             .map(|s| {
                 let mut text = format!("{} {}", s.name, s.description);
                 for f in s.flags {
-                    text.push(' ');
-                    text.push_str(f);
+                    for spelling in f.spellings() {
+                        text.push(' ');
+                        text.push_str(&spelling);
+                    }
                 }
                 for c in s.columns {
                     text.push(' ');
@@ -123,7 +115,10 @@ impl Builtin for Discover {
                     "description".to_string(),
                     JsonVal::String(s.description.to_string()),
                 );
-                rec.insert("flags".to_string(), JsonVal::String(s.flags.join(" ")));
+                rec.insert(
+                    "flags".to_string(),
+                    JsonVal::String(flag_spellings(s.flags).join(" ")),
+                );
                 rec.insert("columns".to_string(), JsonVal::String(s.columns.join(", ")));
                 rec
             })
