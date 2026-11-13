@@ -5,7 +5,7 @@ use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
 use shell_syntax::{Command, ListOp, Pipeline, Program, Redirection, RedirectKind};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
-use crate::builtins::run_builtin;
+use crate::builtins::{reads_stdin, run_builtin};
 use crate::schema::is_builtin;
 use crate::sink::{Sink, diag_status};
 use crate::special::{finish_foreground, run_special};
@@ -307,6 +307,12 @@ fn take_builtin_input(
         return Ok(Value::Bytes(bytes));
     }
     match flowed {
+        Flow::None if reads_shell_stdin(stage, plan) => {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut bytes)
+                .map_err(|e| StructuredDiagnostic::from_io("E_STDIN", &e, None))?;
+            Ok(Value::Bytes(bytes))
+        }
         Flow::None => Ok(Value::Empty),
         Flow::Value(value) => Ok(value),
         Flow::Pipe(fd) => match launched.pgid {
@@ -316,6 +322,14 @@ fn take_builtin_input(
         .map(Value::Bytes)
         .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
     }
+}
+
+/// A first-stage builtin that consumes input reads the shell's stdin when a frontend owns it and
+/// it is not a terminal, so `echo data | koa -c 'cat | tr a-z A-Z'` behaves like sh.
+fn reads_shell_stdin(stage: &Stage, plan: &Plan) -> bool {
+    !plan.sink.is_capture()
+        && !nix::unistd::isatty(0).unwrap_or(true)
+        && reads_stdin(&stage.argv[0], &stage.argv[1..])
 }
 
 /// A last-stage builtin keeps `>` and `>>`: the value is written to the file with its preimage

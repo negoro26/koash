@@ -804,3 +804,48 @@ fn workers_follow_the_session_cwd_and_see_eof_on_stdin() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("EOFError"));
 }
+
+fn koa_c_with_stdin(cwd: &Path, script: &str, stdin: &[u8], hold_open: bool) -> Option<Output> {
+    let mut child = Command::new(KOA)
+        .arg("-c")
+        .arg(script)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn koa");
+    let mut pipe = child.stdin.take().expect("koa stdin");
+    let bytes = stdin.to_vec();
+    std::thread::spawn(move || {
+        let _ = pipe.write_all(&bytes);
+        if hold_open {
+            std::thread::sleep(Duration::from_secs(20));
+        }
+    });
+    wait_with_deadline(child, Duration::from_secs(10))
+}
+
+#[test]
+fn first_stage_builtin_reads_the_shells_stdin() {
+    let dir = scratch_dir("builtin-stdin");
+    let out = koa_c_with_stdin(&dir, "cat | /usr/bin/tr a-z A-Z", b"data\n", false)
+        .expect("koa -c finishes");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "DATA\n");
+
+    let out = koa_c_with_stdin(&dir, "from json | where a > 1", br#"[{"a":1},{"a":2}]"#, false)
+        .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains('2') && !stdout.contains("\n1"), "stdout: {stdout}");
+}
+
+#[test]
+fn file_operands_never_touch_the_shells_stdin() {
+    let dir = scratch_dir("builtin-file-operand");
+    std::fs::write(dir.join("a.txt"), "alpha\n").expect("write a.txt");
+    let start = Instant::now();
+    let out = koa_c_with_stdin(&dir, "cat a.txt | first 1", b"", true)
+        .expect("an open, silent stdin must not block `cat a.txt`");
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("alpha"));
+}

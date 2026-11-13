@@ -84,6 +84,11 @@ pub fn run_builtin(
     }
 }
 
+/// Whether this call, with nothing piped in, should read the shell's own stdin.
+pub(crate) fn reads_stdin(name: &str, args: &[String]) -> bool {
+    crate::schema::get_schema(name).is_some_and(|s| s.reads_input) && !text::names_files(name, args)
+}
+
 pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
     let p = Path::new(raw);
     if p.is_absolute() {

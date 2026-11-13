@@ -35,11 +35,7 @@ pub(crate) fn echo(args: &[String]) -> Result<Value, StructuredDiagnostic> {
     Ok(Value::from_bytes(out))
 }
 
-pub(crate) fn cat(
-    session: &Session,
-    args: &[String],
-    input: Value,
-) -> Result<Value, StructuredDiagnostic> {
+fn cat_operands(args: &[String]) -> (bool, Vec<&String>) {
     let mut raw = false;
     let mut paths = Vec::new();
     let mut parse_flags = true;
@@ -55,6 +51,25 @@ pub(crate) fn cat(
             paths.push(arg);
         }
     }
+    (raw, paths)
+}
+
+/// True when the call names files (or a tree to walk), so it never reads its input.
+pub(crate) fn names_files(name: &str, args: &[String]) -> bool {
+    match name {
+        "cat" => !cat_operands(args).1.is_empty(),
+        "head" | "tail" => !parse_slice_args(args, 10).2.is_empty(),
+        "grep" => parse_grep_opts(args).is_ok_and(|o| o.positional.len() > 1 || o.recursive),
+        _ => false,
+    }
+}
+
+pub(crate) fn cat(
+    session: &Session,
+    args: &[String],
+    input: Value,
+) -> Result<Value, StructuredDiagnostic> {
+    let (raw, paths) = cat_operands(args);
     if paths.is_empty() {
         return Ok(input);
     }
