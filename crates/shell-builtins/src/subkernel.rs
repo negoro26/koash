@@ -94,7 +94,7 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
         let mut stmt = conn
             .prepare_cached(trimmed)
             .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;
-        let col_names: Vec<String> = stmt.column_names().iter().map(|s| (*s).to_string()).collect();
+        let col_names: Vec<String> = stmt.column_names().map(str::to_string).collect();
         let mut rows = stmt
             .query([])
             .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;

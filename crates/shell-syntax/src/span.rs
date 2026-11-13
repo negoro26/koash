@@ -25,7 +25,7 @@ impl Span {
         }
     }
 
-    pub fn slice<'a>(self, src: &'a str) -> &'a str {
+    pub fn slice(self, src: &str) -> &str {
         src.get(self.start..self.end).unwrap_or("")
     }
 }

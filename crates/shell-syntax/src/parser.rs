@@ -211,10 +211,7 @@ impl<'a> Parser<'a> {
         let mut redirections = Vec::new();
         let mut overall_span: Option<Span> = None;
 
-        loop {
-            let Some(tok) = self.peek() else {
-                break;
-            };
+        while let Some(tok) = self.peek() {
             let tok_span = tok.span;
             match &tok.kind {
                 TokenKind::Word(word) => {

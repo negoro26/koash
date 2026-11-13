@@ -227,12 +227,7 @@ impl RecordBatch {
     }
 
     pub fn nrows(&self) -> usize {
-        let ncols = self.columns.len();
-        if ncols == 0 {
-            0
-        } else {
-            self.cells.len() / ncols
-        }
+        self.cells.len().checked_div(self.columns.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
