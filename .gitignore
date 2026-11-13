@@ -3,3 +3,4 @@
 /HANDOFF.md
 *.swp
 .DS_Store
+perf.data*
