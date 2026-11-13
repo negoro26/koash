@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use shell_builtins::{BUILTIN_SCHEMAS, get_schema};
+use shell_builtins::{REGISTRY, lookup};
 
 static PATH_EXEC_CACHE: OnceLock<Vec<String>> = OnceLock::new();
 
@@ -54,9 +54,10 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
 
     let cmd_name = words.first().copied().unwrap_or("");
     if current_word.starts_with('-')
-        && let Some(schema) = get_schema(cmd_name)
+        && let Some(builtin) = lookup(cmd_name)
     {
-        let mut matches: Vec<String> = schema
+        let mut matches: Vec<String> = builtin
+            .signature()
             .flags
             .iter()
             .filter(|f| f.starts_with(current_word))
@@ -75,9 +76,9 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
             .and_then(|seg| seg.split_whitespace().next());
         let mut cols = Vec::new();
         if let Some(up) = upstream_cmd
-            && let Some(schema) = get_schema(up)
+            && let Some(builtin) = lookup(up)
         {
-            for col in schema.columns {
+            for col in builtin.signature().columns {
                 if col.starts_with(current_word) {
                     cols.push((*col).to_string());
                 }
@@ -95,14 +96,10 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
 
 fn complete_commands(prefix: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for schema in BUILTIN_SCHEMAS {
-        if schema.name.starts_with(prefix) {
-            out.push(schema.name.to_string());
-        }
-    }
-    for extra in ["jobs", "fg", "bg", "exit"] {
-        if extra.starts_with(prefix) {
-            out.push(extra.to_string());
+    for builtin in REGISTRY {
+        let name = builtin.signature().name;
+        if name.starts_with(prefix) {
+            out.push(name.to_string());
         }
     }
     for bin in cached_path_executables() {
