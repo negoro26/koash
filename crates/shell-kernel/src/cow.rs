@@ -85,7 +85,8 @@ impl CowWorkspace {
                 reflink_or_copy(&real, &shadow)
                     .map_err(|e| StructuredDiagnostic::from_io("E_COW_COPY", &e, None))?;
             }
-            self.mutations.insert(rel.to_path_buf(), MutationState::Modified);
+            self.mutations
+                .insert(rel.to_path_buf(), MutationState::Modified);
         }
         Ok(shadow)
     }
@@ -95,7 +96,8 @@ impl CowWorkspace {
         if shadow.is_file() {
             let _ = std::fs::remove_file(&shadow);
         }
-        self.mutations.insert(rel.to_path_buf(), MutationState::Whiteout);
+        self.mutations
+            .insert(rel.to_path_buf(), MutationState::Whiteout);
     }
 
     pub fn diff(&self) -> Vec<(String, &'static str)> {

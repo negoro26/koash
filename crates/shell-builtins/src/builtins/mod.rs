@@ -17,7 +17,12 @@ use crate::discover::run_discover;
 
 pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
     if session.kill.is_killed() {
-        return Err(StructuredDiagnostic::new("E_KILLED", "command killed", None, None));
+        return Err(StructuredDiagnostic::new(
+            "E_KILLED",
+            "command killed",
+            None,
+            None,
+        ));
     }
     Ok(())
 }
@@ -69,11 +74,19 @@ pub fn run_builtin(
         "@sql" => crate::subkernel::run_sql_inprocess(session, &args.join(" ")),
         "@py" => {
             session.mark_opaque("@py".to_string());
-            crate::subkernel::run_worker(session, crate::subkernel::KernelKind::Python, &args.join(" "))
+            crate::subkernel::run_worker(
+                session,
+                crate::subkernel::KernelKind::Python,
+                &args.join(" "),
+            )
         }
         "@js" => {
             session.mark_opaque("@js".to_string());
-            crate::subkernel::run_worker(session, crate::subkernel::KernelKind::JavaScript, &args.join(" "))
+            crate::subkernel::run_worker(
+                session,
+                crate::subkernel::KernelKind::JavaScript,
+                &args.join(" "),
+            )
         }
         _ => Err(StructuredDiagnostic::new(
             "E_UNKNOWN_BUILTIN",
@@ -114,10 +127,8 @@ fn help(args: &[String]) -> Result<Value, StructuredDiagnostic> {
         Cow::Borrowed("description"),
     ]);
     let filter = args.first().map(|s| s.as_str());
-    let mut batch = shell_value::RecordBatch::with_capacity(
-        cols,
-        crate::schema::BUILTIN_SCHEMAS.len(),
-    );
+    let mut batch =
+        shell_value::RecordBatch::with_capacity(cols, crate::schema::BUILTIN_SCHEMAS.len());
     for schema in crate::schema::BUILTIN_SCHEMAS {
         if let Some(q) = filter
             && !schema.name.eq_ignore_ascii_case(q)
@@ -126,10 +137,18 @@ fn help(args: &[String]) -> Result<Value, StructuredDiagnostic> {
         {
             continue;
         }
-        batch.cells.push(shell_value::CellVal::Str(schema.name.to_string()));
-        batch.cells.push(shell_value::CellVal::Str(schema.flags.join(" ")));
-        batch.cells.push(shell_value::CellVal::Str(schema.columns.join(", ")));
-        batch.cells.push(shell_value::CellVal::Str(schema.description.to_string()));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.name.to_string()));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.flags.join(" ")));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.columns.join(", ")));
+        batch
+            .cells
+            .push(shell_value::CellVal::Str(schema.description.to_string()));
     }
     Ok(Value::from_batch(batch))
 }

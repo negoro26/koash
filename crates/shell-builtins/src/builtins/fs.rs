@@ -170,7 +170,9 @@ pub(crate) fn find(session: &Session, args: &[String]) -> Result<Value, Structur
                     let matcher = GlobBuilder::new(pat)
                         .case_insensitive(ci)
                         .build()
-                        .map_err(|e| StructuredDiagnostic::new("E_GLOB", e.to_string(), None, None))?
+                        .map_err(|e| {
+                            StructuredDiagnostic::new("E_GLOB", e.to_string(), None, None)
+                        })?
                         .compile_matcher();
                     name_matcher = Some(matcher);
                 }

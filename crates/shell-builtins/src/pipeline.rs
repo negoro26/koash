@@ -2,7 +2,7 @@ use std::io::Write;
 
 use nix::unistd::Pid;
 use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
-use shell_syntax::{Command, ListOp, Pipeline, Program, Redirection, RedirectKind};
+use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
 use crate::builtins::{reads_stdin, run_builtin};
@@ -277,7 +277,15 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         return (final_status.unwrap_or(0), tracked);
     }
     let watch = last_is_launched.then_some(launched.last_pid).flatten();
-    let waited = finish_foreground(session, plan.sink, pgid, &launched.pids, watch, &summary, None);
+    let waited = finish_foreground(
+        session,
+        plan.sink,
+        pgid,
+        &launched.pids,
+        watch,
+        &summary,
+        None,
+    );
     (final_status.unwrap_or(waited), tracked)
 }
 
@@ -331,7 +339,10 @@ fn finish_builtin_output(
 ) -> Result<Value, StructuredDiagnostic> {
     let mut current = value;
     for redir in stage.redirs {
-        if !matches!(redir.kind, RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend) {
+        if !matches!(
+            redir.kind,
+            RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend
+        ) {
             continue;
         }
         let Some(target) = &redir.target else {

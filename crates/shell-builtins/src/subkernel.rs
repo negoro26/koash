@@ -135,7 +135,10 @@ pub fn run_worker(
     code: &str,
 ) -> Result<Value, StructuredDiagnostic> {
     let key = (session.uid, kind);
-    let pooled = WORKERS.lock().map_err(|_| pool_error("worker"))?.remove(&key);
+    let pooled = WORKERS
+        .lock()
+        .map_err(|_| pool_error("worker"))?
+        .remove(&key);
     let mut worker = match pooled {
         Some(w) => w,
         None => spawn_worker(kind)?,
@@ -151,7 +154,10 @@ pub fn run_worker(
 
     match reply {
         Ok(Reply::Done(output)) => {
-            WORKERS.lock().map_err(|_| pool_error("worker"))?.insert(key, worker);
+            WORKERS
+                .lock()
+                .map_err(|_| pool_error("worker"))?
+                .insert(key, worker);
             Ok(if output.is_empty() {
                 Value::Empty
             } else {
@@ -159,17 +165,30 @@ pub fn run_worker(
             })
         }
         Ok(Reply::Raised(text)) => {
-            WORKERS.lock().map_err(|_| pool_error("worker"))?.insert(key, worker);
+            WORKERS
+                .lock()
+                .map_err(|_| pool_error("worker"))?
+                .insert(key, worker);
             Err(StructuredDiagnostic::new(kind.code(), text, None, None))
         }
         Err(diag) => {
             let _ = worker.child.kill();
             let status = worker.child.wait();
             if session.kill.is_killed() {
-                return Err(StructuredDiagnostic::new("E_KILLED", "command killed", None, None));
+                return Err(StructuredDiagnostic::new(
+                    "E_KILLED",
+                    "command killed",
+                    None,
+                    None,
+                ));
             }
             if status.is_ok_and(|s| s.signal() == Some(libc::SIGINT)) {
-                return Err(StructuredDiagnostic::new(kind.code(), "interrupted", None, None));
+                return Err(StructuredDiagnostic::new(
+                    kind.code(),
+                    "interrupted",
+                    None,
+                    None,
+                ));
             }
             Err(diag)
         }

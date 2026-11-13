@@ -82,7 +82,9 @@ impl RpcClient {
         let start = Instant::now();
         let mut out = Vec::new();
         while let Some(left) = deadline.checked_sub(start.elapsed()) {
-            let Ok(line) = self.lines.recv_timeout(left) else { break };
+            let Ok(line) = self.lines.recv_timeout(left) else {
+                break;
+            };
             let done = serde_json::from_str::<serde_json::Value>(&line).is_ok_and(|v| {
                 v["id"] == id && (v["event"] == "completed" || v.get("error").is_some())
             });
@@ -160,7 +162,10 @@ fn rpc_timeout_kills_a_long_external_command() {
         elapsed < Duration::from_secs(3),
         "timeout_ms=200 must stop `sleep 5`, took {elapsed:?}"
     );
-    assert_eq!(completed["exit_code"], 124, "timed-out exec reports exit 124: {completed}");
+    assert_eq!(
+        completed["exit_code"], 124,
+        "timed-out exec reports exit 124: {completed}"
+    );
 }
 
 #[test]
@@ -168,20 +173,38 @@ fn builtin_to_external_to_builtin_pipeline_streams_large_input() {
     let dir = scratch_dir("deadlock");
     let body: String = (1..=50_000).map(|n| format!("{n}\n")).collect();
     std::fs::write(dir.join("big.txt"), body).expect("write big.txt");
-    let out = koa_c(&dir, "cat big.txt | /bin/cat | first 1", Duration::from_secs(10))
-        .expect("pipeline larger than the pipe buffer must not hang");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = koa_c(
+        &dir,
+        "cat big.txt | /bin/cat | first 1",
+        Duration::from_secs(10),
+    )
+    .expect("pipeline larger than the pipe buffer must not hang");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("big.txt"), "first record expected, got: {stdout}");
+    assert!(
+        stdout.contains("big.txt"),
+        "first record expected, got: {stdout}"
+    );
 }
 
 #[test]
 fn builtin_failure_sets_status_and_or_list_recovers() {
     let dir = scratch_dir("or-list");
-    let out = koa_c(&dir, "cat nope.txt || echo recovered", Duration::from_secs(10))
-        .expect("koa -c finishes");
+    let out = koa_c(
+        &dir,
+        "cat nope.txt || echo recovered",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("recovered"), "`||` must run after a failed builtin: {stdout}");
+    assert!(
+        stdout.contains("recovered"),
+        "`||` must run after a failed builtin: {stdout}"
+    );
     assert!(out.status.success(), "status of the last command is 0");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("nope.txt")
@@ -189,24 +212,42 @@ fn builtin_failure_sets_status_and_or_list_recovers() {
         "the builtin failure is still reported on stderr"
     );
 
-    let out = koa_c(&dir, "cat nope.txt; echo status=$?", Duration::from_secs(10))
-        .expect("koa -c finishes");
+    let out = koa_c(
+        &dir,
+        "cat nope.txt; echo status=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("status=1"), "`$?` after a failed builtin is 1: {stdout}");
+    assert!(
+        stdout.contains("status=1"),
+        "`$?` after a failed builtin is 1: {stdout}"
+    );
 }
 
 #[test]
 fn undo_after_builtin_rm_restores_the_file_and_keeps_earlier_work() {
     let dir = scratch_dir("undo-rm");
     std::fs::write(dir.join("pre.txt"), "original\n").expect("write pre.txt");
-    let out = koa_c(&dir, "echo keep > keep.txt; rm pre.txt; undo", Duration::from_secs(10))
-        .expect("koa -c finishes");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = koa_c(
+        &dir,
+        "echo keep > keep.txt; rm pre.txt; undo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("pre.txt")).expect("pre.txt must be restored"),
         "original\n"
     );
-    assert!(dir.join("keep.txt").exists(), "undo must only revert the rm");
+    assert!(
+        dir.join("keep.txt").exists(),
+        "undo must only revert the rm"
+    );
 }
 
 #[test]
@@ -215,7 +256,11 @@ fn undo_after_builtin_rm_r_restores_the_tree() {
     std::fs::create_dir_all(dir.join("d/sub")).expect("create tree");
     std::fs::write(dir.join("d/sub/nested.txt"), "deep\n").expect("write nested");
     let out = koa_c(&dir, "rm -r d; undo", Duration::from_secs(10)).expect("koa -c finishes");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("d/sub/nested.txt")).expect("nested file restored"),
         "deep\n"
@@ -233,8 +278,14 @@ fn undo_refuses_after_external_mutation() {
     )
     .expect("koa -c finishes");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("E_TX_OPAQUE"), "undo must refuse, stderr: {stderr}");
-    assert!(dir.join("keep.txt").exists(), "refused undo must not touch earlier work");
+    assert!(
+        stderr.contains("E_TX_OPAQUE"),
+        "undo must refuse, stderr: {stderr}"
+    );
+    assert!(
+        dir.join("keep.txt").exists(),
+        "refused undo must not touch earlier work"
+    );
 }
 
 #[test]
@@ -257,7 +308,10 @@ fn rpc_policy_blocks_posix_fallback_under_dry_run() {
         lines.iter().any(|l| l.contains("policy_blocked")),
         "dry_run must block an opaque construct: {lines:?}"
     );
-    assert!(dir.join("victim.txt").exists(), "victim.txt must survive a dry_run exec");
+    assert!(
+        dir.join("victim.txt").exists(),
+        "victim.txt must survive a dry_run exec"
+    );
 }
 
 #[test]
@@ -280,7 +334,10 @@ fn undo_skips_the_empty_record_left_by_a_failed_builtin() {
         lines.iter().any(|l| l.contains("tx_001")),
         "undo must revert the echo, not the failed rm: {lines:?}"
     );
-    assert!(!dir.join("k.txt").exists(), "k.txt created by tx_001 must be gone");
+    assert!(
+        !dir.join("k.txt").exists(),
+        "k.txt created by tx_001 must be gone"
+    );
 }
 
 #[test]
@@ -312,10 +369,22 @@ fn rpc_child_cannot_read_the_protocol_stdin() {
 fn sigpipe_terminates_upstream_quietly() {
     let dir = scratch_dir("sigpipe");
     let start = Instant::now();
-    let out = koa_c(&dir, "/usr/bin/yes | /usr/bin/head -n 1", Duration::from_secs(10))
-        .expect("yes | head must terminate");
-    assert!(start.elapsed() < Duration::from_secs(5), "took {:?}", start.elapsed());
-    assert!(out.status.success(), "status of head is 0: {:?}", out.status);
+    let out = koa_c(
+        &dir,
+        "/usr/bin/yes | /usr/bin/head -n 1",
+        Duration::from_secs(10),
+    )
+    .expect("yes | head must terminate");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        out.status.success(),
+        "status of head is 0: {:?}",
+        out.status
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "y\n");
     assert!(
         !String::from_utf8_lossy(&out.stderr).contains("Broken pipe"),
@@ -327,8 +396,8 @@ fn sigpipe_terminates_upstream_quietly() {
 #[test]
 fn unknown_command_is_127() {
     let dir = scratch_dir("unknown-cmd");
-    let out = koa_c(&dir, "definitely-not-a-cmd-xyz", Duration::from_secs(10))
-        .expect("koa -c finishes");
+    let out =
+        koa_c(&dir, "definitely-not-a-cmd-xyz", Duration::from_secs(10)).expect("koa -c finishes");
     assert_eq!(out.status.code(), Some(127));
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("definitely-not-a-cmd-xyz"),
@@ -341,9 +410,17 @@ fn unknown_command_is_127() {
 fn structured_pipeline_still_works() {
     let dir = scratch_dir("structured");
     std::fs::write(dir.join("only.txt"), "x\n").expect("write only.txt");
-    let out = koa_c(&dir, "ls | where kind == file | first 1", Duration::from_secs(10))
-        .expect("koa -c finishes");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = koa_c(
+        &dir,
+        "ls | where kind == file | first 1",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("only.txt"),
         "stdout: {}",
@@ -381,7 +458,10 @@ fn rpc_busy_session_after_unfinished_timeout() {
         if lines.iter().any(|l| l.contains("back")) {
             break;
         }
-        assert!(Instant::now() < deadline, "session never became ready: {lines:?}");
+        assert!(
+            Instant::now() < deadline,
+            "session never became ready: {lines:?}"
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
 }
@@ -486,11 +566,17 @@ fn rpc_client_hangup_after_exec_does_not_leave_the_session_busy() {
     let send = |writer: &mut UnixStream, request: serde_json::Value| {
         writeln!(writer, "{request}").expect("send request");
     };
-    send(&mut writer, serde_json::json!({"id": 1, "method": "session.create"}));
+    send(
+        &mut writer,
+        serde_json::json!({"id": 1, "method": "session.create"}),
+    );
     let created = socket_lines_until_final(&mut reader, 1);
     let created: serde_json::Value =
         serde_json::from_str(created.last().expect("session.create reply")).expect("json");
-    let sid = created["result"]["session_id"].as_str().expect("session id").to_string();
+    let sid = created["result"]["session_id"]
+        .as_str()
+        .expect("session id")
+        .to_string();
     send(
         &mut writer,
         serde_json::json!({"id": 2, "method": "exec", "params": {"session_id": sid, "command": "echo warmup"}}),
@@ -566,7 +652,11 @@ fn undo_restores_permission_bits() {
         Duration::from_secs(10),
     )
     .expect("koa -c finishes");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(mode_of(&dir.join("script.sh")), 0o755);
     assert_eq!(mode_of(&dir.join("private")), 0o600);
     assert_eq!(mode_of(&dir.join("tree")), 0o750);
@@ -589,7 +679,10 @@ fn writing_to_dev_null_does_not_block_undo() {
         "undo must succeed: {stdout} / {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(std::fs::read_to_string(dir.join("f1")).expect("read f1"), "orig\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f1")).expect("read f1"),
+        "orig\n"
+    );
 }
 
 #[test]
@@ -600,7 +693,10 @@ fn rollback_keeps_guarding_against_an_earlier_external_mutation() {
                   undo; rollback tx_002; undo; echo st=$?";
     let out = koa_c(&dir, script, Duration::from_secs(10)).expect("koa -c finishes");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("st=1"), "the second undo must refuse: {stdout}");
+    assert!(
+        stdout.contains("st=1"),
+        "the second undo must refuse: {stdout}"
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
     assert_eq!(
         std::fs::read_to_string(dir.join("f1")).expect("read f1"),
@@ -619,7 +715,11 @@ fn failed_spawn_does_not_block_undo() {
     )
     .expect("koa -c finishes");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("st=0"), "{stdout} / {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stdout.contains("st=0"),
+        "{stdout} / {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(!dir.join("f1").exists(), "undo must revert the echo");
 }
 
@@ -629,7 +729,11 @@ fn processes_with_cmdline(needle: &str) -> Vec<u32> {
         return found;
     };
     for entry in entries.flatten() {
-        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
             continue;
         };
         let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
@@ -662,9 +766,17 @@ fn rpc_timeout_kills_group_members_that_outlive_the_direct_child() {
         lines.iter().any(|l| l.contains("\"exit_code\":124")),
         "timeout reports 124: {lines:?}"
     );
-    assert!(start.elapsed() < Duration::from_secs(5), "took {:?}", start.elapsed());
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        start.elapsed()
+    );
     let next = exec_lines(&mut rpc, &sid, 3, "echo next", None);
-    assert_eq!(stdout_of(&next), "next\n", "the session must be free again: {next:?}");
+    assert_eq!(
+        stdout_of(&next),
+        "next\n",
+        "the session must be free again: {next:?}"
+    );
     assert!(
         processes_with_cmdline(&format!("sleep {marker}")).is_empty(),
         "the leftover group member must be killed"
@@ -730,7 +842,10 @@ fn child_pids(pid: u32) -> Vec<u32> {
     };
     for task in tasks.flatten() {
         if let Ok(list) = std::fs::read_to_string(task.path().join("children")) {
-            children.extend(list.split_whitespace().filter_map(|s| s.parse::<u32>().ok()));
+            children.extend(
+                list.split_whitespace()
+                    .filter_map(|s| s.parse::<u32>().ok()),
+            );
         }
     }
     children
@@ -766,14 +881,20 @@ fn python_worker_dies_with_koa() {
         if let Some(&pid) = child_pids(koa.id()).first() {
             break pid;
         }
-        assert!(start.elapsed() < Duration::from_secs(5), "worker never started");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "worker never started"
+        );
         std::thread::sleep(Duration::from_millis(20));
     };
     koa.kill().expect("kill koa");
     let _ = koa.wait();
     let start = Instant::now();
     while !is_gone(worker) {
-        assert!(start.elapsed() < Duration::from_secs(3), "worker {worker} outlived koa");
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "worker {worker} outlived koa"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -800,8 +921,12 @@ fn workers_follow_the_session_cwd_and_see_eof_on_stdin() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let out = koa_c(&dir, "@py 'x = input()'; echo st=$?", Duration::from_secs(5))
-        .expect("input() must see EOF instead of hanging");
+    let out = koa_c(
+        &dir,
+        "@py 'x = input()'; echo st=$?",
+        Duration::from_secs(5),
+    )
+    .expect("input() must see EOF instead of hanging");
     assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("EOFError"));
 }
@@ -834,10 +959,18 @@ fn first_stage_builtin_reads_the_shells_stdin() {
         .expect("koa -c finishes");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "DATA\n");
 
-    let out = koa_c_with_stdin(&dir, "from json | where a > 1", br#"[{"a":1},{"a":2}]"#, false)
-        .expect("koa -c finishes");
+    let out = koa_c_with_stdin(
+        &dir,
+        "from json | where a > 1",
+        br#"[{"a":1},{"a":2}]"#,
+        false,
+    )
+    .expect("koa -c finishes");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains('2') && !stdout.contains("\n1"), "stdout: {stdout}");
+    assert!(
+        stdout.contains('2') && !stdout.contains("\n1"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]

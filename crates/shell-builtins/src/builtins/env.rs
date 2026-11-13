@@ -25,10 +25,7 @@ pub(crate) fn cd(session: &mut Session, args: &[String]) -> Result<Value, Struct
         },
         Some(path) => resolve_path(session, path),
         None => {
-            let home = session
-                .env
-                .get("HOME")
-                .unwrap_or_else(|| "/".to_string());
+            let home = session.env.get("HOME").unwrap_or_else(|| "/".to_string());
             PathBuf::from(home)
         }
     };
@@ -60,7 +57,10 @@ pub(crate) fn pwd(session: &Session) -> Result<Value, StructuredDiagnostic> {
     Ok(Value::from_records(vec![rec]))
 }
 
-pub(crate) fn export(session: &mut Session, args: &[String]) -> Result<Value, StructuredDiagnostic> {
+pub(crate) fn export(
+    session: &mut Session,
+    args: &[String],
+) -> Result<Value, StructuredDiagnostic> {
     for arg in args {
         if let Some((k, v)) = arg.split_once('=') {
             session.env.insert(k.to_string(), v.to_string());

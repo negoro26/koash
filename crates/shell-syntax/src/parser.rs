@@ -302,10 +302,8 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::RedirectBothOut => {
                     self.advance();
-                    let redir = self.parse_redir_with_target(
-                        RedirectKind::StdoutAndStderrTrunc,
-                        tok_span,
-                    )?;
+                    let redir =
+                        self.parse_redir_with_target(RedirectKind::StdoutAndStderrTrunc, tok_span)?;
                     overall_span = Some(match overall_span {
                         Some(s) => s.merge(redir.span),
                         None => redir.span,
@@ -390,10 +388,10 @@ impl<'a> Parser<'a> {
         let eq_idx = text.find('=')?;
         let name = &text[..eq_idx];
         if name.is_empty()
-            || !name
-                .bytes()
-                .enumerate()
-                .all(|(i, b)| (i == 0 && (b.is_ascii_alphabetic() || b == b'_')) || (i > 0 && (b.is_ascii_alphanumeric() || b == b'_')))
+            || !name.bytes().enumerate().all(|(i, b)| {
+                (i == 0 && (b.is_ascii_alphabetic() || b == b'_'))
+                    || (i > 0 && (b.is_ascii_alphanumeric() || b == b'_'))
+            })
         {
             return None;
         }

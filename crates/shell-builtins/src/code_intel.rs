@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use ignore::WalkBuilder;
 use crate::builtins::check_killed;
+use ignore::WalkBuilder;
 use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value, hashline_bytes, hashline_tag};

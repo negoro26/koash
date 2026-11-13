@@ -101,7 +101,10 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
             status: 1,
             diag: StructuredDiagnostic::new(
                 "E_CWD",
-                format!("current directory {} no longer exists", session.cwd.display()),
+                format!(
+                    "current directory {} no longer exists",
+                    session.cwd.display()
+                ),
                 None,
                 None,
             ),
@@ -137,7 +140,9 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
                 (127, "E_NOT_FOUND", "No such file or directory".to_string())
             }
             ErrorKind::NotFound => (127, "E_NOT_FOUND", "command not found".to_string()),
-            ErrorKind::PermissionDenied => (126, "E_NOT_EXECUTABLE", "Permission denied".to_string()),
+            ErrorKind::PermissionDenied => {
+                (126, "E_NOT_EXECUTABLE", "Permission denied".to_string())
+            }
             _ => (127, "E_SPAWN", e.to_string()),
         };
         SpawnError {
@@ -241,12 +246,17 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
                 job.pids.retain(|&p| p != pid);
                 if job.pids.is_empty() {
                     job.state = JobState::Done(code);
-                    notices.push(format!("[{}]+ Done ({code})               {}", job.id, job.command));
+                    notices.push(format!(
+                        "[{}]+ Done ({code})               {}",
+                        job.id, job.command
+                    ));
                     break;
                 }
             }
         }
     }
-    session.jobs.retain(|j| !matches!(j.state, JobState::Done(_)));
+    session
+        .jobs
+        .retain(|j| !matches!(j.state, JobState::Done(_)));
     notices
 }

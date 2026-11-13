@@ -1,14 +1,14 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/shell-syntax",
-    "crates/shell-value",
-    "crates/shell-kernel",
-    "crates/shell-builtins",
-    "crates/shell-rpc",
-    "crates/shell-surface",
-    "crates/shell-tui",
-    "crates/shell-cli",
+  "crates/shell-syntax",
+  "crates/shell-value",
+  "crates/shell-kernel",
+  "crates/shell-builtins",
+  "crates/shell-rpc",
+  "crates/shell-surface",
+  "crates/shell-tui",
+  "crates/shell-cli",
 ]
 
 [workspace.package]
@@ -27,7 +27,14 @@ shell-rpc = { path = "crates/shell-rpc" }
 shell-surface = { path = "crates/shell-surface" }
 shell-tui = { path = "crates/shell-tui" }
 
-nix = { version = "0.29", features = ["process", "signal", "term", "fs", "ioctl", "poll"] }
+nix = { version = "0.29", features = [
+  "process",
+  "signal",
+  "term",
+  "fs",
+  "ioctl",
+  "poll",
+] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

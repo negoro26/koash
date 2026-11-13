@@ -145,7 +145,11 @@ impl RpcServer {
         }
     }
 
-    pub async fn serve_stream<R, W>(&self, reader: R, mut writer: W) -> Result<(), StructuredDiagnostic>
+    pub async fn serve_stream<R, W>(
+        &self,
+        reader: R,
+        mut writer: W,
+    ) -> Result<(), StructuredDiagnostic>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
@@ -219,12 +223,13 @@ impl RpcServer {
                         }
                     })
                 };
-                let outcome = forked.map(|session| {
-                    (new_sid.clone(), session)
-                });
+                let outcome = forked.map(|session| (new_sid.clone(), session));
                 match outcome {
                     Ok((sid, session)) => {
-                        self.sessions.lock().await.insert(sid.clone(), Slot::Ready(Box::new(session)));
+                        self.sessions
+                            .lock()
+                            .await
+                            .insert(sid.clone(), Slot::Ready(Box::new(session)));
                         respond(writer, req.id, Ok(serde_json::json!({ "session_id": sid }))).await
                     }
                     Err(diag) => respond(writer, req.id, Err(diag)).await,
@@ -387,16 +392,18 @@ impl RpcServer {
 
         let (finished, timed_out) = match params.timeout_ms {
             None => (Some((&mut executor).await), false),
-            Some(ms) => match tokio::time::timeout(Duration::from_millis(ms), &mut executor).await {
-                Ok(joined) => (Some(joined), false),
-                Err(_) => {
-                    kill.kill();
-                    match tokio::time::timeout(KILL_GRACE, &mut executor).await {
-                        Ok(joined) => (Some(joined), true),
-                        Err(_) => (None, true),
+            Some(ms) => {
+                match tokio::time::timeout(Duration::from_millis(ms), &mut executor).await {
+                    Ok(joined) => (Some(joined), false),
+                    Err(_) => {
+                        kill.kill();
+                        match tokio::time::timeout(KILL_GRACE, &mut executor).await {
+                            Ok(joined) => (Some(joined), true),
+                            Err(_) => (None, true),
+                        }
                     }
                 }
-            },
+            }
         };
 
         let run = match finished {
@@ -443,7 +450,8 @@ impl RpcServer {
         } = run;
 
         let exit_code = if timed_out { TIMEOUT_EXIT_CODE } else { code };
-        let summary = send_output(writer, &id, &params, out, redact_env.as_ref(), exit_code).await?;
+        let summary =
+            send_output(writer, &id, &params, out, redact_env.as_ref(), exit_code).await?;
 
         let lsp_diagnostics = if mutated_files.is_empty() {
             Vec::new()
@@ -564,7 +572,8 @@ impl Drop for Lease {
             Ok(mut sessions) => settle(&mut sessions),
             Err(_) => {
                 let sessions = Arc::clone(&self.sessions);
-                self.runtime.spawn(async move { settle(&mut *sessions.lock().await) });
+                self.runtime
+                    .spawn(async move { settle(&mut *sessions.lock().await) });
             }
         }
     }
@@ -627,7 +636,9 @@ fn write_spill_file(bytes: &[u8], ext: &str) -> Option<String> {
 
 fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> Option<String> {
     let network_cmds = ["curl", "wget", "nc", "ssh", "scp", "rsync"];
-    let mutating_cmds = ["rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "patch"];
+    let mutating_cmds = [
+        "rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "patch",
+    ];
     let restricted = policy.dry_run || !policy.allow_network || !policy.writable_paths.is_empty();
 
     for item in &program.items {
@@ -665,7 +676,9 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
             });
 
             if policy.dry_run && (mutating_cmds.contains(&prog) || has_write_redir) {
-                return Some(format!("mutating operation `{prog}` blocked in dry_run mode"));
+                return Some(format!(
+                    "mutating operation `{prog}` blocked in dry_run mode"
+                ));
             }
 
             if !policy.writable_paths.is_empty() {
@@ -680,9 +693,15 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
                                 | RedirectKind::StdoutAndStderrTrunc
                         )
                     {
-                        let p = resolve_abs(session, &expand_word(target, &session.env, session.last_status));
+                        let p = resolve_abs(
+                            session,
+                            &expand_word(target, &session.env, session.last_status),
+                        );
                         if !is_path_allowed(&p, &policy.writable_paths) {
-                            return Some(format!("write to `{}` outside writable_paths", p.display()));
+                            return Some(format!(
+                                "write to `{}` outside writable_paths",
+                                p.display()
+                            ));
                         }
                     }
                 }
@@ -693,7 +712,10 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
                         }
                         let p = resolve_abs(session, arg);
                         if !is_path_allowed(&p, &policy.writable_paths) {
-                            return Some(format!("mutation of `{}` outside writable_paths", p.display()));
+                            return Some(format!(
+                                "mutation of `{}` outside writable_paths",
+                                p.display()
+                            ));
                         }
                     }
                 }
@@ -713,7 +735,9 @@ fn resolve_abs(session: &Session, raw: &str) -> PathBuf {
 }
 
 fn is_path_allowed(target: &Path, allowed: &[String]) -> bool {
-    allowed.iter().any(|prefix| target.starts_with(Path::new(prefix)))
+    allowed
+        .iter()
+        .any(|prefix| target.starts_with(Path::new(prefix)))
 }
 
 struct RunOutput {

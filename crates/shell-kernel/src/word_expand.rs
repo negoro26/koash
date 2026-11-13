@@ -10,12 +10,7 @@ pub fn expand_word(word: &Word, env: &SessionEnv, last_status: i32) -> String {
     out
 }
 
-fn expand_part(
-    part: &WordPart,
-    env: &SessionEnv,
-    last_status: i32,
-    out: &mut String,
-) {
+fn expand_part(part: &WordPart, env: &SessionEnv, last_status: i32, out: &mut String) {
     match part {
         WordPart::Literal { text, .. } | WordPart::SingleQuoted { text, .. } => {
             out.push_str(text);

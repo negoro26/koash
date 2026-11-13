@@ -189,20 +189,18 @@ pub(crate) fn resolve_redirs(
             }
             RedirectKind::StdoutAndStderrTrunc => {
                 let file = open_for_write(session, redir, false)?;
-                let twin = file.try_clone().map_err(|e| {
-                    StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span))
-                })?;
+                let twin = file
+                    .try_clone()
+                    .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
                 resolved.err = ErrTarget::File(twin);
                 resolved.out = OutTarget::File(file);
             }
             RedirectKind::StderrToStdout => {
                 resolved.err = match &resolved.out {
                     OutTarget::Default => ErrTarget::ToOut,
-                    OutTarget::File(file) => {
-                        ErrTarget::File(file.try_clone().map_err(|e| {
-                            StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span))
-                        })?)
-                    }
+                    OutTarget::File(file) => ErrTarget::File(file.try_clone().map_err(|e| {
+                        StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span))
+                    })?),
                 };
             }
         }
@@ -297,7 +295,11 @@ pub(crate) fn read_all(fd: OwnedFd) -> io::Result<Vec<u8>> {
 fn default_stdout(plan: &Plan, last: bool) -> Result<(Fd, Option<OwnedFd>), LaunchError> {
     let capture = plan.sink.is_capture();
     if last && (plan.background || !capture) {
-        let fd = if capture { Fd::Null } else { Fd::Inherit(Stream::Out) };
+        let fd = if capture {
+            Fd::Null
+        } else {
+            Fd::Inherit(Stream::Out)
+        };
         return Ok((fd, None));
     }
     let (reader, writer) = pipe()?;
@@ -307,7 +309,11 @@ fn default_stdout(plan: &Plan, last: bool) -> Result<(Fd, Option<OwnedFd>), Laun
 fn default_stderr(plan: &Plan) -> Result<(Fd, Option<OwnedFd>), LaunchError> {
     let capture = plan.sink.is_capture();
     if plan.background || !capture {
-        let fd = if capture { Fd::Null } else { Fd::Inherit(Stream::Err) };
+        let fd = if capture {
+            Fd::Null
+        } else {
+            Fd::Inherit(Stream::Err)
+        };
         return Ok((fd, None));
     }
     let (reader, writer) = pipe()?;

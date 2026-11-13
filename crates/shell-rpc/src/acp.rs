@@ -209,11 +209,13 @@ impl AcpServer {
                     run_program(&mut session, &program, &sink);
                     session
                 });
-                let collector = tokio::task::spawn_blocking(move || rx.iter().collect::<Vec<Chunk>>());
+                let collector =
+                    tokio::task::spawn_blocking(move || rx.iter().collect::<Vec<Chunk>>());
                 let (session, chunks) = match tokio::join!(executor, collector) {
                     (Ok(session), Ok(chunks)) => (session, chunks),
                     _ => {
-                        return send_acp_error(writer, req.id, -32603, "executor thread failed").await;
+                        return send_acp_error(writer, req.id, -32603, "executor thread failed")
+                            .await;
                     }
                 };
                 self.sessions.lock().await.insert(sid.clone(), session);
@@ -233,7 +235,11 @@ impl AcpServer {
                     }),
                 };
                 send_acp(writer, &notif).await?;
-                let stop_reason = if is_cancelled { "cancelled" } else { "end_turn" };
+                let stop_reason = if is_cancelled {
+                    "cancelled"
+                } else {
+                    "end_turn"
+                };
                 let resp = AcpResponse {
                     jsonrpc: "2.0",
                     id: req.id,
@@ -242,7 +248,15 @@ impl AcpServer {
                 };
                 send_acp(writer, &resp).await
             }
-            other => send_acp_error(writer, req.id, -32601, &format!("method not found: {other}")).await,
+            other => {
+                send_acp_error(
+                    writer,
+                    req.id,
+                    -32601,
+                    &format!("method not found: {other}"),
+                )
+                .await
+            }
         }
     }
 

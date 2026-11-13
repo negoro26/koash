@@ -146,7 +146,8 @@ impl WarmLspClient {
                     return;
                 }
                 if let Ok(msg) = serde_json::from_slice::<JsonVal>(&payload)
-                    && msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics")
+                    && msg.get("method").and_then(|m| m.as_str())
+                        == Some("textDocument/publishDiagnostics")
                     && let Some(params) = msg.get("params")
                 {
                     let uri = params
@@ -157,11 +158,12 @@ impl WarmLspClient {
                     let mut parsed = Vec::new();
                     if let Some(arr) = params.get("diagnostics").and_then(|d| d.as_array()) {
                         for item in arr {
-                            let sev = match item.get("severity").and_then(|s| s.as_u64()).unwrap_or(1) {
-                                1 => "error",
-                                2 => "warning",
-                                _ => "info",
-                            };
+                            let sev =
+                                match item.get("severity").and_then(|s| s.as_u64()).unwrap_or(1) {
+                                    1 => "error",
+                                    2 => "warning",
+                                    _ => "info",
+                                };
                             let line = item
                                 .get("range")
                                 .and_then(|r| r.get("start"))

@@ -331,7 +331,12 @@ impl Session {
         }
         let (pre, descend) = match meta {
             None => (Preimage::Absent, false),
-            Some(m) if m.is_dir() => (Preimage::Dir { mode: m.mode() & 0o7777 }, true),
+            Some(m) if m.is_dir() => (
+                Preimage::Dir {
+                    mode: m.mode() & 0o7777,
+                },
+                true,
+            ),
             Some(m) if m.is_file() => {
                 if tx.captured_bytes.saturating_add(m.len() as usize) > TX_CAPTURE_MAX_BYTES {
                     return Err("capture limit exceeded".to_string());
@@ -473,7 +478,13 @@ impl Session {
         }
     }
 
-    pub fn add_job(&mut self, pgid: Pid, pids: Vec<Pid>, command: String, state: JobState) -> usize {
+    pub fn add_job(
+        &mut self,
+        pgid: Pid,
+        pids: Vec<Pid>,
+        command: String,
+        state: JobState,
+    ) -> usize {
         let id = self.next_job_id;
         self.next_job_id += 1;
         self.jobs.push(Job {
@@ -500,11 +511,8 @@ impl Session {
         if let Ok(guard) = self.saved_termios.lock()
             && let Some(termios) = &*guard
         {
-            let _ = nix::sys::termios::tcsetattr(
-                tty,
-                nix::sys::termios::SetArg::TCSADRAIN,
-                termios,
-            );
+            let _ =
+                nix::sys::termios::tcsetattr(tty, nix::sys::termios::SetArg::TCSADRAIN, termios);
         }
     }
 }

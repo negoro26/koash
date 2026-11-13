@@ -49,7 +49,10 @@ impl History {
             exit_code,
             timestamp,
         };
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&self.path)
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
             && let Ok(json) = serde_json::to_string(&entry)
         {
             let _ = writeln!(file, "{json}");

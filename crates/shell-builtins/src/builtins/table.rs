@@ -2,9 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use serde_json::Value as JsonVal;
-use shell_value::{
-    CellVal, RecordBatch, StructuredDiagnostic, Value, batch_to_compact_sigil,
-};
+use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, batch_to_compact_sigil};
 
 pub(crate) fn where_filter(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
     if args.len() < 3 {
@@ -173,14 +171,20 @@ pub(crate) fn sort_by(args: &[String], input: Value) -> Result<Value, Structured
 }
 
 pub(crate) fn first(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
-    let n = args.first().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+    let n = args
+        .first()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
     let mut batch = input.into_batch();
     batch.truncate_rows(n);
     Ok(Value::from_batch(batch))
 }
 
 pub(crate) fn last(args: &[String], input: Value) -> Result<Value, StructuredDiagnostic> {
-    let n = args.first().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+    let n = args
+        .first()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
     let mut batch = input.into_batch();
     batch.tail_rows(n);
     Ok(Value::from_batch(batch))

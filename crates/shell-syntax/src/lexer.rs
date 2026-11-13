@@ -260,7 +260,18 @@ impl<'a> Lexer<'a> {
         let mut parts = Vec::new();
 
         if self.peek() == Some(b'~')
-            && matches!(self.peek_at(1), None | Some(b'/') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b';') | Some(b'|') | Some(b'&') | Some(b'>') | Some(b'<'))
+            && matches!(
+                self.peek_at(1),
+                None | Some(b'/')
+                    | Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'\n')
+                    | Some(b';')
+                    | Some(b'|')
+                    | Some(b'&')
+                    | Some(b'>')
+                    | Some(b'<')
+            )
         {
             self.pos += 1;
             parts.push(WordPart::Tilde {
@@ -292,7 +303,11 @@ impl<'a> Lexer<'a> {
         let content_start = self.pos;
         while let Some(b) = self.peek() {
             if b == b'\'' {
-                let text = self.src.get(content_start..self.pos).unwrap_or("").to_string();
+                let text = self
+                    .src
+                    .get(content_start..self.pos)
+                    .unwrap_or("")
+                    .to_string();
                 self.pos += 1;
                 return Ok(WordPart::SingleQuoted {
                     text,
@@ -407,9 +422,9 @@ impl<'a> Lexer<'a> {
                         let name = self.src.get(name_start..self.pos).unwrap_or("").to_string();
                         self.pos += 1;
                         if name.is_empty()
-                            || !name
-                                .bytes()
-                                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'?' || c == b'$')
+                            || !name.bytes().all(|c| {
+                                c.is_ascii_alphanumeric() || c == b'_' || c == b'?' || c == b'$'
+                            })
                         {
                             return Err(SyntaxError::new(
                                 "E_POSIX_PARAM_EXP",

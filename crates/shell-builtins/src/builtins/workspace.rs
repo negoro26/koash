@@ -5,8 +5,8 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{RecordBatch, StructuredDiagnostic, StructuredRecord, Value};
 
-use super::{check_killed, hashline_schema};
 use super::text::search_file_with_hashline;
+use super::{check_killed, hashline_schema};
 
 pub(crate) fn diag(session: &Session) -> Result<Value, StructuredDiagnostic> {
     if !session.cwd.join("Cargo.toml").is_file() {
@@ -90,12 +90,21 @@ pub(crate) fn refs(session: &Session, args: &[String]) -> Result<Value, Structur
             .strip_prefix(&session.cwd)
             .unwrap_or(entry.path())
             .to_string_lossy();
-        search_file_with_hashline(&mut searcher, &matcher, entry.path(), &rel, &mut batch.cells);
+        search_file_with_hashline(
+            &mut searcher,
+            &matcher,
+            entry.path(),
+            &rel,
+            &mut batch.cells,
+        );
     }
     Ok(Value::from_batch(batch))
 }
 
-pub(crate) fn rename(session: &mut Session, args: &[String]) -> Result<Value, StructuredDiagnostic> {
+pub(crate) fn rename(
+    session: &mut Session,
+    args: &[String],
+) -> Result<Value, StructuredDiagnostic> {
     if args.len() < 2 {
         return Err(StructuredDiagnostic::new(
             "E_ARGS",

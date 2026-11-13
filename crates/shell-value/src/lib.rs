@@ -70,9 +70,7 @@ impl CellVal {
             CellVal::Float(n) => serde_json::Value::from(*n),
             CellVal::SharedStr(s) => serde_json::Value::String(s.to_string()),
             CellVal::Str(s) => serde_json::Value::String(s.clone()),
-            CellVal::Hash(h) => {
-                serde_json::Value::String(String::from_utf8_lossy(h).into_owned())
-            }
+            CellVal::Hash(h) => serde_json::Value::String(String::from_utf8_lossy(h).into_owned()),
             CellVal::Json(v) => v.clone(),
         }
     }
@@ -227,7 +225,10 @@ impl RecordBatch {
     }
 
     pub fn nrows(&self) -> usize {
-        self.cells.len().checked_div(self.columns.len()).unwrap_or(0)
+        self.cells
+            .len()
+            .checked_div(self.columns.len())
+            .unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -410,12 +411,16 @@ fn batch_from_raw_bytes(bytes: &[u8]) -> RecordBatch {
     let text = String::from_utf8_lossy(bytes);
     let mut records = Vec::new();
     for line in text.lines() {
-        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(line)
+        {
             let rec: StructuredRecord = map.into_iter().collect();
             records.push(rec);
         } else {
             let mut rec = StructuredRecord::new();
-            rec.insert("line".to_string(), serde_json::Value::String(line.to_string()));
+            rec.insert(
+                "line".to_string(),
+                serde_json::Value::String(line.to_string()),
+            );
             records.push(rec);
         }
     }

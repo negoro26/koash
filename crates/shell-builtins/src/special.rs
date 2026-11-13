@@ -43,7 +43,11 @@ fn job_index(session: &Session, arg: Option<&String>, default: Option<usize>) ->
     }
 }
 
-pub(crate) fn run_special(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
+pub(crate) fn run_special(
+    session: &mut Session,
+    simple: &SimpleCommand,
+    sink: &Sink,
+) -> Option<i32> {
     let args: Vec<String> = simple
         .words
         .iter()
@@ -103,7 +107,10 @@ pub(crate) fn run_special(session: &mut Session, simple: &SimpleCommand, sink: &
             Some(status)
         }
         "bg" => {
-            let default = session.jobs.iter().rposition(|j| j.state == JobState::Stopped);
+            let default = session
+                .jobs
+                .iter()
+                .rposition(|j| j.state == JobState::Stopped);
             let Some(idx) = job_index(session, args.get(1), default) else {
                 sink.stderr_line("bg: no stopped job");
                 return Some(1);
