@@ -1,17 +1,19 @@
 use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::process::CommandExt;
+use std::io::{PipeWriter, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, mpsc};
 
 use memchr::{memchr, memmem};
+use nix::libc;
 use nix::unistd::Pid;
 use rusqlite::Connection;
 use rustc_hash::FxHashMap;
 use serde_json::{Value as JsonVal, json};
-use shell_kernel::Session;
+use shell_kernel::{ChildGroup, ChildSetup, Session, prepare_child};
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,8 +33,8 @@ impl KernelKind {
 
 struct Worker {
     child: Child,
-    stdin: ChildStdin,
-    stdout: File,
+    requests: PipeWriter,
+    replies: File,
     buf: Vec<u8>,
 }
 
@@ -43,11 +45,12 @@ static SQLITE_POOL: LazyLock<Mutex<FxHashMap<u64, Connection>>> =
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
 const PYTHON_WORKER: &str = "\
-import sys, json, traceback
+import sys, os, json, traceback
 g = {'__name__': '__main__'}
-for line in sys.stdin:
+for line in os.fdopen(3):
     r = json.loads(line)
     try:
+        os.chdir(r['cwd'])
         exec(compile(r['code'], '<koa>', 'exec'), g)
         s = 'OK'
     except BaseException as e:
@@ -57,11 +60,11 @@ for line in sys.stdin:
 ";
 
 const JAVASCRIPT_WORKER: &str = "\
-const rl = require('readline').createInterface({ input: process.stdin });
+const rl = require('readline').createInterface({ input: require('fs').createReadStream(null, { fd: 3 }) });
 rl.on('line', l => {
   const r = JSON.parse(l);
   let s = 'OK';
-  try { (0, eval)(r.code); } catch (e) { s = 'ERR ' + JSON.stringify(String(e)); }
+  try { process.chdir(r.cwd); (0, eval)(r.code); } catch (e) { s = 'ERR ' + JSON.stringify(String(e)); }
   process.stdout.write(r.end + s + '\\n');
 });
 ";
@@ -138,12 +141,16 @@ pub fn run_worker(
     let pooled = WORKERS.lock().map_err(|_| pool_error("worker"))?.remove(&key);
     let mut worker = match pooled {
         Some(w) => w,
-        None => spawn_worker(kind, &session.cwd)?,
+        None => spawn_worker(kind)?,
     };
 
+    // In an interactive shell the worker owns the terminal for the call, so Ctrl-C reaches it
+    // and not the shell.
     let pgid = Pid::from_raw(worker.child.id() as i32);
     session.kill.track(pgid);
-    let reply = exchange(&mut worker, code);
+    session.give_terminal(pgid);
+    let reply = exchange(&mut worker, code, &session.cwd);
+    session.restore_terminal();
     session.kill.untrack(pgid);
 
     match reply {
@@ -161,9 +168,12 @@ pub fn run_worker(
         }
         Err(diag) => {
             let _ = worker.child.kill();
-            let _ = worker.child.wait();
+            let status = worker.child.wait();
             if session.kill.is_killed() {
                 return Err(StructuredDiagnostic::new("E_KILLED", "command killed", None, None));
+            }
+            if status.is_ok_and(|s| s.signal() == Some(libc::SIGINT)) {
+                return Err(StructuredDiagnostic::new(kind.code(), "interrupted", None, None));
             }
             Err(diag)
         }
@@ -175,18 +185,19 @@ enum Reply {
     Raised(String),
 }
 
-fn exchange(worker: &mut Worker, code: &str) -> Result<Reply, StructuredDiagnostic> {
+fn exchange(worker: &mut Worker, code: &str, cwd: &Path) -> Result<Reply, StructuredDiagnostic> {
     let end = format!(
         "__KOA_END_{}_{}__",
         std::process::id(),
         REQUESTS.fetch_add(1, Ordering::Relaxed)
     );
-    let mut request = json!({ "code": code, "end": end }).to_string();
+    let cwd = cwd.to_string_lossy();
+    let mut request = json!({ "code": code, "end": end, "cwd": cwd }).to_string();
     request.push('\n');
     worker
-        .stdin
+        .requests
         .write_all(request.as_bytes())
-        .and_then(|()| worker.stdin.flush())
+        .and_then(|()| worker.requests.flush())
         .map_err(|e| StructuredDiagnostic::from_io("E_SUBKERNEL", &e, None))?;
 
     worker.buf.clear();
@@ -210,7 +221,7 @@ fn exchange(worker: &mut Worker, code: &str) -> Result<Reply, StructuredDiagnost
                 });
             }
         }
-        match worker.stdout.read(&mut chunk) {
+        match worker.replies.read(&mut chunk) {
             Ok(0) => {
                 return Err(StructuredDiagnostic::new(
                     "E_SUBKERNEL",
@@ -226,37 +237,91 @@ fn exchange(worker: &mut Worker, code: &str) -> Result<Reply, StructuredDiagnost
     }
 }
 
-fn spawn_worker(kind: KernelKind, cwd: &Path) -> Result<Worker, StructuredDiagnostic> {
+type SpawnJob = (Command, mpsc::Sender<std::io::Result<Child>>);
+
+/// Workers are spawned from one thread that lives as long as the process. PDEATHSIG fires when the
+/// thread that forked the child exits, and a runtime's blocking-pool threads exit when idle.
+static SPAWNER: LazyLock<Option<mpsc::Sender<SpawnJob>>> = LazyLock::new(|| {
+    let (jobs, queue) = mpsc::channel::<SpawnJob>();
+    std::thread::Builder::new()
+        .name("koa-worker-spawner".to_string())
+        .spawn(move || {
+            for (mut command, reply) in queue {
+                let _ = reply.send(command.spawn());
+            }
+        })
+        .ok()?;
+    Some(jobs)
+});
+
+fn spawn_on_spawner(command: Command) -> std::io::Result<Child> {
+    let unavailable = || std::io::Error::other("worker spawner unavailable");
+    let (reply, spawned) = mpsc::channel();
+    SPAWNER
+        .as_ref()
+        .ok_or_else(unavailable)?
+        .send((command, reply))
+        .map_err(|_| unavailable())?;
+    spawned.recv().map_err(|_| unavailable())?
+}
+
+/// Workers read requests from fd 3 and have /dev/null as stdin, so user code that reads stdin
+/// sees EOF instead of eating the protocol.
+const REQUEST_FD: i32 = 3;
+
+fn spawn_worker(kind: KernelKind) -> Result<Worker, StructuredDiagnostic> {
     let (bin, flags, script): (&str, &[&str], &str) = match kind {
         KernelKind::Python => ("python3", &["-u", "-c"], PYTHON_WORKER),
         KernelKind::JavaScript => ("node", &["-e"], JAVASCRIPT_WORKER),
     };
     let fail = |what: String| StructuredDiagnostic::new("E_SUBKERNEL", what, None, None);
 
-    let (reader, writer) = std::io::pipe().map_err(|e| fail(format!("{bin}: pipe: {e}")))?;
-    let writer_err = writer
+    let (requests_in, requests) = std::io::pipe().map_err(|e| fail(format!("{bin}: pipe: {e}")))?;
+    let (replies, replies_out) = std::io::pipe().map_err(|e| fail(format!("{bin}: pipe: {e}")))?;
+    let replies_err = replies_out
         .try_clone()
         .map_err(|e| fail(format!("{bin}: pipe: {e}")))?;
 
-    // The Command owns the parent's copies of the write ends; it must drop before we read,
-    // or a dead worker would never produce EOF.
-    let mut child = {
-        let mut cmd = Command::new(bin);
-        cmd.args(flags)
-            .arg(script)
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(writer))
-            .stderr(Stdio::from(writer_err))
-            .process_group(0);
-        cmd.spawn().map_err(|e| fail(format!("{bin}: {e}")))?
-    };
+    let request_fd = requests_in.as_raw_fd();
+    let mut command = Command::new(bin);
+    command
+        .args(flags)
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(replies_out))
+        .stderr(Stdio::from(replies_err));
+    prepare_child(
+        &mut command,
+        ChildSetup {
+            group: ChildGroup::Leader,
+            tty: None,
+            die_with_parent: true,
+        },
+    );
+    // SAFETY: only dup2 and fcntl run between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            if request_fd == REQUEST_FD {
+                // dup2 onto itself would leave close-on-exec set.
+                if libc::fcntl(REQUEST_FD, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(request_fd, REQUEST_FD) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
-    let stdin = child.stdin.take().ok_or_else(|| fail("missing stdin".to_string()))?;
+    // `command` owns the parent's copies of the reply write ends and is dropped by the spawner
+    // thread; without that a dead worker would never produce EOF.
+    let child = spawn_on_spawner(command).map_err(|e| fail(format!("{bin}: {e}")))?;
+    drop(requests_in);
+
     Ok(Worker {
         child,
-        stdin,
-        stdout: File::from(std::os::fd::OwnedFd::from(reader)),
+        requests,
+        replies: File::from(std::os::fd::OwnedFd::from(replies)),
         buf: Vec::with_capacity(4096),
     })
 }

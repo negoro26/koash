@@ -408,6 +408,15 @@ fn stdout_of(lines: &[String]) -> String {
         .collect()
 }
 
+fn have(program: &str) -> bool {
+    Command::new(program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
 struct KillOnDrop(Child);
 
 impl Drop for KillOnDrop {
@@ -711,4 +720,87 @@ fn external_in_a_deleted_directory_reports_the_directory() {
     );
     assert!(!stderr.contains("E_NOT_FOUND"), "stderr: {stderr}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+}
+
+fn child_pids(pid: u32) -> Vec<u32> {
+    let mut children = Vec::new();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return children;
+    };
+    for task in tasks.flatten() {
+        if let Ok(list) = std::fs::read_to_string(task.path().join("children")) {
+            children.extend(list.split_whitespace().filter_map(|s| s.parse::<u32>().ok()));
+        }
+    }
+    children
+}
+
+fn is_gone(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit(')')
+            .next()
+            .is_some_and(|rest| rest.trim_start().starts_with('Z')),
+    }
+}
+
+#[test]
+fn python_worker_dies_with_koa() {
+    if !have("python3") {
+        return;
+    }
+    let dir = scratch_dir("worker-pdeathsig");
+    let mut koa = Command::new(KOA)
+        .arg("-c")
+        .arg("@py 'import time; time.sleep(60)'")
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn koa");
+    let start = Instant::now();
+    let worker = loop {
+        if let Some(&pid) = child_pids(koa.id()).first() {
+            break pid;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "worker never started");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    koa.kill().expect("kill koa");
+    let _ = koa.wait();
+    let start = Instant::now();
+    while !is_gone(worker) {
+        assert!(start.elapsed() < Duration::from_secs(3), "worker {worker} outlived koa");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn workers_follow_the_session_cwd_and_see_eof_on_stdin() {
+    if !have("python3") {
+        return;
+    }
+    let dir = scratch_dir("worker-cwd");
+    std::fs::create_dir_all(dir.join("a")).expect("mkdir a");
+    std::fs::create_dir_all(dir.join("b")).expect("mkdir b");
+    let out = koa_c(
+        &dir,
+        "cd a; @py 'import os; print(os.getcwd())'; cd ../b; @py 'import os; print(os.getcwd())'",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines.len() == 2 && lines[0].ends_with("/a") && lines[1].ends_with("/b"),
+        "stdout: {stdout} stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = koa_c(&dir, "@py 'x = input()'; echo st=$?", Duration::from_secs(5))
+        .expect("input() must see EOF instead of hanging");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("EOFError"));
 }
