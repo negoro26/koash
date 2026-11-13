@@ -247,11 +247,16 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
             StageKind::Builtin(builtin) => {
                 let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
                 let result = input.and_then(|value| builtin.run(session, &stage.argv[1..], value));
+                let reports = session.take_reports();
+                for report in &reports {
+                    plan.sink.diag(report);
+                }
+                let soft_failure = i32::from(!reports.is_empty());
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
                             plan.sink.emit(value);
-                            0
+                            soft_failure
                         }
                         Err(diag) => {
                             plan.sink.diag(&diag);
@@ -260,7 +265,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                     },
                     Ok(value) => {
                         flow = Flow::Value(value);
-                        0
+                        soft_failure
                     }
                     Err(diag) => {
                         plan.sink.diag(&diag);
