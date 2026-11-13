@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -79,6 +80,8 @@ pub struct Session {
     pub interactive: bool,
     pub shell_pgid: Pid,
     pub saved_termios: Mutex<Option<Termios>>,
+    /// The shell's own terminal, kept open past fd 0 redirections so job control can reach it.
+    pub tty: Option<OwnedFd>,
     pub jobs: Vec<Job>,
     pub next_job_id: usize,
     pub should_exit: Option<i32>,
@@ -105,6 +108,15 @@ impl Session {
         let stdin = std::io::stdin();
         let is_tty = isatty(0).unwrap_or(false);
         let interactive_tty = interactive && is_tty;
+        let tty = if interactive_tty {
+            let fd = stdin
+                .as_fd()
+                .try_clone_to_owned()
+                .map_err(|e| StructuredDiagnostic::from_io("E_TTY", &e, None))?;
+            Some(fd)
+        } else {
+            None
+        };
 
         let mut shell_pgid = getpgrp();
         let mut saved_termios = None;
@@ -142,6 +154,7 @@ impl Session {
             interactive: interactive_tty,
             shell_pgid,
             saved_termios: Mutex::new(saved_termios),
+            tty,
             jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
@@ -167,6 +180,7 @@ impl Session {
             interactive: false,
             shell_pgid: self.shell_pgid,
             saved_termios: Mutex::new(None),
+            tty: None,
             jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
@@ -224,6 +238,7 @@ impl Session {
             interactive: false,
             shell_pgid: getpgrp(),
             saved_termios: Mutex::new(None),
+            tty: None,
             jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
@@ -483,17 +498,23 @@ impl Session {
         id
     }
 
-    pub fn restore_terminal(&self) {
-        if !self.interactive {
-            return;
+    /// Makes `pgid` the foreground group of the shell's terminal. A no-op without one.
+    pub fn give_terminal(&self, pgid: Pid) {
+        if let Some(tty) = &self.tty {
+            let _ = tcsetpgrp(tty, pgid);
         }
-        let stdin = std::io::stdin();
-        let _ = tcsetpgrp(&stdin, self.shell_pgid);
+    }
+
+    pub fn restore_terminal(&self) {
+        let Some(tty) = &self.tty else {
+            return;
+        };
+        let _ = tcsetpgrp(tty, self.shell_pgid);
         if let Ok(guard) = self.saved_termios.lock()
-            && let Some(ref termios) = *guard
+            && let Some(termios) = &*guard
         {
             let _ = nix::sys::termios::tcsetattr(
-                &stdin,
+                tty,
                 nix::sys::termios::SetArg::TCSADRAIN,
                 termios,
             );

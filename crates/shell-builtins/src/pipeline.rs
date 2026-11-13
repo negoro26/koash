@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use nix::unistd::Pid;
 use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
 use shell_syntax::{Command, ListOp, Pipeline, Program, Redirection, RedirectKind};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
@@ -9,7 +10,8 @@ use crate::schema::is_builtin;
 use crate::sink::{Sink, diag_status};
 use crate::special::{finish_foreground, run_special};
 use crate::wiring::{
-    Flow, LaunchError, Launched, Plan, launch_external, read_all, read_redirect_file,
+    Flow, LaunchError, Launched, Plan, launch_external, read_all, read_all_watching,
+    read_redirect_file,
 };
 
 /// Status reported when the kill switch ended a program early.
@@ -89,14 +91,18 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
         ));
         2
     } else {
-        std::thread::scope(|scope| {
+        let (status, tracked) = std::thread::scope(|scope| {
             let plan = Plan {
                 sink,
                 scope,
                 background,
             };
             run_stages(session, &stages, &plan)
-        })
+        });
+        if let Some(pgid) = tracked {
+            session.kill.untrack(pgid);
+        }
+        status
     };
     session.finish_tx();
     status
@@ -203,7 +209,7 @@ fn summarize(stages: &[Stage]) -> String {
 
 /// Runs the stages left to right. Externals start as soon as their input is wired, so adjacent
 /// externals overlap; a builtin runs on this thread once its input is complete.
-fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> i32 {
+fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Option<Pid>) {
     let mut flow = Flow::None;
     let mut launched = Launched::default();
     let mut final_status: Option<i32> = None;
@@ -222,7 +228,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> i32 {
                 final_status = Some(0);
             }
             StageKind::Builtin => {
-                let input = take_builtin_input(session, stage, &mut flow);
+                let input = take_builtin_input(session, stage, &mut flow, &launched, plan);
                 let result = input.and_then(|value| {
                     run_builtin(session, &stage.argv[0], &stage.argv[1..], value)
                 });
@@ -266,24 +272,27 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> i32 {
     }
     drop(flow);
 
+    let tracked = launched.tracked;
     let summary = summarize(stages);
     let Some(pgid) = launched.pgid else {
-        return final_status.unwrap_or(0);
+        return (final_status.unwrap_or(0), tracked);
     };
     if plan.background {
         let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
         plan.sink.stderr_line(&format!("[{id}] {pgid}"));
-        return final_status.unwrap_or(0);
+        return (final_status.unwrap_or(0), tracked);
     }
     let watch = last_is_launched.then_some(launched.last_pid).flatten();
     let waited = finish_foreground(session, plan.sink, pgid, &launched.pids, watch, &summary, None);
-    final_status.unwrap_or(waited)
+    (final_status.unwrap_or(waited), tracked)
 }
 
 fn take_builtin_input(
     session: &Session,
     stage: &Stage,
     flow: &mut Flow,
+    launched: &Launched,
+    plan: &Plan,
 ) -> Result<Value, StructuredDiagnostic> {
     let from_file = stage
         .redirs
@@ -300,9 +309,12 @@ fn take_builtin_input(
     match flowed {
         Flow::None => Ok(Value::Empty),
         Flow::Value(value) => Ok(value),
-        Flow::Pipe(fd) => read_all(fd)
-            .map(Value::Bytes)
-            .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
+        Flow::Pipe(fd) => match launched.pgid {
+            Some(producers) if session.interactive => read_all_watching(plan, fd, producers),
+            _ => read_all(fd),
+        }
+        .map(Value::Bytes)
+        .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
     }
 }
 

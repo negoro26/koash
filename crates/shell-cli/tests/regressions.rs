@@ -613,6 +613,88 @@ fn failed_spawn_does_not_block_undo() {
     assert!(!dir.join("f1").exists(), "undo must revert the echo");
 }
 
+fn processes_with_cmdline(needle: &str) -> Vec<u32> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let cmdline: Vec<u8> = raw.iter().map(|&b| if b == 0 { b' ' } else { b }).collect();
+        if String::from_utf8_lossy(&cmdline).contains(needle) {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+#[test]
+fn rpc_timeout_kills_group_members_that_outlive_the_direct_child() {
+    let dir = scratch_dir("rpc-leftover");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    let start = Instant::now();
+    // Unique per test process so concurrent test runs do not see each other's sleepers.
+    let marker = format!("30.{}", std::process::id());
+    let lines = exec_lines(
+        &mut rpc,
+        &sid,
+        2,
+        &format!("/bin/sh -c '/bin/sleep {marker} & echo started'"),
+        Some(500),
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("\"exit_code\":124")),
+        "timeout reports 124: {lines:?}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(5), "took {:?}", start.elapsed());
+    let next = exec_lines(&mut rpc, &sid, 3, "echo next", None);
+    assert_eq!(stdout_of(&next), "next\n", "the session must be free again: {next:?}");
+    assert!(
+        processes_with_cmdline(&format!("sleep {marker}")).is_empty(),
+        "the leftover group member must be killed"
+    );
+}
+
+#[test]
+fn dash_c_children_stay_in_the_shells_process_group() {
+    use std::os::unix::process::CommandExt;
+    let dir = scratch_dir("dash-c-group");
+    let script = dir.join("pgrp.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nread -r _pid _comm _state _ppid pgrp _rest < /proc/self/stat\necho $pgrp\n",
+    )
+    .expect("write script");
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("chmod");
+    for command in ["./pgrp.sh", "echo hi | ./pgrp.sh"] {
+        let child = Command::new(KOA)
+            .arg("-c")
+            .arg(command)
+            .current_dir(&dir)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn koa");
+        let koa_pid = child.id();
+        let out = wait_with_deadline(child, Duration::from_secs(10)).expect("koa -c finishes");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            koa_pid.to_string(),
+            "`{command}` must not start a new process group; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn external_in_a_deleted_directory_reports_the_directory() {
     let dir = scratch_dir("deleted-cwd");

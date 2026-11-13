@@ -4,15 +4,23 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::Scope;
+use std::time::Duration;
 
 use nix::unistd::Pid;
-use shell_kernel::{ExternalSpec, Session, SpawnError, expand_word, spawn_external};
+use shell_kernel::{
+    ChildGroup, ExternalSpec, Session, SpawnError, expand_word, group_stopped, resume_group,
+    spawn_external,
+};
 use shell_syntax::{RedirectKind, Redirection};
 use shell_value::{StructuredDiagnostic, Value};
 
 use crate::pipeline::Stage;
 use crate::sink::{Chunk, Sink};
+
+/// How often a builtin waiting on its producers checks whether they were stopped.
+const STOP_POLL: Duration = Duration::from_millis(50);
 
 /// What the next stage reads from.
 pub(crate) enum Flow {
@@ -26,6 +34,8 @@ pub(crate) struct Launched {
     pub pgid: Option<Pid>,
     pub pids: Vec<Pid>,
     pub last_pid: Option<Pid>,
+    /// The group the kill switch is holding for this pipeline until its readers are done.
+    pub tracked: Option<Pid>,
 }
 
 pub(crate) struct LaunchError {
@@ -241,6 +251,30 @@ fn feed<'scope, 'env>(
     Ok(Stdio::from(reader))
 }
 
+/// Reads `fd` to EOF on a helper thread so this one can keep watching the producers' group. A producer
+/// stopped by Ctrl-Z would otherwise leave the read blocked, and the shell with it.
+pub(crate) fn read_all_watching(plan: &Plan, fd: OwnedFd, producers: Pid) -> io::Result<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new().spawn_scoped(plan.scope, move || {
+        let _ = tx.send(read_all(fd));
+    })?;
+    loop {
+        match rx.recv_timeout(STOP_POLL) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => {
+                if group_stopped(producers) {
+                    resume_group(producers);
+                    plan.sink
+                        .stderr_line("koa: pipelines with builtin stages cannot be suspended yet");
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other("pipe reader thread failed"));
+            }
+        }
+    }
+}
+
 /// Copies everything readable from `fd` into the capture channel until EOF.
 fn drain<'scope, 'env>(
     scope: &'scope Scope<'scope, 'env>,
@@ -350,6 +384,15 @@ pub(crate) fn launch_external(
         drain(plan.scope, plan.sink, reader, Chunk::Stderr)?;
     }
 
+    // Only the terminal and the kill switch need groups. `koa -c` on a terminal behaves like
+    // `sh -c`: children stay in the shell's group and see the terminal's signals directly.
+    let grouped = session.interactive || plan.sink.is_capture();
+    let group = match (grouped, launched.pgid) {
+        (false, _) => ChildGroup::Shared,
+        (true, None) => ChildGroup::Leader,
+        (true, Some(pgid)) => ChildGroup::Join(pgid),
+    };
+
     let child = spawn_external(
         session,
         ExternalSpec {
@@ -358,18 +401,21 @@ pub(crate) fn launch_external(
             stdin,
             stdout: stdout_fd.into_stdio(),
             stderr: stderr_fd.into_stdio(),
-            pgid: launched.pgid,
+            group,
             claim_terminal: !plan.background && session.interactive && launched.pgid.is_none(),
         },
     )?;
     session.mark_opaque(stage.label.clone());
 
     let pid = Pid::from_raw(child.id() as i32);
-    let pgid = *launched.pgid.get_or_insert(pid);
+    let pgid = *launched
+        .pgid
+        .get_or_insert(if grouped { pid } else { session.shell_pgid });
     launched.pids.push(pid);
     launched.last_pid = Some(pid);
-    if !plan.background {
+    if grouped && !plan.background {
         session.kill.track(pgid);
+        launched.tracked = Some(pgid);
     }
 
     *flow = match next_pipe {

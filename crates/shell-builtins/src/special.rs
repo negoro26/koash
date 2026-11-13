@@ -1,5 +1,5 @@
 use nix::sys::signal::{Signal, killpg};
-use nix::unistd::{Pid, tcsetpgrp};
+use nix::unistd::Pid;
 use shell_kernel::{JobState, Session, expand_word, wait_foreground};
 use shell_syntax::SimpleCommand;
 
@@ -16,7 +16,7 @@ pub(crate) fn finish_foreground(
     summary: &str,
     existing_job: Option<usize>,
 ) -> i32 {
-    let outcome = wait_foreground(&session.kill, pgid, pids, watch);
+    let outcome = wait_foreground(pgid, pids, watch);
     session.restore_terminal();
     let Some(stopped) = outcome.stopped else {
         if let Some(id) = existing_job {
@@ -91,14 +91,10 @@ pub(crate) fn run_special(session: &mut Session, simple: &SimpleCommand, sink: &
             };
             let job = session.jobs[idx].clone();
             sink.stderr_line(&job.command);
-            if session.interactive {
-                let _ = tcsetpgrp(std::io::stdin(), job.pgid);
-            }
-            for _ in &job.pids {
-                session.kill.track(job.pgid);
-            }
+            session.give_terminal(job.pgid);
+            session.kill.track(job.pgid);
             let _ = killpg(job.pgid, Some(Signal::SIGCONT));
-            Some(finish_foreground(
+            let status = finish_foreground(
                 session,
                 sink,
                 job.pgid,
@@ -106,7 +102,9 @@ pub(crate) fn run_special(session: &mut Session, simple: &SimpleCommand, sink: &
                 job.pids.last().copied(),
                 &job.command,
                 Some(job.id),
-            ))
+            );
+            session.kill.untrack(job.pgid);
+            Some(status)
         }
         "bg" => {
             let default = session.jobs.iter().rposition(|j| j.state == JobState::Stopped);
