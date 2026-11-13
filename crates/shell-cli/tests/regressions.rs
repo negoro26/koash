@@ -600,6 +600,20 @@ fn rollback_keeps_guarding_against_an_earlier_external_mutation() {
 }
 
 #[test]
+fn failed_spawn_does_not_block_undo() {
+    let dir = scratch_dir("undo-failed-spawn");
+    let out = koa_c(
+        &dir,
+        "echo a > f1; definitely-not-a-cmd; undo; echo st=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("st=0"), "{stdout} / {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!dir.join("f1").exists(), "undo must revert the echo");
+}
+
+#[test]
 fn external_in_a_deleted_directory_reports_the_directory() {
     let dir = scratch_dir("deleted-cwd");
     let out = koa_c(

@@ -362,6 +362,7 @@ pub(crate) fn launch_external(
             claim_terminal: !plan.background && session.interactive && launched.pgid.is_none(),
         },
     )?;
+    session.mark_opaque(stage.label.clone());
 
     let pid = Pid::from_raw(child.id() as i32);
     let pgid = *launched.pgid.get_or_insert(pid);

@@ -26,6 +26,8 @@ pub(crate) enum StageKind {
 
 pub(crate) struct Stage<'a> {
     pub kind: StageKind,
+    /// What the undo ledger calls this stage when it cannot reverse it.
+    pub label: String,
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
@@ -128,15 +130,13 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
     let mut stages = Vec::with_capacity(pipeline.commands.len());
     for cmd in &pipeline.commands {
         let stage = match cmd {
-            Command::PosixFallback { raw, .. } => {
-                session.mark_opaque(raw.clone());
-                Stage {
-                    kind: StageKind::External,
-                    argv: vec!["sh".to_string(), "-c".to_string(), raw.clone()],
-                    env: Vec::new(),
-                    redirs: &[],
-                }
-            }
+            Command::PosixFallback { raw, .. } => Stage {
+                kind: StageKind::External,
+                label: raw.clone(),
+                argv: vec!["sh".to_string(), "-c".to_string(), raw.clone()],
+                env: Vec::new(),
+                redirs: &[],
+            },
             Command::Simple(simple) => {
                 let argv: Vec<String> = simple
                     .words
@@ -160,6 +160,7 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                         }
                         Stage {
                             kind: StageKind::Assign,
+                            label: String::new(),
                             argv,
                             env: Vec::new(),
                             redirs: &[],
@@ -167,6 +168,7 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                     }
                     Some(name) if is_builtin(name) => Stage {
                         kind: StageKind::Builtin,
+                        label: name.clone(),
                         argv,
                         env: Vec::new(),
                         redirs: &simple.redirections,
@@ -175,9 +177,9 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                         if NETWORK_COMMANDS.contains(&name.as_str()) {
                             session.taint = TaintLevel::UntrustedExternal;
                         }
-                        session.mark_opaque(name.clone());
                         Stage {
                             kind: StageKind::External,
+                            label: name.clone(),
                             argv,
                             env,
                             redirs: &simple.redirections,
