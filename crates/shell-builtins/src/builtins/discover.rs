@@ -57,8 +57,6 @@ impl Builtin for Discover {
                         text.push(' ');
                         text.push_str(&spelling);
                     }
-                    text.push(' ');
-                    text.push_str(f.help);
                 }
                 for c in s.columns {
                     text.push(' ');

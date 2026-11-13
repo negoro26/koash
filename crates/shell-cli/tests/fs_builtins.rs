@@ -491,6 +491,18 @@ fn cp_file_onto_itself_keeps_its_content() {
     assert_eq!(s.read("a"), "precious");
 }
 
+/// A destination symlink that points at the source is the same file: writing through it would truncate the source.
+#[test]
+fn cp_onto_a_symlink_to_the_source_keeps_its_content() {
+    let s = Scratch::new("cp-same-link");
+    s.write("a", b"precious");
+    symlink(s.path("a"), s.path("b")).unwrap();
+    let r = run(&s.0, &format!("cp {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("same file"), "{}", r.stderr);
+    assert_eq!(s.read("a"), "precious");
+}
+
 #[test]
 fn cp_continues_past_a_missing_source_and_exits_1() {
     let s = Scratch::new("cp-accumulate");
