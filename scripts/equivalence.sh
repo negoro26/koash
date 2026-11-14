@@ -269,6 +269,12 @@ cells_cases() {
     forms '' 'cat a.txt b.txt'
     forms '' 'grep -rn fn sub proj'
     forms '' 'grep -c a a.txt b.txt'
+    forms '' 'grep a a.txt b.txt | grep e'
+    c 'grep a a.txt b.txt | grep e | to json'
+    c 'grep -l a a.txt b.txt | grep -l a'
+    c 'grep -n e a.txt b.txt | grep e | to compact'
+    c 'grep -c a a.txt b.txt | grep a'
+    c 'cat a.txt b.txt | grep e | grep a'
     forms '' 'head -n 2 a.txt b.txt'
     forms '' 'tail -n 2 a.txt b.txt'
 
