@@ -1,13 +1,11 @@
 use std::borrow::Cow;
-use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use rustc_hash::FxHashMap;
 use shell_value::StructuredDiagnostic;
 
-const FICLONE: nix::libc::c_ulong = 0x4004_9409;
+use crate::fs_util::{Lease, LeaseError, reflink_or_copy, sweep_unleased_dirs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutationState {
@@ -21,7 +19,7 @@ pub struct CowWorkspace {
     pub session_dir: PathBuf,
     pub work_dir: PathBuf,
     pub mutations: FxHashMap<PathBuf, MutationState>,
-    _lease_file: File,
+    _lease: Lease,
 }
 
 impl CowWorkspace {
@@ -31,29 +29,15 @@ impl CowWorkspace {
         std::fs::create_dir_all(&work_dir)
             .map_err(|e| StructuredDiagnostic::from_io("E_COW_DIR", &e, None))?;
 
-        let lock_path = session_dir.join("lease.lock");
-        let lease_file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| StructuredDiagnostic::from_io("E_COW_LOCK", &e, None))?;
-
-        let rc = unsafe {
-            nix::libc::flock(
-                lease_file.as_raw_fd(),
-                nix::libc::LOCK_EX | nix::libc::LOCK_NB,
-            )
-        };
-        if rc != 0 {
-            return Err(StructuredDiagnostic::new(
+        let lease = Lease::acquire(&session_dir).map_err(|e| match e {
+            LeaseError::Io(e) => StructuredDiagnostic::from_io("E_COW_LOCK", &e, None),
+            LeaseError::Held => StructuredDiagnostic::new(
                 "E_COW_LEASE",
                 format!("failed to acquire lease lock for `{session_id}`"),
                 None,
                 None,
-            ));
-        }
+            ),
+        })?;
 
         Ok(Self {
             session_id: session_id.to_string(),
@@ -61,7 +45,7 @@ impl CowWorkspace {
             session_dir,
             work_dir,
             mutations: FxHashMap::default(),
-            _lease_file: lease_file,
+            _lease: lease,
         })
     }
 
@@ -152,32 +136,10 @@ impl CowWorkspace {
         Ok(merged)
     }
 
+    /// Removes the session directories and undo stores that a crashed koa left under `root`.
     pub fn sweep_orphans(root: &Path) -> usize {
-        let sessions_dir = root.join(".koa").join("sessions");
-        let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
-            return 0;
-        };
-        let mut reaped = 0usize;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let lock_path = path.join("lease.lock");
-            let can_reap = match OpenOptions::new().read(true).write(true).open(&lock_path) {
-                Ok(file) => {
-                    let rc = unsafe {
-                        nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB)
-                    };
-                    rc == 0
-                }
-                Err(_) => true,
-            };
-            if can_reap && std::fs::remove_dir_all(&path).is_ok() {
-                reaped += 1;
-            }
-        }
-        reaped
+        let state = root.join(".koa");
+        sweep_unleased_dirs(&state.join("sessions")) + sweep_unleased_dirs(&state.join("undo"))
     }
 
     pub fn sweep_stale_spills(max_age: Duration) -> usize {
@@ -209,21 +171,4 @@ impl Drop for CowWorkspace {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.session_dir);
     }
-}
-
-fn reflink_or_copy(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let s = File::open(src)?;
-    let d = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(dst)?;
-    let rc = unsafe { nix::libc::ioctl(d.as_raw_fd(), FICLONE, s.as_raw_fd()) };
-    if rc == 0 {
-        return Ok(());
-    }
-    drop(d);
-    drop(s);
-    std::fs::copy(src, dst)?;
-    Ok(())
 }

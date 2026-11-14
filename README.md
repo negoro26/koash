@@ -40,7 +40,7 @@ koa --tsp -c "ls"
 - **Structured Pipelines**: In-process `RecordBatch` streams across `ls`, `stat`, `find`, `ps`, `where`, `select`, `sort-by`, `first`, `last`, `from`, and `to`, automatically bridging to raw byte streams at external binaries.
 - **Hashline Anchors & Atomic Edits**: `cat`, `grep`, and `ast` emit deterministic `line:hash` tags verified by `patch`.
 - **Code Intelligence**: In-process `prewalk` / `ast` (`tree-sitter`) and warm LSP diagnostics/refactoring via `diag`, `refs`, and `rename`.
-- **Transactional Undo**: Reversible file micro-commits via `tx-log`, `undo`, and `rollback`, plus unprivileged CoW session isolation.
+- **Transactional Undo**: Reversible file micro-commits via `tx-log`, `undo`, `redo`, and `rollback`. Snapshots live on disk as reflinks where the filesystem supports them (btrfs, XFS) and as copies elsewhere. Plus unprivileged CoW session isolation.
 - **Persistent Sub-Kernels**: Stateful `@sql` (in-process SQLite), `@py`, and `@js` sessions.
 - **Progressive Discovery**: Built-in BM25 command search via `discover "<intent>"`.
 

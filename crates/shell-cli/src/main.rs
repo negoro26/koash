@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use shell_builtins::{Sink, run_program};
-use shell_kernel::{Session, reap_background_jobs};
+use shell_kernel::{CowWorkspace, Session, reap_background_jobs};
 use shell_rpc::RpcServer;
 use shell_surface::SurfaceMode;
 use shell_syntax::parse;
@@ -36,7 +36,7 @@ BASH TRANSITION QUICK GUIDE:
     head/tail -n N [file], ls -la, mkdir -p, rm -rf, cd -, cat --raw.
   * Table verbs: where <col op val>, select <cols...>, sort-by [--desc] <col>,
     first [N], last [N], from json, to json|compact.
-  * Undo & code intel: tx-log, undo, rollback <id>, prewalk, ast, diag, refs, rename.
+  * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Sub-kernels & discovery: @sql \"...\", @py \"...\", @js \"...\", discover \"<intent>\".",
         env!("CARGO_PKG_VERSION")
     );
@@ -134,6 +134,10 @@ fn main() -> ExitCode {
     }
 
     let force_tsp = args.iter().any(|a| a == "--tsp");
+
+    if let Ok(cwd) = std::env::current_dir() {
+        CowWorkspace::sweep_orphans(&cwd);
+    }
 
     if let Some(pos) = find_command_flag(&args) {
         if pos + 1 >= args.len() {

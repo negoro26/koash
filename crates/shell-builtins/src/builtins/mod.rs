@@ -32,6 +32,7 @@ mod prewalk;
 mod ps;
 mod pwd;
 mod py;
+mod redo;
 mod refs;
 mod rename;
 mod rm;
@@ -83,6 +84,7 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &to::ToFormat,
     &discover::Discover,
     &undo::Undo,
+    &redo::Redo,
     &rollback::Rollback,
     &tx_log::TxLog,
     &diag::Diag,
