@@ -555,9 +555,15 @@ impl Session {
         let mut saved: Vec<(PathBuf, Preimage)> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
         let mut copied = 0u64;
-        for (root, pre) in txs.iter().flat_map(|t| &t.preimages) {
-            // Restoring an absent path deletes whatever is there, including a whole tree.
-            let descend = matches!(pre, Preimage::Absent);
+        // Restoring an absent path deletes whatever is there, including a whole tree. Those roots
+        // go first so a plain visit of the same path from another record cannot hide its children.
+        let mut roots: Vec<(&PathBuf, bool)> = txs
+            .iter()
+            .flat_map(|t| &t.preimages)
+            .map(|(path, pre)| (path, matches!(pre, Preimage::Absent)))
+            .collect();
+        roots.sort_by_key(|&(_, descend)| !descend);
+        for (root, descend) in roots {
             let mut pending = vec![root.clone()];
             while let Some(path) = pending.pop() {
                 if !seen.insert(path.clone()) {

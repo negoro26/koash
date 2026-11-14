@@ -1298,3 +1298,29 @@ fn a_capturing_command_clears_the_refusal_left_by_an_earlier_external() {
         out_text(&out)
     );
 }
+
+#[test]
+fn redo_brings_back_a_tree_that_rollback_deleted_even_when_an_earlier_record_names_its_root() {
+    let dir = scratch_dir("redo-tree");
+    std::fs::create_dir_all(dir.join("d")).expect("create d");
+    std::fs::write(dir.join("d/c"), "child\n").expect("write c");
+    let out = koa_c(
+        &dir,
+        "rm -r d; mkdir d; /bin/sh -c 'echo ext > d/x'; rollback tx_001; redo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("d/x")).expect("d/x must be back after redo"),
+        "ext\n"
+    );
+    assert!(
+        !dir.join("d/c").exists(),
+        "redo must restore the pre-rollback state"
+    );
+}
