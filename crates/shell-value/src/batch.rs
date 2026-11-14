@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use crate::{CellVal, Datum, StructuredRecord};
+use crate::{CellVal, Datum, StructuredRecord, json};
 
 #[derive(Debug, Clone)]
 pub struct RecordBatch {
@@ -127,14 +127,13 @@ impl RecordBatch {
         RowOrder(keyed.into_iter().map(|(_, idx)| idx).collect())
     }
 
-    /// Reorders the rows by moving their cells.
+    /// Reorders the rows by moving their cells. An order made for a batch of another height is
+    /// ignored, because an out-of-range row would abort the shell.
     pub fn take_rows(&mut self, order: RowOrder) {
         let ncols = self.columns.len();
-        assert_eq!(
-            order.0.len(),
-            self.nrows(),
-            "the order comes from another batch"
-        );
+        if order.0.len() != self.nrows() {
+            return;
+        }
         let mut src = std::mem::take(&mut self.cells);
         let mut cells = Vec::with_capacity(src.len());
         for idx in order.0 {
@@ -200,24 +199,56 @@ impl RecordBatch {
         }
     }
 
-    pub fn to_maps(&self) -> Vec<StructuredRecord> {
-        let ncols = self.columns.len();
-        if ncols == 0 {
-            return Vec::new();
-        }
-        let nrows = self.nrows();
-        let mut out = Vec::with_capacity(nrows);
-        for r in 0..nrows {
-            let row = &self.cells[r * ncols..(r + 1) * ncols];
-            let mut map = StructuredRecord::new();
-            for (c, col) in self.columns.iter().enumerate() {
-                if !matches!(row[c], CellVal::Null) {
-                    map.insert(col.to_string(), row[c].to_json());
+    /// The first `rows` rows of `batches` as one batch.
+    ///
+    /// The columns are the names that have a non-null cell in those rows, in the order a walk over
+    /// the rows meets them, each row visited in name order. Cells follow the JSON rule: a name
+    /// repeated in a batch keeps its last non-null cell. A row with no non-null cell stays as a row
+    /// of nulls while any column survives, and vanishes with the columns when none does.
+    pub fn merged(batches: &[RecordBatch], rows: usize) -> Self {
+        let mut names: Vec<Cow<'static, str>> = Vec::new();
+        let mut left = rows;
+        for batch in batches {
+            let order = json::name_order(batch);
+            for row in batch.rows().take(left) {
+                for col in json::visible_columns(&batch.columns, &order, row) {
+                    let name = &batch.columns[col];
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
                 }
             }
-            out.push(map);
+            left = left.saturating_sub(batch.nrows());
         }
-        out
+
+        let mut cells = Vec::new();
+        let mut left = rows;
+        for batch in batches {
+            let order = json::name_order(batch);
+            let slot: Vec<Option<usize>> = batch
+                .columns
+                .iter()
+                .map(|name| names.iter().position(|n| n == name))
+                .collect();
+            for row in batch.rows().take(left) {
+                let start = cells.len();
+                cells.resize(start + names.len(), CellVal::Null);
+                for col in json::visible_columns(&batch.columns, &order, row) {
+                    if let Some(at) = slot[col] {
+                        cells[start + at] = match row.get(col) {
+                            // The RPC compact path used to round-trip through JSON, which has no NaN.
+                            Datum::Float(f) if !f.is_finite() => CellVal::Null,
+                            other => CellVal::from(other),
+                        };
+                    }
+                }
+            }
+            left = left.saturating_sub(batch.nrows());
+        }
+        Self {
+            columns: names.into(),
+            cells,
+        }
     }
 }
 
@@ -303,5 +334,14 @@ mod tests {
     fn a_batch_without_columns_has_no_rows() {
         let b = RecordBatch::empty();
         assert_eq!(b.rows().count(), 0);
+    }
+
+    #[test]
+    fn take_rows_ignores_an_order_made_for_a_batch_of_another_height() {
+        let long = batch(&[json!({"a": 1}), json!({"a": 2}), json!({"a": 3})]);
+        let mut short = batch(&[json!({"a": 9}), json!({"a": 8})]);
+        let order = long.order_by(|row| row.get(0).as_f64().map(|n| n as i64));
+        short.take_rows(order);
+        assert_eq!(column(&short, "a"), ["9", "8"]);
     }
 }

@@ -58,6 +58,8 @@ fixtures() {
     printf '[{"a":1,"b":[1,{"x":null}],"c":{"z":1,"a":[true,null]},"d":2.0,"e":1e300,"f":-0.5,"g":18446744073709551615,"h":"l1\\nl2\\t\\"q\\" \xc3\xa9","i":null,"j":false}]\n' >rich.json
     printf '[{"a":1},{"b":2,"a":null},{"c":"x"},{"a":"y","c":3}]\n' >ragged.json
     printf '{"a":1}\nnot json\n{"b":"two"}\n\n{"a":3,"b":[1]}\n' >lenient.json
+    printf '[{"a":null},{"a":null,"b":null},{"a":1},{"b":null,"a":2}]\n' >nulls.json
+    printf '[{"a":null},{"b":null}]\n' >allnull.json
     mkdir modes
     : >modes/m7 && chmod 007 modes/m7
     : >modes/m70 && chmod 070 modes/m70
@@ -267,6 +269,12 @@ cells_cases() {
     forms '' 'cat a.txt b.txt'
     forms '' 'grep -rn fn sub proj'
     forms '' 'grep -c a a.txt b.txt'
+    forms '' 'grep a a.txt b.txt | grep e'
+    c 'grep a a.txt b.txt | grep e | to json'
+    c 'grep -l a a.txt b.txt | grep -l a'
+    c 'grep -n e a.txt b.txt | grep e | to compact'
+    c 'grep -c a a.txt b.txt | grep a'
+    c 'cat a.txt b.txt | grep e | grep a'
     forms '' 'head -n 2 a.txt b.txt'
     forms '' 'tail -n 2 a.txt b.txt'
 
@@ -287,6 +295,11 @@ cells_cases() {
     forms '' 'cat --raw rich.json | from json'
     forms '' 'cat --raw ragged.json | from json'
     forms '' 'cat --raw lenient.json | from json'
+    forms '' 'cat --raw nulls.json | from json'
+    forms '' 'cat --raw allnull.json | from json'
+    forms '' 'cat --raw nulls.json | from json | select b a b'
+    r "$(rpc_script_opts '"max_output_bytes":8' 'cat --raw nulls.json | from json')"
+    r "$(rpc_script_opts '"format":"compact","max_output_bytes":8' 'cat --raw nulls.json | from json')"
     c 'cat --raw rich.json | from json | where d == 2'
     c 'cat --raw rich.json | from json | where e > 1'
     c 'cat --raw rich.json | from json | where j == false'

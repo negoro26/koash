@@ -12,6 +12,7 @@ This document maps the code. Read it before changing the executor or adding a co
   It does not expand words or know any command names.
 - `shell-value` defines `Value` (`Empty`, `Bytes`, `Batch`), `RecordBatch`, `StructuredDiagnostic`, Hashline tags, and taint levels.
   A consumer reads a batch through `Row` and `Datum`, never through `CellVal`, and reshapes it with `retain_rows`, `order_by` and `take_rows`, and `select_columns`.
+  `Records` is the one JSON encoder: `to json`, ACP, NDJSON to external programs, TSP and RPC records all use it, with sorted keys and no null cells.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
   It also spawns and waits for process groups.
 - `shell-builtins` is the executor and every builtin command.

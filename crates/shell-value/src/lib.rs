@@ -14,8 +14,8 @@ use thiserror::Error;
 pub use batch::{RecordBatch, Row, RowOrder};
 pub use cell::CellVal;
 pub use datum::Datum;
-pub use json::{StructuredRecord, format_cell};
-pub use text::{batch_to_compact_sigil, records_to_compact_sigil, render_batch_table};
+pub use json::{Records, StructuredRecord};
+pub use text::{batch_to_compact_sigil, render_batch_table};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -101,7 +101,11 @@ impl Value {
         match self {
             Value::Empty => Vec::new(),
             Value::Bytes(bytes) => bytes,
-            Value::Batch(batch) => json::batch_to_ndjson_bytes(&batch),
+            Value::Batch(batch) => {
+                let mut out = Vec::new();
+                batch.write_ndjson(&mut out);
+                out
+            }
         }
     }
 

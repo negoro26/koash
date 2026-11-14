@@ -292,7 +292,7 @@ fn render_chunks(chunks: Vec<Chunk>) -> String {
                 text.push_str(&String::from_utf8_lossy(&bytes));
             }
             Chunk::Batch(batch) => {
-                text.push_str(&serde_json::to_string_pretty(&batch.to_maps()).unwrap_or_default());
+                text.push_str(&serde_json::to_string_pretty(&batch.records()).unwrap_or_default());
                 text.push('\n');
             }
             Chunk::Diag(diag) => {
