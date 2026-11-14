@@ -16,6 +16,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::Table,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: true,
 };
 
 impl Builtin for SortBy {
