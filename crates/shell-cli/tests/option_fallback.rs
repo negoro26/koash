@@ -303,3 +303,30 @@ fn over_rpc_the_notice_is_a_stderr_chunk_and_the_output_is_text() {
     );
     assert_eq!(events.last().unwrap()["exit_code"], 0, "{events:?}");
 }
+
+#[test]
+fn over_rpc_the_notice_arrives_before_the_programs_output() {
+    let s = Scratch::new("rpc-order");
+    s.write("a", b"");
+    let mut rpc = RpcClient::start(&s.0);
+    let sid = rpc.create_session();
+    rpc.send(serde_json::json!({
+        "id": 2,
+        "method": "exec",
+        "params": {"session_id": sid, "command": format!("ls -1 {}", s.q(""))}
+    }));
+    let events = rpc.until_completed(2);
+    let notice = events
+        .iter()
+        .position(|e| {
+            e["stderr"]
+                .as_str()
+                .is_some_and(|t| t.contains("is not built in, running"))
+        })
+        .expect("a stderr chunk carries the notice");
+    let output = events
+        .iter()
+        .position(|e| e["stdout"].as_str() == Some("a\n"))
+        .expect("a stdout chunk carries the program output");
+    assert!(notice < output, "notice must come first: {events:?}");
+}
