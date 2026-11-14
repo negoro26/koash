@@ -4,7 +4,8 @@ use shell_kernel::Session;
 use shell_value::{RecordBatch, StructuredDiagnostic, Value};
 
 use super::common::{
-    hashline_schema, operands_read_stdin, push_hashline_rows, resolve_path, text_lines,
+    HASHLINE_COLUMNS, hashline_schema, operands_read_stdin, push_hashline_rows, resolve_path,
+    text_lines,
 };
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
@@ -28,7 +29,7 @@ static SIGNATURE: Signature = Signature {
             "number the lines of raw output (Hashline rows always carry line numbers)",
         ),
     ],
-    columns: &["file", "line", "hash", "text"],
+    columns: &HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,

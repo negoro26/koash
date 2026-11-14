@@ -17,7 +17,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Inspect file or directory metadata",
     flags: &[],
-    columns: &["path", "kind", "size", "modified", "readonly", "mode"],
+    columns: crate::builtin::columns!["path", "kind", "size", "modified", "readonly", "mode"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

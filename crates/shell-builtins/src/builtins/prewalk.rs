@@ -13,7 +13,7 @@ static SIGNATURE: Signature = Signature {
         Flag::long_valued("budget", "token budget for the skeleton"),
         Flag::long_switch("deep", "include nested items"),
     ],
-    columns: &["file", "rank", "tokens", "skeleton"],
+    columns: crate::builtin::columns!["file", "rank", "tokens", "skeleton"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

@@ -15,7 +15,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "BM25 progressive command discovery by natural language intent",
     flags: &[Flag::long_valued("limit", "how many commands to return")],
-    columns: &["command", "score", "description", "flags", "columns"],
+    columns: crate::builtin::columns!["command", "score", "description", "flags", "columns"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
@@ -58,7 +58,7 @@ impl Builtin for Discover {
                         text.push_str(&spelling);
                     }
                 }
-                for c in s.columns {
+                for c in s.column_names() {
                     text.push(' ');
                     text.push_str(c);
                 }
@@ -119,7 +119,8 @@ impl Builtin for Discover {
                     "flags".to_string(),
                     JsonVal::String(flag_spellings(s.flags).join(" ")),
                 );
-                rec.insert("columns".to_string(), JsonVal::String(s.columns.join(", ")));
+                let columns = s.column_names().collect::<Vec<_>>().join(", ");
+                rec.insert("columns".to_string(), JsonVal::String(columns));
                 rec
             })
             .collect();

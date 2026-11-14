@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Roll back filesystem state to a specific transaction ID",
     flags: &[],
-    columns: &["tx_id", "restored_files"],
+    columns: crate::builtin::columns!["tx_id", "restored_files"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,

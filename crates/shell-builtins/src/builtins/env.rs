@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "List environment variables",
     flags: &[],
-    columns: &["key", "value"],
+    columns: crate::builtin::columns!["key", "value"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

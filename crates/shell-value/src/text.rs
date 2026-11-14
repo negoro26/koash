@@ -9,7 +9,7 @@ pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bo
         return;
     }
 
-    let mut widths: Vec<usize> = batch.columns.iter().map(|c| c.len()).collect();
+    let mut widths: Vec<usize> = batch.schema().names().map(str::len).collect();
     let mut scratch = String::new();
     for row in batch.rows() {
         for (c, cell) in row.iter().enumerate() {
@@ -21,7 +21,7 @@ pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bo
     }
 
     let mut bw = BufWriter::with_capacity(8192, writer);
-    for (i, col) in batch.columns.iter().enumerate() {
+    for (i, col) in batch.schema().names().enumerate() {
         if i > 0 {
             let _ = bw.write_all(b"  ");
         }
@@ -82,11 +82,11 @@ pub fn batch_to_compact_sigil(batch: &RecordBatch) -> String {
         return String::new();
     }
     let mut out = String::from("@schema:");
-    for (i, col) in batch.columns.iter().enumerate() {
+    for (i, col) in batch.schema().names().enumerate() {
         if i > 0 {
             out.push('|');
         }
-        out.push_str(col.as_ref());
+        out.push_str(col);
     }
     out.push('\n');
     let mut scratch = String::new();
