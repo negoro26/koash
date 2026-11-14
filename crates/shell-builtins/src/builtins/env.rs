@@ -39,6 +39,6 @@ impl Builtin for Env {
                 rec
             })
             .collect();
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

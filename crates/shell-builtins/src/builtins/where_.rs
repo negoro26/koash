@@ -38,7 +38,7 @@ impl Builtin for Where {
         let field = &args[0];
         let op = &args[1];
         let rhs_raw = &args[2];
-        let mut batch = input.into_batch();
+        let mut batch = input.into_batch()?;
         let Some(col_idx) = batch.col_index(field) else {
             batch.truncate_rows(0);
             return Ok(Value::from_batch(batch));

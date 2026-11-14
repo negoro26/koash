@@ -121,7 +121,7 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
             }
             records.push(rec);
         }
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     } else {
         conn.execute_batch(trimmed)
             .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;

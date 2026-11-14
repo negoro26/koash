@@ -1,68 +1,42 @@
-use std::sync::Arc;
-
 use crate::Datum;
 
-#[derive(Debug, Clone)]
-pub enum CellVal {
+/// One table cell. Text lives in the batch's arena, so a cell is plain data: `Copy`, no `Drop`,
+/// and meaningless without the batch that made it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Cell {
     Null,
     Bool(bool),
     Int(i64),
     UInt(u64),
     Float(f64),
-    SharedStr(Arc<str>),
-    Str(String),
-    Hash([u8; 3]),
-    Json(serde_json::Value),
+    Str {
+        len: u32,
+        off: u64,
+    },
+    /// The compact text of a JSON array or object.
+    Json {
+        len: u32,
+        off: u64,
+    },
 }
 
-impl CellVal {
-    pub fn datum(&self) -> Datum<'_> {
+const _: () = assert!(size_of::<Cell>() == 16);
+
+impl Cell {
+    pub(crate) fn datum(self, text: &str) -> Datum<'_> {
         match self {
-            CellVal::Null => Datum::Null,
-            CellVal::Bool(b) => Datum::Bool(*b),
-            CellVal::Int(n) => Datum::Int(*n),
-            CellVal::UInt(n) => Datum::UInt(*n),
-            CellVal::Float(n) => Datum::Float(*n),
-            CellVal::SharedStr(s) => Datum::Str(s),
-            CellVal::Str(s) => Datum::Str(s),
-            CellVal::Hash(h) => Datum::Str(std::str::from_utf8(h).unwrap_or("")),
-            CellVal::Json(v) => Datum::Json(v),
-        }
-    }
-
-    pub fn from_json(v: serde_json::Value) -> Self {
-        match v {
-            serde_json::Value::Null => CellVal::Null,
-            serde_json::Value::Bool(b) => CellVal::Bool(b),
-            serde_json::Value::Number(n) => {
-                if let Some(u) = n.as_u64() {
-                    CellVal::UInt(u)
-                } else if let Some(i) = n.as_i64() {
-                    CellVal::Int(i)
-                } else {
-                    CellVal::Float(n.as_f64().unwrap_or(0.0))
-                }
-            }
-            serde_json::Value::String(s) => CellVal::Str(s),
-            other => CellVal::Json(other),
+            Cell::Null => Datum::Null,
+            Cell::Bool(b) => Datum::Bool(b),
+            Cell::Int(n) => Datum::Int(n),
+            Cell::UInt(n) => Datum::UInt(n),
+            Cell::Float(n) => Datum::Float(n),
+            Cell::Str { len, off } => Datum::Str(span(text, len, off)),
+            Cell::Json { len, off } => Datum::Json(span(text, len, off)),
         }
     }
 }
 
-impl From<Datum<'_>> for CellVal {
-    /// A three-byte string becomes `Hash`, which stores it inline and reads back as the same string.
-    fn from(d: Datum<'_>) -> Self {
-        match d {
-            Datum::Null => CellVal::Null,
-            Datum::Bool(b) => CellVal::Bool(b),
-            Datum::Int(n) => CellVal::Int(n),
-            Datum::UInt(n) => CellVal::UInt(n),
-            Datum::Float(n) => CellVal::Float(n),
-            Datum::Str(s) => match <[u8; 3]>::try_from(s.as_bytes()) {
-                Ok(hash) => CellVal::Hash(hash),
-                Err(_) => CellVal::Str(s.to_string()),
-            },
-            Datum::Json(v) => CellVal::Json(v.clone()),
-        }
-    }
+pub(crate) fn span(text: &str, len: u32, off: u64) -> &str {
+    let start = off as usize;
+    text.get(start..start + len as usize).unwrap_or("")
 }

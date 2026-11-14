@@ -1,24 +1,29 @@
-use crate::{CellVal, Column, Datum, Schema, StructuredRecord, json};
+use crate::cell::Cell;
+use crate::rows::DynRows;
+use crate::{Column, Datum, Schema, StructuredDiagnostic, StructuredRecord, json};
 
 #[derive(Debug, Clone)]
 pub struct RecordBatch {
     schema: Schema,
-    pub cells: Vec<CellVal>,
+    cells: Vec<Cell>,
+    text: String,
 }
 
 /// One row of a batch, read through [`Datum`].
 #[derive(Debug, Clone, Copy)]
 pub struct Row<'a> {
-    cells: &'a [CellVal],
+    cells: &'a [Cell],
+    text: &'a str,
 }
 
 impl<'a> Row<'a> {
     pub fn get(&self, col: usize) -> Datum<'a> {
-        self.cells[col].datum()
+        self.cells[col].datum(self.text)
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = Datum<'a>> + use<'a> {
-        self.cells.iter().map(CellVal::datum)
+        let text = self.text;
+        self.cells.iter().map(move |cell| cell.datum(text))
     }
 }
 
@@ -27,23 +32,16 @@ impl<'a> Row<'a> {
 pub struct RowOrder(Vec<usize>);
 
 impl RecordBatch {
-    pub fn new(schema: Schema) -> Self {
-        Self {
-            schema,
-            cells: Vec::new(),
-        }
-    }
-
-    pub fn with_capacity(schema: Schema, row_cap: usize) -> Self {
-        let ncols = schema.len();
-        Self {
-            schema,
-            cells: Vec::with_capacity(row_cap * ncols),
-        }
-    }
-
     pub fn empty() -> Self {
-        Self::new(Schema::empty())
+        Self::from_parts(Schema::empty(), Vec::new(), String::new())
+    }
+
+    pub(crate) fn from_parts(schema: Schema, cells: Vec<Cell>, text: String) -> Self {
+        Self {
+            schema,
+            cells,
+            text,
+        }
     }
 
     pub fn schema(&self) -> &Schema {
@@ -66,6 +64,7 @@ impl RecordBatch {
         let ncols = self.schema.len();
         Row {
             cells: &self.cells[idx * ncols..(idx + 1) * ncols],
+            text: &self.text,
         }
     }
 
@@ -87,24 +86,27 @@ impl RecordBatch {
     }
 
     pub fn rows(&self) -> impl ExactSizeIterator<Item = Row<'_>> {
+        let text = self.text.as_str();
         self.cells
             .chunks_exact(self.schema.len().max(1))
-            .map(|cells| Row { cells })
+            .map(move |cells| Row { cells, text })
     }
 
-    /// Keeps the rows `keep` accepts, in order, without copying any cell.
+    /// Keeps the rows `keep` accepts, in order. Cells move inside the batch and no text is copied.
     pub fn retain_rows(&mut self, mut keep: impl FnMut(Row<'_>) -> bool) {
         let ncols = self.schema.len();
         let mut write = 0;
         for read in 0..self.nrows() {
-            let cells = &self.cells[read * ncols..(read + 1) * ncols];
-            if !keep(Row { cells }) {
+            let from = read * ncols;
+            let cells = &self.cells[from..from + ncols];
+            if !keep(Row {
+                cells,
+                text: &self.text,
+            }) {
                 continue;
             }
             if write != read {
-                for c in 0..ncols {
-                    self.cells.swap(write * ncols + c, read * ncols + c);
-                }
+                self.cells.copy_within(from..from + ncols, write * ncols);
             }
             write += 1;
         }
@@ -122,19 +124,16 @@ impl RecordBatch {
         RowOrder(keyed.into_iter().map(|(_, idx)| idx).collect())
     }
 
-    /// Reorders the rows by moving their cells. An order made for a batch of another height is
-    /// ignored, because an out-of-range row would abort the shell.
+    /// Reorders the rows. An order made for a batch of another height is ignored, because an
+    /// out-of-range row would abort the shell.
     pub fn take_rows(&mut self, order: RowOrder) {
         let ncols = self.schema.len();
         if order.0.len() != self.nrows() {
             return;
         }
-        let mut src = std::mem::take(&mut self.cells);
-        let mut cells = Vec::with_capacity(src.len());
+        let mut cells = Vec::with_capacity(self.cells.len());
         for idx in order.0 {
-            for cell in &mut src[idx * ncols..(idx + 1) * ncols] {
-                cells.push(std::mem::replace(cell, CellVal::Null));
-            }
+            cells.extend_from_slice(&self.cells[idx * ncols..(idx + 1) * ncols]);
         }
         self.cells = cells;
     }
@@ -143,31 +142,17 @@ impl RecordBatch {
     pub fn select_columns(&mut self, cols: &[usize]) {
         let ncols = self.schema.len();
         let nrows = self.nrows();
-        let first_use: Vec<usize> = cols
-            .iter()
-            .enumerate()
-            .map(|(at, col)| cols.iter().position(|c| c == col).unwrap_or(at))
-            .collect();
-        let mut src = std::mem::take(&mut self.cells);
-        let mut cells: Vec<CellVal> = Vec::with_capacity(nrows * cols.len());
-        for row in src.chunks_exact_mut(ncols.max(1)).take(nrows) {
-            let base = cells.len();
-            for (at, &col) in cols.iter().enumerate() {
-                let cell = if first_use[at] == at {
-                    std::mem::replace(&mut row[col], CellVal::Null)
-                } else {
-                    cells[base + first_use[at]].clone()
-                };
-                cells.push(cell);
-            }
+        let mut cells = Vec::with_capacity(nrows * cols.len());
+        for row in self.cells.chunks_exact(ncols.max(1)).take(nrows) {
+            cells.extend(cols.iter().map(|&col| row[col]));
         }
         self.schema = self.schema.project(cols);
         self.cells = cells;
     }
 
-    pub fn from_maps(records: Vec<StructuredRecord>) -> Self {
+    pub fn from_maps(records: Vec<StructuredRecord>) -> Result<Self, StructuredDiagnostic> {
         if records.is_empty() {
-            return Self::empty();
+            return Ok(Self::empty());
         }
         let mut names: Vec<&str> = Vec::new();
         for rec in &records {
@@ -178,17 +163,18 @@ impl RecordBatch {
             }
         }
         let schema = Schema::named(names);
-        let mut cells = Vec::with_capacity(records.len() * schema.len());
+        let mut rows = DynRows::new(schema.clone());
         for mut rec in records {
-            for col in schema.names() {
-                let cell = match rec.remove(col) {
-                    Some(v) => CellVal::from_json(v),
-                    None => CellVal::Null,
-                };
-                cells.push(cell);
-            }
+            rows.push_with(|out| {
+                for col in schema.names() {
+                    match rec.remove(col) {
+                        Some(v) => json::put_value(out, v),
+                        None => out.put(Datum::Null),
+                    }
+                }
+            });
         }
-        Self { schema, cells }
+        rows.finish()
     }
 
     /// The first `rows` rows of `batches` as one batch.
@@ -213,7 +199,10 @@ impl RecordBatch {
             left = left.saturating_sub(batch.nrows());
         }
 
-        let mut cells = Vec::new();
+        let schema = Schema::from(names);
+        let ncols = schema.len();
+        let mut out = DynRows::new(schema.clone());
+        let mut cells: Vec<Datum<'_>> = Vec::new();
         let mut left = rows;
         for batch in batches {
             let order = json::name_order(batch);
@@ -221,27 +210,30 @@ impl RecordBatch {
                 .schema
                 .columns()
                 .iter()
-                .map(|name| names.iter().position(|n| n == name))
+                .map(|name| schema.columns().iter().position(|n| n == name))
                 .collect();
             for row in batch.rows().take(left) {
-                let start = cells.len();
-                cells.resize(start + names.len(), CellVal::Null);
+                cells.clear();
+                cells.resize(ncols, Datum::Null);
                 for col in json::visible_columns(batch.schema.columns(), &order, row) {
                     if let Some(at) = slot[col] {
-                        cells[start + at] = match row.get(col) {
+                        cells[at] = match row.get(col) {
                             // The RPC compact path used to round-trip through JSON, which has no NaN.
-                            Datum::Float(f) if !f.is_finite() => CellVal::Null,
-                            other => CellVal::from(other),
+                            Datum::Float(f) if !f.is_finite() => Datum::Null,
+                            other => other,
                         };
                     }
                 }
+                out.push_with(|sink| cells.iter().for_each(|&cell| sink.put(cell)));
             }
             left = left.saturating_sub(batch.nrows());
         }
-        Self {
-            schema: names.into(),
-            cells,
-        }
+        out.into_batch()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn text_bytes(&self) -> usize {
+        self.text.len()
     }
 }
 
@@ -256,7 +248,7 @@ mod tests {
             .iter()
             .map(|row| serde_json::from_value(row.clone()).unwrap_or_default())
             .collect();
-        RecordBatch::from_maps(maps)
+        RecordBatch::from_maps(maps).unwrap()
     }
 
     fn column(batch: &RecordBatch, name: &str) -> Vec<String> {

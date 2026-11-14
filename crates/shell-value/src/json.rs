@@ -3,11 +3,11 @@ use std::slice;
 
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
-use crate::{Column, Datum, RecordBatch, Row};
+use crate::{Column, Datum, RecordBatch, Row, RowSink, StructuredDiagnostic};
 
 pub type StructuredRecord = BTreeMap<String, serde_json::Value>;
 
-pub(crate) fn batch_from_raw_bytes(bytes: &[u8]) -> RecordBatch {
+pub(crate) fn batch_from_raw_bytes(bytes: &[u8]) -> Result<RecordBatch, StructuredDiagnostic> {
     let text = String::from_utf8_lossy(bytes);
     let mut records = Vec::new();
     for line in text.lines() {
@@ -27,6 +27,23 @@ pub(crate) fn batch_from_raw_bytes(bytes: &[u8]) -> RecordBatch {
     RecordBatch::from_maps(records)
 }
 
+/// Writes one parsed JSON value as a cell. Arrays and objects are kept as compact text.
+pub(crate) fn put_value(out: &mut RowSink<'_>, value: serde_json::Value) {
+    match value {
+        serde_json::Value::Null => out.put(Datum::Null),
+        serde_json::Value::Bool(b) => out.put(Datum::Bool(b)),
+        serde_json::Value::Number(n) => out.put(if let Some(u) = n.as_u64() {
+            Datum::UInt(u)
+        } else if let Some(i) = n.as_i64() {
+            Datum::Int(i)
+        } else {
+            Datum::Float(n.as_f64().unwrap_or(0.0))
+        }),
+        serde_json::Value::String(s) => out.put_str(&s),
+        nested => out.put(Datum::Json(&nested.to_string())),
+    }
+}
+
 impl Serialize for Datum<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match *self {
@@ -36,7 +53,10 @@ impl Serialize for Datum<'_> {
             Datum::UInt(n) => s.serialize_u64(n),
             Datum::Float(n) => s.serialize_f64(n),
             Datum::Str(text) => s.serialize_str(text),
-            Datum::Json(v) => v.serialize(s),
+            Datum::Json(text) => match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(value) => value.serialize(s),
+                Err(_) => s.serialize_unit(),
+            },
         }
     }
 }
@@ -187,14 +207,14 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::{CellVal, Schema};
+    use crate::{DynRows, Schema};
 
     fn batch(rows: &[Value]) -> RecordBatch {
         let maps = rows
             .iter()
             .map(|row| serde_json::from_value(row.clone()).unwrap_or_default())
             .collect();
-        RecordBatch::from_maps(maps)
+        RecordBatch::from_maps(maps).unwrap()
     }
 
     fn without_nulls(rows: &[Value]) -> Vec<Value> {
@@ -278,28 +298,24 @@ mod tests {
 
     // The deleted `to_maps`, kept as the oracle the encoder must agree with.
     fn reference(batch: &RecordBatch) -> Vec<StructuredRecord> {
-        let ncols = batch.ncols();
-        if ncols == 0 {
+        if batch.ncols() == 0 {
             return Vec::new();
         }
-        let to_json = |cell: &CellVal| match cell {
-            CellVal::Null => Value::Null,
-            CellVal::Bool(b) => Value::Bool(*b),
-            CellVal::Int(n) => Value::from(*n),
-            CellVal::UInt(n) => Value::from(*n),
-            CellVal::Float(n) => Value::from(*n),
-            CellVal::SharedStr(s) => Value::String(s.to_string()),
-            CellVal::Str(s) => Value::String(s.clone()),
-            CellVal::Hash(h) => Value::String(String::from_utf8_lossy(h).into_owned()),
-            CellVal::Json(v) => v.clone(),
+        let to_json = |cell: Datum<'_>| match cell {
+            Datum::Null => Value::Null,
+            Datum::Bool(b) => Value::Bool(b),
+            Datum::Int(n) => Value::from(n),
+            Datum::UInt(n) => Value::from(n),
+            Datum::Float(n) => Value::from(n),
+            Datum::Str(s) => Value::String(s.to_string()),
+            Datum::Json(text) => serde_json::from_str(text).unwrap(),
         };
         batch
-            .cells
-            .chunks_exact(ncols)
+            .rows()
             .map(|row| {
                 let mut map = StructuredRecord::new();
-                for (col, cell) in batch.schema().names().zip(row) {
-                    if !matches!(cell, CellVal::Null) {
+                for (col, cell) in batch.schema().names().zip(row.iter()) {
+                    if !cell.is_null() {
                         map.insert(col.to_string(), to_json(cell));
                     }
                 }
@@ -308,42 +324,41 @@ mod tests {
             .collect()
     }
 
-    fn hand_built(names: &[&'static str], cells: Vec<CellVal>) -> RecordBatch {
-        let mut batch = RecordBatch::new(Schema::named(names));
-        batch.cells = cells;
-        batch
+    fn hand_built(names: &[&str], rows: &[Vec<Datum<'_>>]) -> RecordBatch {
+        let mut out = DynRows::new(Schema::named(names));
+        for row in rows {
+            out.push_with(|sink| row.iter().for_each(|&cell| sink.put(cell)));
+        }
+        out.finish().unwrap()
     }
 
     fn odd_batch() -> RecordBatch {
-        use std::sync::Arc;
-        let n = || CellVal::Null;
+        let n = Datum::Null;
+        let nested = json!({"k": [1, null, 2.0]}).to_string();
         hand_built(
             &["z", "a", "m", "a", "z", "h", "f", "j"],
-            vec![
-                CellVal::UInt(1),
-                n(),
-                CellVal::Float(f64::NAN),
-                CellVal::Str("last".into()),
-                n(),
-                CellVal::Hash(*b"4c7"),
-                CellVal::Float(f64::INFINITY),
-                CellVal::Json(json!({"k": [1, null, 2.0]})),
-                n(),
-                n(),
-                n(),
-                n(),
-                n(),
-                n(),
-                n(),
-                n(),
-                CellVal::Int(-3),
-                CellVal::SharedStr(Arc::from("first")),
-                CellVal::Bool(false),
-                n(),
-                CellVal::Int(9),
-                CellVal::Str("l1\nl2 é".into()),
-                CellVal::Float(2.0),
-                n(),
+            &[
+                vec![
+                    Datum::UInt(1),
+                    n,
+                    Datum::Float(f64::NAN),
+                    Datum::Str("last"),
+                    n,
+                    Datum::Str("4c7"),
+                    Datum::Float(f64::INFINITY),
+                    Datum::Json(&nested),
+                ],
+                vec![n; 8],
+                vec![
+                    Datum::Int(-3),
+                    Datum::Str("first"),
+                    Datum::Bool(false),
+                    n,
+                    Datum::Int(9),
+                    Datum::Str("l1\nl2 é"),
+                    Datum::Float(2.0),
+                    n,
+                ],
             ],
         )
     }
@@ -370,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_batch_without_columns_encodes_no_rows() {
-        let b = hand_built(&[], Vec::new());
+        let b = hand_built(&[], &[]);
         assert_eq!(
             serde_json::to_string(&b.records()).unwrap_or_default(),
             "[]"
@@ -394,7 +409,7 @@ mod tests {
             let old = if rows == 0 {
                 RecordBatch::empty()
             } else {
-                RecordBatch::from_maps(all[..rows].to_vec())
+                RecordBatch::from_maps(all[..rows].to_vec()).unwrap()
             };
             let new = RecordBatch::merged(&both, rows);
             assert_eq!(

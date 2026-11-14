@@ -35,7 +35,7 @@ impl Builtin for Select {
                 Some("example: ls | select name size".to_string()),
             ));
         }
-        let mut batch = input.into_batch();
+        let mut batch = input.into_batch()?;
         let keep: Vec<usize> = args.iter().filter_map(|col| batch.col_index(col)).collect();
         if keep.is_empty() {
             return Ok(Value::from_batch(RecordBatch::empty()));

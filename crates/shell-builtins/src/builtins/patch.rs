@@ -139,6 +139,6 @@ impl Builtin for Patch {
             "status".to_string(),
             JsonVal::String(if is_delete { "deleted" } else { "patched" }.to_string()),
         );
-        Ok(Value::from_records(vec![rec]))
+        Value::from_records(vec![rec])
     }
 }

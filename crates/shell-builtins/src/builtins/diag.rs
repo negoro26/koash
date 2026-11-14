@@ -29,7 +29,7 @@ impl Builtin for Diag {
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         if !session.cwd.join("Cargo.toml").is_file() {
-            return Ok(Value::from_records(Vec::new()));
+            return Value::from_records(Vec::new());
         }
         let output = std::process::Command::new("cargo")
             .args(["check", "--message-format=json", "--quiet"])
@@ -77,6 +77,6 @@ impl Builtin for Diag {
             rec.insert("message".to_string(), JsonVal::String(text.to_string()));
             records.push(rec);
         }
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

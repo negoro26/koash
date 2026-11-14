@@ -8,12 +8,11 @@
 
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
-use std::sync::Arc;
 
 use shell_kernel::Session;
-use shell_value::{RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{StructuredDiagnostic, Value};
 
-use super::common::{hashline_schema, push_hashline_rows, resolve_path, text_lines, usage_error};
+use super::common::{HashlineRows, push_hashline_rows, resolve_path, text_lines, usage_error};
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Flag, Signature};
@@ -98,7 +97,7 @@ pub(super) fn run(
     let headers = args.has("verbose") || (named && !args.has("quiet"));
     let mut input = Some(input);
     let mut out = Vec::new();
-    let mut batch = RecordBatch::new(hashline_schema());
+    let mut rows = HashlineRows::new();
     let mut printed = 0usize;
     for operand in &args.operands {
         let (label, mut source) = if *operand == "-" {
@@ -145,15 +144,14 @@ pub(super) fn run(
                     }
                 },
             };
-            let label: Arc<str> = Arc::from(label);
-            push_hashline_rows(&mut batch, &label, first, text_lines(&bytes));
+            push_hashline_rows(&mut rows, label, first, text_lines(&bytes));
         }
         printed += 1;
     }
     Ok(if raw {
         Value::from_bytes(out)
     } else {
-        Value::from_batch(batch)
+        Value::from_batch(rows.finish()?)
     })
 }
 

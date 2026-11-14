@@ -75,6 +75,6 @@ impl Builtin for Rename {
             rec.insert("replacements".to_string(), json!(count));
             records.push(rec);
         }
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

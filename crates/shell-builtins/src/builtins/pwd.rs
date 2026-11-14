@@ -50,6 +50,6 @@ impl Builtin for Pwd {
             "path".to_string(),
             JsonVal::String(path.to_string_lossy().to_string()),
         );
-        Ok(Value::from_records(vec![rec]))
+        Value::from_records(vec![rec])
     }
 }

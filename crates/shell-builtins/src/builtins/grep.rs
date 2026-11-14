@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
@@ -8,18 +7,47 @@ use grep_searcher::{Searcher, SearcherBuilder};
 use ignore::WalkBuilder;
 use shell_kernel::Session;
 use shell_value::{
-    CellVal, Column, Datum, RecordBatch, Schema, StructuredDiagnostic, Value, hashline_bytes,
+    Datum, DynRows, Record, RecordBatch, Rows, Schema, StructuredDiagnostic, Value, hashline_bytes,
+    record,
 };
 
 use super::common::{
-    HASHLINE_COLUMNS, check_killed, hashline_schema, resolve_path, search_file_with_hashline,
+    HASHLINE_COLUMNS, HashlineRows, check_killed, push_hashline_row, resolve_path,
+    search_file_with_hashline,
 };
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
-static FILE_COLUMNS: [Column; 1] = [Column::new("file")];
-static COUNT_COLUMNS: [Column; 2] = [Column::new("file"), Column::new("count")];
+record! { struct FileRow<'a> { file: &'a str } }
+record! { struct CountRow<'a> { file: &'a str, count: u64 } }
+
+/// What a search collects: matching lines, the files that match, or a count per file.
+enum Found {
+    Lines(HashlineRows),
+    Files(Rows<FileRow<'static>>),
+    Counts(Rows<CountRow<'static>>),
+}
+
+impl Found {
+    fn new(opts: &GrepOpts) -> Self {
+        if opts.count_only {
+            Found::Counts(Rows::new())
+        } else if opts.files_only {
+            Found::Files(Rows::new())
+        } else {
+            Found::Lines(HashlineRows::with_capacity(64))
+        }
+    }
+
+    fn finish(self) -> Result<RecordBatch, StructuredDiagnostic> {
+        match self {
+            Found::Lines(rows) => rows.finish(),
+            Found::Files(rows) => rows.finish(),
+            Found::Counts(rows) => rows.finish(),
+        }
+    }
+}
 
 pub(super) struct Grep;
 
@@ -67,7 +95,7 @@ static SIGNATURE: Signature = Signature {
         Flag::long_valued("include", "search only files whose name matches the glob"),
         Flag::long_valued("exclude", "skip files whose name matches the glob"),
     ],
-    columns: &HASHLINE_COLUMNS,
+    columns: HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,
@@ -107,7 +135,6 @@ impl Builtin for Grep {
             .map_err(|e| StructuredDiagnostic::new("E_REGEX", e.to_string(), None, None))?;
 
         let mut searcher = SearcherBuilder::new().invert_match(opts.invert).build();
-
         if opts.positional.len() == 1 && !(opts.recursive && matches!(input, Value::Empty)) {
             match input {
                 Value::Batch(in_batch) => {
@@ -118,16 +145,15 @@ impl Builtin for Grep {
                     let line_col = in_batch.col_index("line");
                     let hash_col = in_batch.col_index("hash");
 
-                    let mut batch = if opts.files_only {
-                        RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 16)
-                    } else {
-                        RecordBatch::with_capacity(hashline_schema(), 64)
-                    };
-
                     if let Some(t_idx) = text_col {
+                        let columns = if opts.files_only {
+                            <FileRow<'static> as Record>::COLUMNS
+                        } else {
+                            HASHLINE_COLUMNS
+                        };
+                        let mut rows = DynRows::new(Schema::of(columns));
                         let mut seen_files = std::collections::HashSet::new();
                         let mut count: u64 = 0;
-                        let mut shared_file: Option<Arc<str>> = None;
                         for (r, row) in in_batch.rows().enumerate() {
                             let Some(text) = row.get(t_idx).as_str() else {
                                 continue;
@@ -148,50 +174,48 @@ impl Builtin for Grep {
                                 count += 1;
                                 continue;
                             }
-                            let file = file_col.map(|f_idx| row.get(f_idx));
-                            let file_val = match file {
-                                Some(Datum::Str(label)) => {
-                                    CellVal::SharedStr(shared_label(&mut shared_file, label))
-                                }
-                                Some(other) => CellVal::from(other),
-                                None => {
-                                    CellVal::SharedStr(shared_label(&mut shared_file, "<input>"))
-                                }
-                            };
+                            let file = file_col
+                                .map(|f_idx| row.get(f_idx))
+                                .unwrap_or(Datum::Str("<input>"));
                             if opts.files_only {
-                                let label = file.and_then(|d| d.as_str()).unwrap_or("<input>");
-                                if seen_files.insert(label.to_string()) {
-                                    batch.cells.push(file_val);
+                                let label = file.as_str().unwrap_or("<input>");
+                                if seen_files.insert(label) {
+                                    rows.push_with(|out| out.put(file));
                                 }
                                 continue;
                             }
-                            let line_val = match line_col {
-                                Some(l_idx) => CellVal::from(row.get(l_idx)),
-                                None => CellVal::UInt((r + 1) as u64),
-                            };
-                            let hash_val = match hash_col {
-                                Some(h_idx) => CellVal::from(row.get(h_idx)),
-                                None => CellVal::Hash(hashline_bytes(text.as_bytes())),
-                            };
-                            batch.cells.push(file_val);
-                            batch.cells.push(line_val);
-                            batch.cells.push(hash_val);
-                            batch.cells.push(CellVal::Str(text.to_string()));
+                            rows.push_with(|out| {
+                                out.put(file);
+                                out.put(match line_col {
+                                    Some(l_idx) => row.get(l_idx),
+                                    None => Datum::UInt((r + 1) as u64),
+                                });
+                                match hash_col {
+                                    Some(h_idx) => out.put(row.get(h_idx)),
+                                    None => out.put_str(
+                                        std::str::from_utf8(&hashline_bytes(text.as_bytes()))
+                                            .unwrap_or(""),
+                                    ),
+                                }
+                                out.put_str(text);
+                            });
                         }
                         if opts.count_only {
-                            let mut c_batch =
-                                RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 1);
-                            c_batch.cells.push(CellVal::Str("<input>".to_string()));
-                            c_batch.cells.push(CellVal::UInt(count));
-                            return Ok(Value::from_batch(c_batch));
+                            let mut counts = Rows::<CountRow<'static>>::new();
+                            counts.push(&CountRow {
+                                file: "<input>",
+                                count,
+                            });
+                            return Ok(Value::from_batch(counts.finish()?));
                         }
-                    } else if let Some(p_idx) = file_col {
+                        return Ok(Value::from_batch(rows.finish()?));
+                    }
+                    if let Some(p_idx) = file_col {
                         let mut seen = std::collections::HashSet::new();
-                        let mut count_batch =
-                            RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 16);
+                        let mut found = Found::new(&opts);
                         for row in in_batch.rows() {
                             if let Some(p_str) = row.get(p_idx).as_str()
-                                && seen.insert(p_str.to_string())
+                                && seen.insert(p_str)
                             {
                                 let target = resolve_path(session, p_str);
                                 if target.is_file() && path_matches_filters(&opts, &target) {
@@ -200,22 +224,21 @@ impl Builtin for Grep {
                                         &matcher,
                                         &target,
                                         p_str,
-                                        &opts,
-                                        &mut batch.cells,
-                                        &mut count_batch.cells,
+                                        &mut found,
                                     );
                                 }
                             }
                         }
-                        if opts.count_only {
-                            return Ok(Value::from_batch(count_batch));
-                        }
+                        return Ok(Value::from_batch(found.finish()?));
                     }
-                    return Ok(Value::from_batch(batch));
+                    return Ok(Value::from_batch(if opts.files_only {
+                        Rows::<FileRow<'static>>::new().finish()?
+                    } else {
+                        HashlineRows::new().finish()?
+                    }));
                 }
                 _ => {
                     let bytes = input.into_raw_bytes();
-                    let stdin_cell: Arc<str> = Arc::from("<stdin>");
                     if opts.count_only {
                         let mut count: u64 = 0;
                         let _ = searcher.search_slice(
@@ -226,13 +249,15 @@ impl Builtin for Grep {
                                 Ok(true)
                             }),
                         );
-                        let mut c_batch = RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 1);
-                        c_batch.cells.push(CellVal::SharedStr(stdin_cell));
-                        c_batch.cells.push(CellVal::UInt(count));
-                        return Ok(Value::from_batch(c_batch));
+                        let mut counts = Rows::<CountRow<'static>>::new();
+                        counts.push(&CountRow {
+                            file: "<stdin>",
+                            count,
+                        });
+                        return Ok(Value::from_batch(counts.finish()?));
                     }
                     if opts.files_only {
-                        let mut f_batch = RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 1);
+                        let mut files = Rows::<FileRow<'static>>::new();
                         let mut hit = false;
                         let _ = searcher.search_slice(
                             &matcher,
@@ -243,29 +268,22 @@ impl Builtin for Grep {
                             }),
                         );
                         if hit {
-                            f_batch.cells.push(CellVal::SharedStr(stdin_cell));
+                            files.push(&FileRow { file: "<stdin>" });
                         }
-                        return Ok(Value::from_batch(f_batch));
+                        return Ok(Value::from_batch(files.finish()?));
                     }
-                    let mut batch = RecordBatch::with_capacity(hashline_schema(), 64);
+                    let mut rows = HashlineRows::with_capacity(64);
                     let _ = searcher.search_slice(
                         &matcher,
                         &bytes,
                         UTF8(|line_number, line| {
                             let trimmed = line.strip_suffix('\n').unwrap_or(line);
                             let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
-                            batch
-                                .cells
-                                .push(CellVal::SharedStr(Arc::clone(&stdin_cell)));
-                            batch.cells.push(CellVal::UInt(line_number));
-                            batch
-                                .cells
-                                .push(CellVal::Hash(hashline_bytes(trimmed.as_bytes())));
-                            batch.cells.push(CellVal::Str(trimmed.to_string()));
+                            push_hashline_row(&mut rows, "<stdin>", line_number, trimmed);
                             Ok(true)
                         }),
                     );
-                    return Ok(Value::from_batch(batch));
+                    return Ok(Value::from_batch(rows.finish()?));
                 }
             }
         }
@@ -276,13 +294,7 @@ impl Builtin for Grep {
             vec!["."]
         };
 
-        let mut batch = if opts.files_only {
-            RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 32)
-        } else {
-            RecordBatch::with_capacity(hashline_schema(), 64)
-        };
-        let mut count_batch = RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 32);
-
+        let mut found = Found::new(&opts);
         for path_arg in search_paths {
             let target = resolve_path(session, path_arg);
             let unusable = match std::fs::metadata(&target) {
@@ -309,23 +321,11 @@ impl Builtin for Grep {
                     continue;
                 }
                 let p_str = entry.path().to_string_lossy();
-                search_target_file(
-                    &mut searcher,
-                    &matcher,
-                    entry.path(),
-                    &p_str,
-                    &opts,
-                    &mut batch.cells,
-                    &mut count_batch.cells,
-                );
+                search_target_file(&mut searcher, &matcher, entry.path(), &p_str, &mut found);
             }
         }
 
-        if opts.count_only {
-            Ok(Value::from_batch(count_batch))
-        } else {
-            Ok(Value::from_batch(batch))
-        }
+        Ok(Value::from_batch(found.finish()?))
     }
 }
 
@@ -398,52 +398,37 @@ fn search_target_file(
     matcher: &grep_regex::RegexMatcher,
     path: &Path,
     label: &str,
-    opts: &GrepOpts,
-    cells: &mut Vec<CellVal>,
-    count_cells: &mut Vec<CellVal>,
+    found: &mut Found,
 ) {
-    if opts.count_only {
-        let mut count: u64 = 0;
-        let _ = searcher.search_path(
-            matcher,
-            path,
-            UTF8(|_, _| {
-                count += 1;
-                Ok(true)
-            }),
-        );
-        if count > 0 {
-            count_cells.push(CellVal::Str(label.to_string()));
-            count_cells.push(CellVal::UInt(count));
+    match found {
+        Found::Counts(rows) => {
+            let mut count: u64 = 0;
+            let _ = searcher.search_path(
+                matcher,
+                path,
+                UTF8(|_, _| {
+                    count += 1;
+                    Ok(true)
+                }),
+            );
+            if count > 0 {
+                rows.push(&CountRow { file: label, count });
+            }
         }
-        return;
-    }
-    if opts.files_only {
-        let mut hit = false;
-        let _ = searcher.search_path(
-            matcher,
-            path,
-            UTF8(|_, _| {
-                hit = true;
-                Ok(false)
-            }),
-        );
-        if hit {
-            cells.push(CellVal::Str(label.to_string()));
+        Found::Files(rows) => {
+            let mut hit = false;
+            let _ = searcher.search_path(
+                matcher,
+                path,
+                UTF8(|_, _| {
+                    hit = true;
+                    Ok(false)
+                }),
+            );
+            if hit {
+                rows.push(&FileRow { file: label });
+            }
         }
-        return;
-    }
-    search_file_with_hashline(searcher, matcher, path, label, cells);
-}
-
-/// The label's `Arc`, reusing the previous one while consecutive rows carry the same text.
-fn shared_label(previous: &mut Option<Arc<str>>, label: &str) -> Arc<str> {
-    match previous {
-        Some(shared) if **shared == *label => Arc::clone(shared),
-        _ => {
-            let shared: Arc<str> = Arc::from(label);
-            *previous = Some(Arc::clone(&shared));
-            shared
-        }
+        Found::Lines(rows) => search_file_with_hashline(searcher, matcher, path, label, rows),
     }
 }

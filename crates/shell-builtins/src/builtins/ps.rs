@@ -64,7 +64,7 @@ impl Builtin for Ps {
         }
 
         records.sort_by_key(|r| r.get("pid").and_then(|v| v.as_u64()).unwrap_or(0));
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }
 

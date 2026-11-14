@@ -33,9 +33,9 @@ impl Builtin for Undo {
                 let mut rec = StructuredRecord::new();
                 rec.insert("tx_id".to_string(), JsonVal::String(tx_id));
                 rec.insert("restored_files".to_string(), json!(count));
-                Ok(Value::from_records(vec![rec]))
+                Value::from_records(vec![rec])
             }
-            None => Ok(Value::from_records(Vec::new())),
+            None => Value::from_records(Vec::new()),
         }
     }
 }
