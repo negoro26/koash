@@ -1,0 +1,1463 @@
+{
+ "cases": {
+  "cmdsub": {
+   "kind": "ok",
+   "script": "echo got-$(echo sub)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "got-sub\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "got-sub\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "param_default": {
+   "kind": "ok",
+   "script": "unset v; echo ${v:-dflt} [${v:+alt}]",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "dflt []\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "dflt []\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "backticks": {
+   "kind": "ok",
+   "script": "echo `echo bt`",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "bt\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "bt\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "subshell_status": {
+   "kind": "ok",
+   "script": "(echo in; exit 3); echo st=$?",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "in\nst=3\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "in\nst=3\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "heredoc": {
+   "kind": "ok",
+   "script": "cat <<EOF\nline $(echo x)\nEOF",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "line x\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "line x\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/cat"
+    ],
+    "execves": [
+     "/usr/bin/cat"
+    ],
+    "match": true
+   }
+  },
+  "if_else": {
+   "kind": "ok",
+   "script": "if [ -f in.txt ]; then echo yes $(true); else echo no; fi",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "yes\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "yes\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "for_list": {
+   "kind": "ok",
+   "script": "for i in 1 2 3; do echo $i; done; echo $(echo end)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "1\n2\n3\nend\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "1\n2\n3\nend\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "while_read": {
+   "kind": "ok",
+   "script": "while read l; do echo \"[$l]\"; done < in.txt; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "[a]\n[b]\n[c]\n\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "[a]\n[b]\n[c]\n\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "case_stmt": {
+   "kind": "ok",
+   "script": "x=bar; case $x in foo) echo f;; ba*) echo b$(true);; esac",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "b\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "b\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "dbl_bracket": {
+   "kind": "ok",
+   "script": "[[ abc == a* && -f in.txt ]] && echo match $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "match\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "match\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "arithmetic": {
+   "kind": "ok",
+   "script": "echo $((2+3*4)) $(( (1<<4) | 1 ))",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "14 17\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "14 17\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "arrays": {
+   "kind": "ok",
+   "script": "a=(x y z); echo ${a[1]} ${#a[@]} $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "y 3\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "y 3\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "pipeline_cmdsub": {
+   "kind": "ok",
+   "script": "echo $(printf 'b\\na\\n' | sort) | tr a-z A-Z",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "A B\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "A B\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/sort",
+     "/usr/bin/tr"
+    ],
+    "execves": [
+     "/usr/bin/sort",
+     "/usr/bin/tr"
+    ],
+    "match": true
+   }
+  },
+  "here_string": {
+   "kind": "ok",
+   "script": "cat <<< \"hs $(echo x)\"",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "hs x\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "hs x\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/cat"
+    ],
+    "execves": [
+     "/usr/bin/cat"
+    ],
+    "match": true
+   }
+  },
+  "proc_subst": {
+   "kind": "ok",
+   "script": "diff <(echo a) <(echo a) && echo same",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "same\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "same\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/diff"
+    ],
+    "execves": [
+     "/usr/bin/diff"
+    ],
+    "match": true
+   }
+  },
+  "brace_glob": {
+   "kind": "ok",
+   "script": "echo $(echo {a,b}{1,2}) *.txt",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "a1 a2 b1 b2 in.txt\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "a1 a2 b1 b2 in.txt\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "cd_pwd": {
+   "kind": "ok",
+   "script": "cd /tmp && echo $(pwd)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "/tmp\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "/tmp\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "exit_trap": {
+   "kind": "ok",
+   "script": "trap 'echo bye' EXIT; echo $(echo hi)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "hi\nbye\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "hi\nbye\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "set_e": {
+   "kind": "ok",
+   "script": "set -e; echo $(true); false; echo unreachable",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 1,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 1,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "bg_wait": {
+   "kind": "ok",
+   "script": "sleep 0.1 & wait; echo done $(echo x)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "done x\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "done x\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/sleep"
+    ],
+    "execves": [
+     "/usr/bin/sleep"
+    ],
+    "match": true
+   }
+  },
+  "devnull_status": {
+   "kind": "ok",
+   "script": "echo $(echo out) >/dev/null 2>&1; echo st=$?",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "st=0\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "st=0\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "stdin_pipe": {
+   "kind": "ok",
+   "script": "echo $(cat < in.txt | wc -l)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "3\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "3\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/cat",
+     "/usr/bin/wc"
+    ],
+    "execves": [
+     "/usr/bin/cat",
+     "/usr/bin/wc"
+    ],
+    "match": true
+   }
+  },
+  "func_call": {
+   "kind": "ok",
+   "script": "f() { echo in-f $1; }; f $(echo arg)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "in-f arg\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "in-f arg\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "export_env": {
+   "kind": "ok",
+   "script": "export FOO=bar; echo $(printenv FOO)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "bar\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "bar\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/printenv"
+    ],
+    "execves": [
+     "/usr/bin/printenv"
+    ],
+    "match": true
+   }
+  },
+  "cmd_not_found": {
+   "kind": "ok",
+   "script": "$(true); nonexistent-cmd-xyz; echo st=$?",
+   "proto_vs_sh": [
+    "stderr"
+   ],
+   "proto_vs_base": [
+    "stderr"
+   ],
+   "base_vs_sh": [
+    "stderr"
+   ],
+   "sh": {
+    "rc": 0,
+    "stdout": "st=127\n",
+    "stderr": "/bin/sh: line 1: nonexistent-cmd-xyz: command not found\n"
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "st=127\n",
+    "stderr": "error: command not found: nonexistent-cmd-xyz\n"
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "syntax_error": {
+   "kind": "ok",
+   "script": "echo $(true) ; if then fi",
+   "proto_vs_sh": [
+    "stderr"
+   ],
+   "proto_vs_base": [
+    "stderr"
+   ],
+   "base_vs_sh": [
+    "stderr"
+   ],
+   "sh": {
+    "rc": 2,
+    "stdout": "",
+    "stderr": "/bin/sh: -c: line 1: syntax error near unexpected token `then'\n/bin/sh: -c: line 1: `echo $(true) ; if then fi'\n"
+   },
+   "proto": {
+    "rc": 2,
+    "stdout": "",
+    "stderr": "koa: E_SYNTAX: syntax error at line 1 col 24\n"
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_for_static": {
+   "kind": "writes",
+   "script": "for i in 1 2 3; do echo $i > out$i; done; echo $(echo out*)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "out1 out2 out3\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "out1 out2 out3\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "out1 out2 out3\ncommand                                                      files  opaque_after  tx_id \n-----------------------------------------------------------  -----  ------------  ------\necho                                                         1                    tx_001\nfor i in 1 2 3; do echo $i > out$i; done; echo $(echo out*)  3                    tx_002\nrestored_files  tx_id \n--------------  ------\n3               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_append_trunc": {
+   "kind": "writes",
+   "script": "echo more >> old; echo new > in.txt; echo $(<old)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "orig more\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "orig more\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "orig more\ncommand                                            files  opaque_after  tx_id \n-------------------------------------------------  -----  ------------  ------\necho                                               1                    tx_001\necho more >> old; echo new > in.txt; echo $(<old)  2                    tx_002\nrestored_files  tx_id \n--------------  ------\n2               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_func": {
+   "kind": "writes",
+   "script": "f() { echo hi > fout; }; f; echo $(<fout)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "hi\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "hi\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "hi\ncommand                                    files  opaque_after  tx_id \n-----------------------------------------  -----  ------------  ------\necho                                       1                    tx_001\nf() { echo hi > fout; }; f; echo $(<fout)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_subst_inner": {
+   "kind": "writes",
+   "script": "echo $(echo inner > inner.txt; echo done)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "done\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "done\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "done\ncommand                                    files  opaque_after  tx_id \n-----------------------------------------  -----  ------------  ------\necho                                       1                    tx_001\necho $(echo inner > inner.txt; echo done)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_if_branch": {
+   "kind": "writes",
+   "script": "if [ -f old ]; then echo yes > yes.txt; else echo no > no.txt; fi; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "and                                                                          files  opaque_after  tx_id \n-------------------------------------------------------------------------------  -----  ------------  ------\necho                                                                             1                    tx_001\nif [ -f old ]; then echo yes > yes.txt; else echo no > no.txt; fi; echo $(true)  2                    tx_002\nrestored_files  tx_id \n--------------  ------\n2               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_case_branch": {
+   "kind": "writes",
+   "script": "x=b; case $x in a) echo A > ca;; b) echo B > cb;; esac; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "command                                                               files  opaque_after  tx_id \n--------------------------------------------------------------------  -----  ------------  ------\necho                                                                  1                    tx_001\nx=b; case $x in a) echo A > ca;; b) echo B > cb;; esac; echo $(true)  2                    tx_002\nrestored_files  tx_id \n--------------  ------\n2               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_var_target": {
+   "kind": "writes",
+   "script": "t=vt.txt; echo data > $t; echo $(<$t)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "data\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "data\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "data\ncommand                                files  opaque_after  tx_id \n-------------------------------------  -----  ------------  ------\necho                                   1                    tx_001\nt=vt.txt; echo data > $t; echo $(<$t)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_group_redirect": {
+   "kind": "writes",
+   "script": "{ echo one; echo $(echo two); } > grp.txt; echo $(<grp.txt)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "one two\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "one two\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "one two\ncommand                                                      files  opaque_after  tx_id \n-----------------------------------------------------------  -----  ------------  ------\necho                                                         1                    tx_001\n{ echo one; echo $(echo two); } > grp.txt; echo $(<grp.txt)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_exec_fd": {
+   "kind": "writes",
+   "script": "exec 3> f3; echo hi >&3; exec 3>&-; echo $(<f3)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "hi\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "hi\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "hi\ncommand                                          files  opaque_after  tx_id \n-----------------------------------------------  -----  ------------  ------\necho                                             1                    tx_001\nexec 3> f3; echo hi >&3; exec 3>&-; echo $(<f3)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_both": {
+   "kind": "writes",
+   "script": "echo $(echo e) &> both.txt; echo $(<both.txt)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "e\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "e\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "e\ncommand                                        files  opaque_after  tx_id \n---------------------------------------------  -----  ------------  ------\necho                                           1                    tx_001\necho $(echo e) &> both.txt; echo $(<both.txt)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_cd_relative": {
+   "kind": "writes",
+   "script": "cd sub && echo x > rel.txt; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "command                                   files  opaque_after  tx_id \n----------------------------------------  -----  ------------  ------\necho                                      1                    tx_001\ncd sub && echo x > rel.txt; echo $(true)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_counter_loop": {
+   "kind": "writes",
+   "script": "n=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(echo w*)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "w0 w1 w2\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "w0 w1 w2\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"n=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(echo w*): redirect target `w$n` is not statically known\" ran after tx_002 and is not undoable; run \"rollback tx_002\" to revert tx_002 anyway",
+    "tx_log": "----------------------------------------------------------  ------\necho                                                                          1                                                                                                                                   tx_001\nn=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(echo w*)  1      n=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(echo w*): redirect target `w$n` is not statically known  tx_002",
+    "diff": [
+     "w0",
+     "w1",
+     "w2"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_read_loop": {
+   "kind": "writes",
+   "script": "while read l; do echo x > \"p_$l\"; done < in.txt; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"while read l; do echo x > \"p_$l\"; done < in.txt; echo $(true): redirect target `\"p_$l\"` is not statically known\" ran after tx_001 and is not undoable; run \"rollback tx_001\" to revert tx_001 anyway",
+    "tx_log": "command  files  opaque_after                                                                                                     tx_id \n-------  -----  ---------------------------------------------------------------------------------------------------------------  ------\necho     1      while read l; do echo x > \"p_$l\"; done < in.txt; echo $(true): redirect target `\"p_$l\"` is not statically known  tx_001",
+    "diff": [
+     "p_a",
+     "p_b",
+     "p_c"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_glob_for": {
+   "kind": "writes",
+   "script": "for f in *.txt; do echo x > $f.bak; done; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"for f in *.txt; do echo x > $f.bak; done; echo $(true): redirect target `$f.bak` is not statically known\" ran after tx_001 and is not undoable; run \"rollback tx_001\" to revert tx_001 anyway",
+    "tx_log": "command  files  opaque_after                                                                                              tx_id \n-------  -----  --------------------------------------------------------------------------------------------------------  ------\necho     1      for f in *.txt; do echo x > $f.bak; done; echo $(true): redirect target `$f.bak` is not statically known  tx_001",
+    "diff": [
+     "in.txt.bak",
+     "seed.txt.bak"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_eval_dynamic": {
+   "kind": "writes",
+   "script": "c=\"echo hi > ev.txt\"; eval \"$c\"; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "command                                        files  opaque_after  tx_id \n---------------------------------------------  -----  ------------  ------\necho                                           1                    tx_001\nc=\"echo hi > ev.txt\"; eval \"$c\"; echo $(true)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "adv_func_global": {
+   "kind": "writes",
+   "script": "x=a; f() { x=b; }; f; echo hit > $x; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"x=a; f() { x=b; }; f; echo hit > $x; echo $(true): redirect target `$x` is not statically known\" ran after tx_001 and is not undoable; run \"rollback tx_001\" to revert tx_001 anyway",
+    "tx_log": "command  files  opaque_after                                                                                     tx_id \n-------  -----  -----------------------------------------------------------------------------------------------  ------\necho     1      x=a; f() { x=b; }; f; echo hit > $x; echo $(true): redirect target `$x` is not statically known  tx_001",
+    "diff": [
+     "b"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "adv_func_cd": {
+   "kind": "writes",
+   "script": "f() { cd sub; }; f; echo hit > rel.txt; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"f() { cd sub; }; f; echo hit > rel.txt; echo $(true): redirect target `rel.txt` depends on a changed cwd\" ran after tx_001 and is not undoable; run \"rollback tx_001\" to revert tx_001 anyway",
+    "tx_log": "command  files  opaque_after                                                                                              tx_id \n-------  -----  --------------------------------------------------------------------------------------------------------  ------\necho     1      f() { cd sub; }; f; echo hit > rel.txt; echo $(true): redirect target `rel.txt` depends on a changed cwd  tx_001",
+    "diff": [
+     "sub/rel.txt"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "adv_nameref": {
+   "kind": "writes",
+   "script": "x=a; declare -n r=x; r=b; echo hit > $x; echo $(true)",
+   "proto_vs_sh": [
+    "fs"
+   ],
+   "proto_vs_base": [
+    "fs"
+   ],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "",
+    "tx_log": "command                                                files  opaque_after  tx_id \n-----------------------------------------------------  -----  ------------  ------\necho                                                   1                    tx_001\nx=a; declare -n r=x; r=b; echo hit > $x; echo $(true)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "adv_ifs_split": {
+   "kind": "writes",
+   "script": "v='a b'; echo hit > $v; echo $(true)",
+   "proto_vs_sh": [
+    "stderr",
+    "fs"
+   ],
+   "proto_vs_base": [
+    "stderr",
+    "fs"
+   ],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": "error: invalid redirection target\n"
+   },
+   "undo": {
+    "outcome": "RESTORED",
+    "restored": true,
+    "opaque_error": false,
+    "stderr": "error: invalid redirection target",
+    "tx_log": "command                               files  opaque_after  tx_id \n------------------------------------  -----  ------------  ------\necho                                  1                    tx_001\nv='a b'; echo hit > $v; echo $(true)  1                    tx_002\nrestored_files  tx_id \n--------------  ------\n1               tx_002",
+    "diff": []
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "adv_source": {
+   "kind": "writes",
+   "script": "echo 'echo hit > src.txt' > s.sh; . ./s.sh; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"echo 'echo hit > src.txt' > s.sh; . ./s.sh; echo $(true): source of a file\" ran after tx_002 and is not undoable; run \"rollback tx_002\" to revert tx_002 anyway",
+    "tx_log": "                                                  tx_id \n--------------------------------------------------------  -----  --------------------------------------------------------------------------  ------\necho                                                      1                                                                                  tx_001\necho 'echo hit > src.txt' > s.sh; . ./s.sh; echo $(true)  1      echo 'echo hit > src.txt' > s.sh; . ./s.sh; echo $(true): source of a file  tx_002",
+    "diff": [
+     "s.sh",
+     "src.txt"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "w_ext_reader": {
+   "kind": "external_reader",
+   "script": "echo data > ext.txt; echo $(cat ext.txt)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "data\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "data\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"cat\" ran after tx_002 and is not undoable; run \"rollback tx_002\" to revert tx_002 anyway",
+    "tx_log": "data\ncommand                                   files  opaque_after  tx_id \n----------------------------------------  -----  ------------  ------\necho                                      1                    tx_001\necho data > ext.txt; echo $(cat ext.txt)  1      cat           tx_002",
+    "diff": [
+     "ext.txt"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/cat"
+    ],
+    "execves": [
+     "/usr/bin/cat"
+    ],
+    "match": true
+   }
+  },
+  "w_tee_external": {
+   "kind": "external_writer",
+   "script": "echo hi | tee t.txt; echo $(true)",
+   "proto_vs_sh": [],
+   "proto_vs_base": [],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "hi\n\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "hi\n\n",
+    "stderr": ""
+   },
+   "undo": {
+    "outcome": "GUARDED",
+    "restored": false,
+    "opaque_error": true,
+    "stderr": "koa: E_TX_OPAQUE: \"tee\" ran after tx_001 and is not undoable; run \"rollback tx_001\" to revert tx_001 anyway",
+    "tx_log": "hi\n\ncommand  files  opaque_after  tx_id \n-------  -----  ------------  ------\necho     1      tee           tx_001",
+    "diff": [
+     "t.txt"
+    ]
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/tee"
+    ],
+    "execves": [
+     "/usr/bin/tee"
+    ],
+    "match": true
+   }
+  },
+  "x_select": {
+   "kind": "expect_fail",
+   "script": "select x in a b; do echo \"sel=$x\"; break; done <<< 1",
+   "proto_vs_sh": [
+    "stdout",
+    "stderr",
+    "rc"
+   ],
+   "proto_vs_base": [
+    "stdout",
+    "stderr",
+    "rc"
+   ],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "sel=a\n",
+    "stderr": "1) a\n2) b\n#? "
+   },
+   "proto": {
+    "rc": 2,
+    "stdout": "",
+    "stderr": "koa: E_SYNTAX: syntax error at line 1 col 8\n"
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [],
+    "execves": [],
+    "match": true
+   }
+  },
+  "x_wait_n": {
+   "kind": "expect_fail",
+   "script": "sleep 0.1 & sleep 0.3 & wait -n; echo first-done $(true); wait",
+   "proto_vs_sh": [
+    "stderr"
+   ],
+   "proto_vs_base": [
+    "stderr"
+   ],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "first-done\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "first-done\n",
+    "stderr": "error: wait: not yet implemented: wait -n\n"
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/sleep",
+     "/usr/bin/sleep"
+    ],
+    "execves": [
+     "/usr/bin/sleep",
+     "/usr/bin/sleep"
+    ],
+    "match": true
+   }
+  },
+  "x_bang": {
+   "kind": "expect_fail",
+   "script": "sleep 0.2 & p=$!; [ -n \"$p\" ] && echo has-pid$(true) || echo no-pid; wait",
+   "proto_vs_sh": [
+    "stdout"
+   ],
+   "proto_vs_base": [
+    "stdout"
+   ],
+   "base_vs_sh": [],
+   "sh": {
+    "rc": 0,
+    "stdout": "has-pid\n",
+    "stderr": ""
+   },
+   "proto": {
+    "rc": 0,
+    "stdout": "no-pid\n",
+    "stderr": ""
+   },
+   "trace": {
+    "embeds": 1,
+    "spawns": [
+     "/usr/bin/sleep"
+    ],
+    "execves": [
+     "/usr/bin/sleep"
+    ],
+    "match": true
+   }
+  }
+ }
+}
