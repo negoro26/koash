@@ -89,7 +89,10 @@ fn preview_text(cell: Datum<'_>) -> String {
         Datum::Null => String::new(),
         Datum::Float(f) if !f.is_finite() => String::new(),
         Datum::Str(s) => s.to_string(),
-        other => serde_json::to_string(&other).unwrap_or_default(),
+        other => match other.short_text() {
+            Some(text) => text.as_str().to_string(),
+            None => serde_json::to_string(&other).unwrap_or_default(),
+        },
     }
 }
 

@@ -14,16 +14,20 @@ pub struct RecordBatch {
 pub struct Row<'a> {
     cells: &'a [Cell],
     text: &'a str,
+    columns: &'a [Column],
 }
 
 impl<'a> Row<'a> {
     pub fn get(&self, col: usize) -> Datum<'a> {
-        self.cells[col].datum(self.text)
+        self.cells[col].datum(self.text, self.columns, col)
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = Datum<'a>> + use<'a> {
-        let text = self.text;
-        self.cells.iter().map(move |cell| cell.datum(text))
+        let (text, columns) = (self.text, self.columns);
+        self.cells
+            .iter()
+            .enumerate()
+            .map(move |(col, cell)| cell.datum(text, columns, col))
     }
 }
 
@@ -65,6 +69,7 @@ impl RecordBatch {
         Row {
             cells: &self.cells[idx * ncols..(idx + 1) * ncols],
             text: &self.text,
+            columns: self.schema.columns(),
         }
     }
 
@@ -87,9 +92,14 @@ impl RecordBatch {
 
     pub fn rows(&self) -> impl ExactSizeIterator<Item = Row<'_>> {
         let text = self.text.as_str();
+        let columns = self.schema.columns();
         self.cells
             .chunks_exact(self.schema.len().max(1))
-            .map(move |cells| Row { cells, text })
+            .map(move |cells| Row {
+                cells,
+                text,
+                columns,
+            })
     }
 
     /// Keeps the rows `keep` accepts, in order. Cells move inside the batch and no text is copied.
@@ -102,6 +112,7 @@ impl RecordBatch {
             if !keep(Row {
                 cells,
                 text: &self.text,
+                columns: self.schema.columns(),
             }) {
                 continue;
             }

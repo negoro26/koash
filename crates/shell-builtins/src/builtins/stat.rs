@@ -1,14 +1,23 @@
 use std::os::unix::fs::PermissionsExt;
-use std::time::UNIX_EPOCH;
 
-use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
-use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
+use shell_value::{FileMode, OrBlank, Rows, StructuredDiagnostic, UnixTime, Value, record};
 
-use super::common::{format_unix_iso, resolve_path, usage_error};
+use super::common::{kind_of, resolve_path, usage_error};
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+
+record! {
+    struct StatRow<'a> {
+        kind: &'a str,
+        mode: FileMode,
+        modified: OrBlank<UnixTime>,
+        path: &'a str,
+        readonly: bool,
+        size: u64,
+    }
+}
 
 pub(super) struct Stat;
 
@@ -42,7 +51,7 @@ impl Builtin for Stat {
             ));
         }
 
-        let mut records = Vec::new();
+        let mut rows = Rows::<StatRow<'static>>::new();
         for arg in &args.operands {
             let p = resolve_path(session, arg);
             let meta = match std::fs::symlink_metadata(&p) {
@@ -56,33 +65,16 @@ impl Builtin for Stat {
                     continue;
                 }
             };
-            let kind = if meta.is_dir() {
-                "dir"
-            } else if meta.is_symlink() {
-                "symlink"
-            } else {
-                "file"
-            };
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| format_unix_iso(d.as_secs()))
-                .unwrap_or_default();
             let perms = meta.permissions();
-
-            let mut rec = StructuredRecord::new();
-            rec.insert("path".to_string(), JsonVal::String((*arg).to_string()));
-            rec.insert("kind".to_string(), JsonVal::String(kind.to_string()));
-            rec.insert("size".to_string(), json!(meta.len()));
-            rec.insert("modified".to_string(), JsonVal::String(modified));
-            rec.insert("readonly".to_string(), json!(perms.readonly()));
-            rec.insert(
-                "mode".to_string(),
-                JsonVal::String(format!("{:o}", perms.mode() & 0o777)),
-            );
-            records.push(rec);
+            rows.push(&StatRow {
+                kind: kind_of(&meta),
+                mode: FileMode(perms.mode() & 0o777),
+                modified: OrBlank(UnixTime::from_system(meta.modified())),
+                path: arg,
+                readonly: perms.readonly(),
+                size: meta.len(),
+            });
         }
-        Value::from_records(records)
+        Ok(Value::from_batch(rows.finish_or_empty()?))
     }
 }
