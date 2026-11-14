@@ -122,21 +122,17 @@ fn rpc_external_output_never_corrupts_the_protocol_stream() {
     let dir = scratch_dir("rpc-leak");
     let mut rpc = RpcClient::start(&dir);
     let sid = rpc.create_session();
-    rpc.send(serde_json::json!({
-        "id": 2,
-        "method": "exec",
-        "params": {"session_id": sid, "command": "/bin/echo LEAKED"}
-    }));
-    let lines = rpc.lines_until_completed(2, Duration::from_secs(10));
+    let lines = exec_lines(&mut rpc, &sid, 2, "/bin/echo LEAKED", None);
     for line in &lines {
         assert!(
             serde_json::from_str::<serde_json::Value>(line).is_ok(),
             "non-JSON line on the RPC stream: {line:?}"
         );
     }
-    assert!(
-        lines.iter().any(|l| l.contains("LEAKED")),
-        "external output must be delivered inside a protocol message: {lines:?}"
+    assert_eq!(
+        stdout_of(&lines),
+        "LEAKED\n",
+        "external output must be delivered inside protocol messages: {lines:?}"
     );
 }
 
@@ -145,13 +141,15 @@ fn rpc_timeout_kills_a_long_external_command() {
     let dir = scratch_dir("rpc-timeout");
     let mut rpc = RpcClient::start(&dir);
     let sid = rpc.create_session();
+    let marker = format!("31.{}", std::process::id());
     let start = Instant::now();
-    rpc.send(serde_json::json!({
-        "id": 2,
-        "method": "exec",
-        "params": {"session_id": sid, "command": "sleep 5", "timeout_ms": 200}
-    }));
-    let lines = rpc.lines_until_completed(2, Duration::from_secs(10));
+    let lines = exec_lines(
+        &mut rpc,
+        &sid,
+        2,
+        &format!("/bin/sleep {marker}"),
+        Some(200),
+    );
     let elapsed = start.elapsed();
     let completed: serde_json::Value = lines
         .iter()
@@ -160,11 +158,21 @@ fn rpc_timeout_kills_a_long_external_command() {
         .expect("exec must finish with a completed event or an error");
     assert!(
         elapsed < Duration::from_secs(3),
-        "timeout_ms=200 must stop `sleep 5`, took {elapsed:?}"
+        "timeout_ms=200 must stop the sleep, took {elapsed:?}"
     );
     assert_eq!(
         completed["exit_code"], 124,
         "timed-out exec reports exit 124: {completed}"
+    );
+    let next = exec_lines(&mut rpc, &sid, 3, "echo next", None);
+    assert_eq!(
+        stdout_of(&next),
+        "next\n",
+        "session is free again: {next:?}"
+    );
+    assert!(
+        processes_with_cmdline(&format!("sleep {marker}")).is_empty(),
+        "the timed-out command must be dead, not left running"
     );
 }
 
@@ -218,10 +226,10 @@ fn builtin_failure_sets_status_and_or_list_recovers() {
         Duration::from_secs(10),
     )
     .expect("koa -c finishes");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("status=1"),
-        "`$?` after a failed builtin is 1: {stdout}"
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "status=1\n",
+        "`$?` after a failed builtin is exactly 1"
     );
 }
 
@@ -430,22 +438,33 @@ fn unknown_command_is_127() {
 #[test]
 fn structured_pipeline_still_works() {
     let dir = scratch_dir("structured");
-    std::fs::write(dir.join("only.txt"), "x\n").expect("write only.txt");
-    let out = koa_c(
-        &dir,
-        "ls | where kind == file | first 1",
-        Duration::from_secs(10),
-    )
-    .expect("koa -c finishes");
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+    std::fs::write(dir.join("a.txt"), "x\n").expect("write a.txt");
+    std::fs::write(dir.join("b.txt"), "x\n").expect("write b.txt");
+    std::fs::create_dir(dir.join("d")).expect("mkdir d");
+    let names = |script: &str| -> Vec<String> {
+        let out = koa_c(&dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json rows");
+        let mut names: Vec<String> = rows
+            .as_array()
+            .expect("array of rows")
+            .iter()
+            .map(|row| row["name"].as_str().expect("name column").to_string())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        names("ls | where kind == file | select name | to json"),
+        ["a.txt", "b.txt"]
     );
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains("only.txt"),
-        "stdout: {}",
-        String::from_utf8_lossy(&out.stdout)
+    assert_eq!(
+        names("ls | where kind == file | first 1 | select name | to json").len(),
+        1
     );
 }
 
@@ -848,12 +867,13 @@ fn external_in_a_deleted_directory_reports_the_directory() {
     )
     .expect("koa -c finishes");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E_CWD"), "stderr: {stderr}");
     assert!(
-        stderr.contains("E_CWD") && stderr.contains("no longer exists"),
-        "stderr: {stderr}"
+        stderr.contains(&*dir.join("d").to_string_lossy()),
+        "the error names the deleted directory: {stderr}"
     );
     assert!(!stderr.contains("E_NOT_FOUND"), "stderr: {stderr}");
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
 }
 
 fn child_pids(pid: u32) -> Vec<u32> {
@@ -942,13 +962,9 @@ fn workers_follow_the_session_cwd_and_see_eof_on_stdin() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let out = koa_c(
-        &dir,
-        "@py 'x = input()'; echo st=$?",
-        Duration::from_secs(5),
-    )
-    .expect("input() must see EOF instead of hanging");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
+    let out = koa_c_with_stdin(&dir, "@py 'x = input()'; echo st=$?", b"", true)
+        .expect("input() must see EOF even though koa's own stdin is an open pipe");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "st=1\n");
     assert!(String::from_utf8_lossy(&out.stderr).contains("EOFError"));
 }
 
