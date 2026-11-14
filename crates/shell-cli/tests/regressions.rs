@@ -9,6 +9,14 @@ use std::time::{Duration, Instant};
 
 const KOA: &str = env!("CARGO_BIN_EXE_koa");
 
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn scratch_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("koa-regress-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1147,6 +1155,7 @@ fn tx_log_reports_pending_redo() {
 #[test]
 fn undo_after_rm_of_a_large_file_restores_it_byte_for_byte() {
     let dir = scratch_dir("undo-large");
+    let _cleanup = RemoveOnDrop(dir.clone());
     let bytes: Vec<u8> = (0..50 * 1024 * 1024_u32)
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
         .collect();
@@ -1169,7 +1178,7 @@ fn undo_snapshots_live_on_disk_only_while_the_process_runs() {
     std::fs::write(dir.join("f"), "original\n").expect("write f");
     let out = koa_c(
         &dir,
-        "echo changed > f; ls .koa/undo",
+        "echo changed > f; ls .koa/undo | select name | to json",
         Duration::from_secs(10),
     )
     .expect("koa -c finishes");
@@ -1178,10 +1187,12 @@ fn undo_snapshots_live_on_disk_only_while_the_process_runs() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(
-        out_text(&out).contains("-1"),
-        "the store directory must exist while the session runs: {}",
-        out_text(&out)
+    let entries: serde_json::Value = serde_json::from_str(&out_text(&out))
+        .unwrap_or_else(|e| panic!("ls output is JSON ({e}): {}", out_text(&out)));
+    assert_eq!(
+        entries.as_array().map(Vec::len),
+        Some(1),
+        "exactly one store directory must exist while the session runs: {entries}"
     );
     assert!(
         undo_store_sessions(&dir).is_empty(),
@@ -1204,10 +1215,10 @@ fn the_next_koa_sweeps_the_undo_store_of_a_killed_one() {
         .spawn()
         .expect("spawn koa");
     let start = Instant::now();
-    while undo_store_sessions(&dir).is_empty() {
+    while std::fs::read_to_string(dir.join("f")).ok().as_deref() != Some("changed\n") {
         assert!(
             start.elapsed() < Duration::from_secs(10),
-            "koa never created its undo store"
+            "koa never performed the edit"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -1234,7 +1245,7 @@ fn evicting_a_ledger_entry_deletes_its_snapshot() {
     let edits: String = (1..=60).map(|i| format!("echo {i} > f; ")).collect();
     let out = koa_c(
         &dir,
-        &format!("{edits}find .koa/undo -type f | select path"),
+        &format!("{edits}find .koa/undo -type f | select path; undo; cat f"),
         Duration::from_secs(20),
     )
     .expect("koa -c finishes");
@@ -1245,8 +1256,13 @@ fn evicting_a_ledger_entry_deletes_its_snapshot() {
     );
     let snapshots = out_text(&out).matches("snap-").count();
     assert!(
-        (1..=50).contains(&snapshots),
-        "60 edits keep at most the 50 ledger entries' snapshots, found {snapshots}"
+        (49..=50).contains(&snapshots),
+        "60 edits keep the snapshots of the last 49 or 50 ledger entries, found {snapshots}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "59\n",
+        "the surviving snapshots must be the newest ones, so undo reverts only the last edit"
     );
 }
 
@@ -1279,7 +1295,7 @@ fn a_capturing_command_clears_the_refusal_left_by_an_earlier_external() {
     std::fs::write(dir.join("f"), "original\n").expect("write f");
     let out = koa_c(
         &dir,
-        "/bin/cp f g; echo new > f; undo; echo st=$?; cat f",
+        "/bin/cp f g; echo new > f; undo; echo st=$?; cat f; undo; echo st2=$?",
         Duration::from_secs(10),
     )
     .expect("koa -c finishes");
@@ -1292,10 +1308,16 @@ fn a_capturing_command_clears_the_refusal_left_by_an_earlier_external() {
         std::fs::read_to_string(dir.join("f")).expect("f exists"),
         "original\n"
     );
+    let stdout = out_text(&out);
+    assert!(stdout.contains("st=0"), "stdout: {stdout}");
     assert!(
-        out_text(&out).contains("st=0"),
-        "stdout: {}",
-        out_text(&out)
+        stdout.contains("st2=0"),
+        "a later undo on the emptied ledger must not refuse, stdout: {stdout}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
