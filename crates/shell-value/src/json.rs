@@ -187,6 +187,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::CellVal;
 
     fn batch(rows: &[Value]) -> RecordBatch {
         let maps = rows
@@ -273,5 +274,135 @@ mod tests {
             serde_json::to_string(&merged.records()).unwrap_or_default(),
             r#"[{"a":2,"b":1},{"a":3},{"b":4,"d":"x"}]"#
         );
+    }
+
+    // The deleted `to_maps`, kept as the oracle the encoder must agree with.
+    fn reference(batch: &RecordBatch) -> Vec<StructuredRecord> {
+        let ncols = batch.columns.len();
+        if ncols == 0 {
+            return Vec::new();
+        }
+        let to_json = |cell: &CellVal| match cell {
+            CellVal::Null => Value::Null,
+            CellVal::Bool(b) => Value::Bool(*b),
+            CellVal::Int(n) => Value::from(*n),
+            CellVal::UInt(n) => Value::from(*n),
+            CellVal::Float(n) => Value::from(*n),
+            CellVal::SharedStr(s) => Value::String(s.to_string()),
+            CellVal::Str(s) => Value::String(s.clone()),
+            CellVal::Hash(h) => Value::String(String::from_utf8_lossy(h).into_owned()),
+            CellVal::Json(v) => v.clone(),
+        };
+        batch
+            .cells
+            .chunks_exact(ncols)
+            .map(|row| {
+                let mut map = StructuredRecord::new();
+                for (col, cell) in batch.columns.iter().zip(row) {
+                    if !matches!(cell, CellVal::Null) {
+                        map.insert(col.to_string(), to_json(cell));
+                    }
+                }
+                map
+            })
+            .collect()
+    }
+
+    fn hand_built(names: &[&'static str], cells: Vec<CellVal>) -> RecordBatch {
+        RecordBatch {
+            columns: names.iter().map(|n| Cow::Borrowed(*n)).collect(),
+            cells,
+        }
+    }
+
+    fn odd_batch() -> RecordBatch {
+        use std::sync::Arc;
+        let n = || CellVal::Null;
+        hand_built(
+            &["z", "a", "m", "a", "z", "h", "f", "j"],
+            vec![
+                CellVal::UInt(1),
+                n(),
+                CellVal::Float(f64::NAN),
+                CellVal::Str("last".into()),
+                n(),
+                CellVal::Hash(*b"4c7"),
+                CellVal::Float(f64::INFINITY),
+                CellVal::Json(json!({"k": [1, null, 2.0]})),
+                n(),
+                n(),
+                n(),
+                n(),
+                n(),
+                n(),
+                n(),
+                n(),
+                CellVal::Int(-3),
+                CellVal::SharedStr(Arc::from("first")),
+                CellVal::Bool(false),
+                n(),
+                CellVal::Int(9),
+                CellVal::Str("l1\nl2 é".into()),
+                CellVal::Float(2.0),
+                n(),
+            ],
+        )
+    }
+
+    #[test]
+    fn the_encoder_agrees_with_the_old_map_path_on_every_cell_shape() {
+        let b = odd_batch();
+        let maps = reference(&b);
+        assert_eq!(
+            serde_json::to_string_pretty(&b.records()).unwrap_or_default(),
+            serde_json::to_string_pretty(&maps).unwrap_or_default()
+        );
+        let lines: Vec<String> = maps
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap_or_default())
+            .collect();
+        assert_eq!(b.records().json_lines().collect::<Vec<_>>(), lines);
+        let mut ndjson = Vec::new();
+        b.write_ndjson(&mut ndjson);
+        assert_eq!(String::from_utf8_lossy(&ndjson), lines.join("\n") + "\n");
+        assert!(lines[0].contains(r#""m":null"#), "NaN keeps its key");
+        assert_eq!(lines[1], "{}");
+    }
+
+    #[test]
+    fn a_batch_without_columns_encodes_no_rows() {
+        let b = hand_built(&[], Vec::new());
+        assert_eq!(
+            serde_json::to_string(&b.records()).unwrap_or_default(),
+            "[]"
+        );
+        let mut ndjson = Vec::new();
+        b.write_ndjson(&mut ndjson);
+        assert!(ndjson.is_empty());
+    }
+
+    #[test]
+    fn merged_agrees_with_the_old_round_trip_through_maps() {
+        let first = odd_batch();
+        let second = batch(&[
+            json!({"q": 1, "a": "x"}),
+            json!({"a": null}),
+            json!({"m": "late", "q": 2}),
+        ]);
+        let both = [first, second];
+        let all: Vec<StructuredRecord> = both.iter().flat_map(reference).collect();
+        for rows in 0..=all.len() {
+            let old = if rows == 0 {
+                RecordBatch::empty()
+            } else {
+                RecordBatch::from_maps(all[..rows].to_vec())
+            };
+            let new = RecordBatch::merged(&both, rows);
+            assert_eq!(
+                crate::batch_to_compact_sigil(&new),
+                crate::batch_to_compact_sigil(&old),
+                "first {rows} rows"
+            );
+        }
     }
 }
