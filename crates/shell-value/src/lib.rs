@@ -5,6 +5,7 @@ mod json;
 mod rows;
 mod schema;
 mod text;
+mod typed;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -17,8 +18,9 @@ pub use batch::{RecordBatch, Row, RowOrder};
 pub use datum::Datum;
 pub use json::{Records, StructuredRecord};
 pub use rows::{CellValue, DynRows, Record, RowSink, Rows};
-pub use schema::{Column, Schema};
+pub use schema::{ColType, Column, Schema, column_index};
 pub use text::{batch_to_compact_sigil, render_batch_table};
+pub use typed::{FileMode, OrBlank, ShortText, UnixTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

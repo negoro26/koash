@@ -1,6 +1,17 @@
 use std::fmt;
 use std::sync::Arc;
 
+/// What a column's cells mean. A cell stores a number, and the column says how it reads as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColType {
+    Any,
+    /// Seconds since the Unix epoch, read as an ISO 8601 UTC string.
+    Timestamp,
+    /// Unix permission bits, read as an octal string.
+    Mode,
+}
+
 #[derive(Debug, Clone)]
 enum Name {
     Static(&'static str),
@@ -9,19 +20,63 @@ enum Name {
 
 /// One column of a [`Schema`]. Cloning never copies the name.
 #[derive(Debug, Clone)]
-pub struct Column(Name);
+pub struct Column {
+    name: Name,
+    ty: ColType,
+}
 
 impl Column {
     pub const fn new(name: &'static str) -> Self {
-        Column(Name::Static(name))
+        Self::typed(name, ColType::Any)
+    }
+
+    pub const fn typed(name: &'static str, ty: ColType) -> Self {
+        Column {
+            name: Name::Static(name),
+            ty,
+        }
     }
 
     pub fn name(&self) -> &str {
-        match &self.0 {
+        match &self.name {
             Name::Static(name) => name,
             Name::Shared(name) => name,
         }
     }
+
+    pub fn ty(&self) -> ColType {
+        self.ty
+    }
+}
+
+/// The index of the column called `name` in a static column list. A name that is not there fails
+/// const evaluation, so a misspelled sort key stops the build.
+#[allow(clippy::panic)]
+pub const fn column_index(columns: &[Column], name: &str) -> usize {
+    let mut at = 0;
+    while at < columns.len() {
+        if let Name::Static(candidate) = columns[at].name
+            && bytes_equal(candidate.as_bytes(), name.as_bytes())
+        {
+            return at;
+        }
+        at += 1;
+    }
+    panic!("no such column")
+}
+
+const fn bytes_equal(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut at = 0;
+    while at < a.len() {
+        if a[at] != b[at] {
+            return false;
+        }
+        at += 1;
+    }
+    true
 }
 
 impl PartialEq for Column {
@@ -61,7 +116,10 @@ impl Schema {
     pub fn named<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> Self {
         let columns: Arc<[Column]> = names
             .into_iter()
-            .map(|name| Column(Name::Shared(Arc::from(name.as_ref()))))
+            .map(|name| Column {
+                name: Name::Shared(Arc::from(name.as_ref())),
+                ty: ColType::Any,
+            })
             .collect();
         Schema(Columns::Shared(columns))
     }

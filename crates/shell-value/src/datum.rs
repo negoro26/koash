@@ -1,6 +1,8 @@
 use std::fmt::{Display, Write as _};
 use std::io::Write;
 
+use crate::typed::{FileMode, ShortText, UnixTime};
+
 /// One cell as callers read it. Storage may change; this view does not.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -13,6 +15,10 @@ pub enum Datum<'a> {
     Str(&'a str),
     /// The compact text of a JSON array or object.
     Json(&'a str),
+    /// A moment, which reads as an ISO 8601 UTC string wherever a string is expected.
+    Time(UnixTime),
+    /// Permission bits, which read as an octal string wherever a string is expected.
+    Mode(FileMode),
 }
 
 impl<'a> Datum<'a> {
@@ -20,10 +26,20 @@ impl<'a> Datum<'a> {
         matches!(self, Datum::Null)
     }
 
-    /// The text of a string cell. Numbers, booleans and nested JSON are not strings.
+    /// The text of a string cell. Numbers, booleans and nested JSON are not strings, and a time
+    /// or a mode has no stored text to borrow: read it through [`Datum::short_text`].
     pub fn as_str(&self) -> Option<&'a str> {
         match *self {
             Datum::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The text of a time or a mode, held inline.
+    pub fn short_text(&self) -> Option<ShortText> {
+        match *self {
+            Datum::Time(time) => Some(time.text()),
+            Datum::Mode(mode) => Some(mode.text()),
             _ => None,
         }
     }
@@ -50,6 +66,8 @@ impl<'a> Datum<'a> {
             Datum::Int(n) => format_into(scratch, &n),
             Datum::UInt(n) => format_into(scratch, &n),
             Datum::Float(n) => format_into(scratch, &n),
+            Datum::Time(time) => set_text(scratch, time.text().as_str()),
+            Datum::Mode(mode) => set_text(scratch, mode.text().as_str()),
         }
     }
 
@@ -64,6 +82,8 @@ impl<'a> Datum<'a> {
             Datum::Int(i) if i >= 0 => uint_decimal_len(i as u64),
             Datum::Int(i) => 1 + uint_decimal_len(i.wrapping_neg() as u64),
             Datum::Float(f) => format_into(scratch, &f).len(),
+            Datum::Time(time) => time.text().len(),
+            Datum::Mode(mode) => mode.text().len(),
         }
     }
 
@@ -75,6 +95,11 @@ impl<'a> Datum<'a> {
             Datum::Int(i) => {
                 let _ = w.write_all(b"-");
                 1 + write_uint_stack(w, i.wrapping_neg() as u64)
+            }
+            Datum::Time(_) | Datum::Mode(_) => {
+                let text = self.short_text().unwrap_or_default();
+                let _ = w.write_all(text.as_str().as_bytes());
+                text.len()
             }
             other => {
                 let text = other.text(scratch);
@@ -88,6 +113,12 @@ impl<'a> Datum<'a> {
 fn format_into<'s>(scratch: &'s mut String, value: &impl Display) -> &'s str {
     scratch.clear();
     let _ = write!(scratch, "{value}");
+    scratch
+}
+
+fn set_text<'s>(scratch: &'s mut String, text: &str) -> &'s str {
+    scratch.clear();
+    scratch.push_str(text);
     scratch
 }
 

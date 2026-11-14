@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 
 use shell_kernel::Session;
-use shell_value::{Datum, StructuredDiagnostic, Value};
+use shell_value::{Datum, ShortText, StructuredDiagnostic, Value};
 
 use super::common::usage_error;
 use crate::args::Args;
@@ -59,10 +59,12 @@ impl Builtin for SortBy {
 }
 
 /// Numbers compare as numbers, everything else as text, with non-strings as the empty string.
-/// Mixed columns therefore have no total order; the sort is stable over whatever it yields.
+/// A time or a mode compares as the text it prints. Mixed columns therefore have no total order;
+/// the sort is stable over whatever it yields.
 struct SortKey<'a> {
     num: Option<f64>,
     text: &'a str,
+    inline: Option<ShortText>,
 }
 
 impl<'a> SortKey<'a> {
@@ -70,7 +72,12 @@ impl<'a> SortKey<'a> {
         Self {
             num: cell.as_f64(),
             text: cell.as_str().unwrap_or(""),
+            inline: cell.short_text(),
         }
+    }
+
+    fn text(&self) -> &str {
+        self.inline.as_ref().map_or(self.text, ShortText::as_str)
     }
 }
 
@@ -78,7 +85,7 @@ impl Ord for SortKey<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.num, other.num) {
             (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
-            _ => self.text.cmp(other.text),
+            _ => self.text().cmp(other.text()),
         }
     }
 }

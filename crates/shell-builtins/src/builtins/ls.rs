@@ -1,15 +1,28 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
-use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
-use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
+use shell_value::{
+    FileMode, OrBlank, Record, Rows, StructuredDiagnostic, UnixTime, Value, column_index, record,
+};
 
-use super::common::{format_unix_iso, resolve_path};
+use super::common::{kind_of, resolve_path};
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
+
+record! {
+    struct LsRow<'a> {
+        ext: &'a str,
+        kind: &'a str,
+        modified: OrBlank<UnixTime>,
+        name: &'a str,
+        permissions: FileMode,
+        size: u64,
+    }
+}
+
+const NAME: usize = column_index(<LsRow<'static> as Record>::COLUMNS, "name");
 
 pub(super) struct Ls;
 
@@ -56,15 +69,15 @@ impl Builtin for Ls {
             args.operands.clone()
         };
 
-        let mut records = Vec::new();
+        let mut rows = Rows::<LsRow<'static>>::new();
         for target in targets {
             let resolved = resolve_path(session, target);
             if std::fs::metadata(&resolved).is_ok_and(|m| m.is_dir()) {
-                list_dir(session, &resolved, target, show_all, &mut records);
+                list_dir(session, &resolved, target, show_all, &mut rows);
                 continue;
             }
             match std::fs::symlink_metadata(&resolved) {
-                Ok(meta) => records.push(build_ls_record(target.to_string(), &resolved, &meta)),
+                Ok(meta) => push_ls_row(&mut rows, target, &resolved, &meta),
                 Err(e) => {
                     fail(
                         session,
@@ -75,13 +88,10 @@ impl Builtin for Ls {
             }
         }
 
-        records.sort_by(|a, b| {
-            let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            na.cmp(nb)
-        });
-
-        Value::from_records(records)
+        let mut batch = rows.finish_or_empty()?;
+        let order = batch.order_by(|row| row.get(NAME).as_str().unwrap_or(""));
+        batch.take_rows(order);
+        Ok(Value::from_batch(batch))
     }
 }
 
@@ -90,7 +100,7 @@ fn list_dir(
     dir: &Path,
     label: &str,
     show_all: bool,
-    records: &mut Vec<StructuredRecord>,
+    rows: &mut Rows<LsRow<'static>>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -115,12 +125,13 @@ fn list_dir(
                 continue;
             }
         };
-        let name = entry.file_name().to_string_lossy().to_string();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
         if !show_all && name.starts_with('.') {
             continue;
         }
         match entry.metadata() {
-            Ok(meta) => records.push(build_ls_record(name, &entry.path(), &meta)),
+            Ok(meta) => push_ls_row(rows, &name, Path::new(&file_name), &meta),
             Err(e) => {
                 fail(
                     session,
@@ -132,33 +143,14 @@ fn list_dir(
     }
 }
 
-fn build_ls_record(name: String, path: &Path, meta: &std::fs::Metadata) -> StructuredRecord {
-    let kind = if meta.is_dir() {
-        "dir"
-    } else if meta.is_symlink() {
-        "symlink"
-    } else {
-        "file"
-    };
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_string();
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| format_unix_iso(d.as_secs()))
-        .unwrap_or_default();
-    let perms = format!("{:o}", meta.permissions().mode() & 0o777);
-
-    let mut rec = StructuredRecord::new();
-    rec.insert("name".to_string(), JsonVal::String(name));
-    rec.insert("ext".to_string(), JsonVal::String(ext));
-    rec.insert("kind".to_string(), JsonVal::String(kind.to_string()));
-    rec.insert("size".to_string(), json!(meta.len()));
-    rec.insert("modified".to_string(), JsonVal::String(modified));
-    rec.insert("permissions".to_string(), JsonVal::String(perms));
-    rec
+/// `path` supplies the extension; `name` is what the row calls the entry.
+fn push_ls_row(rows: &mut Rows<LsRow<'static>>, name: &str, path: &Path, meta: &std::fs::Metadata) {
+    rows.push(&LsRow {
+        ext: path.extension().and_then(|e| e.to_str()).unwrap_or(""),
+        kind: kind_of(meta),
+        modified: OrBlank(UnixTime::from_system(meta.modified())),
+        name,
+        permissions: FileMode(meta.permissions().mode() & 0o777),
+        size: meta.len(),
+    });
 }

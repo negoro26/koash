@@ -1,10 +1,14 @@
 use std::marker::PhantomData;
 
 use crate::cell::{Cell, span};
-use crate::{Column, Datum, RecordBatch, Schema, StructuredDiagnostic};
+use crate::typed::{FileMode, OrBlank, UnixTime};
+use crate::{ColType, Column, Datum, RecordBatch, Schema, StructuredDiagnostic};
 
 /// A value that knows how to write itself as one cell.
 pub trait CellValue {
+    /// How a column of these values reads. [`RowSink::put`] stores the value so that it does.
+    const TYPE: ColType = ColType::Any;
+
     fn put(&self, row: &mut RowSink<'_>);
 }
 
@@ -23,6 +27,39 @@ impl CellValue for u64 {
 impl CellValue for Datum<'_> {
     fn put(&self, row: &mut RowSink<'_>) {
         row.put(*self);
+    }
+}
+
+impl CellValue for bool {
+    fn put(&self, row: &mut RowSink<'_>) {
+        row.put(Datum::Bool(*self));
+    }
+}
+
+impl CellValue for UnixTime {
+    const TYPE: ColType = ColType::Timestamp;
+
+    fn put(&self, row: &mut RowSink<'_>) {
+        row.put(Datum::Time(*self));
+    }
+}
+
+impl CellValue for FileMode {
+    const TYPE: ColType = ColType::Mode;
+
+    fn put(&self, row: &mut RowSink<'_>) {
+        row.put(Datum::Mode(*self));
+    }
+}
+
+impl<T: CellValue> CellValue for OrBlank<T> {
+    const TYPE: ColType = T::TYPE;
+
+    fn put(&self, row: &mut RowSink<'_>) {
+        match &self.0 {
+            Some(value) => value.put(row),
+            None => row.put_str(""),
+        }
     }
 }
 
@@ -50,7 +87,7 @@ macro_rules! record {
         impl<$life> $crate::Record for $name<$life> {
             type Table = $name<'static>;
             const COLUMNS: &'static [$crate::Column] =
-                &[$($crate::Column::new(stringify!($field))),+];
+                &[$($crate::Column::typed(stringify!($field), <$ty as $crate::CellValue>::TYPE)),+];
 
             fn write(&self, row: &mut $crate::RowSink<'_>) {
                 $($crate::CellValue::put(&self.$field, row);)+
@@ -64,16 +101,19 @@ struct Builder {
     cells: Vec<Cell>,
     text: String,
     too_large: bool,
+    typed: bool,
 }
 
 impl Builder {
     fn new(schema: Schema, row_cap: usize) -> Self {
         let cells = Vec::with_capacity(row_cap * schema.len());
+        let typed = schema.columns().iter().any(|c| c.ty() != ColType::Any);
         Self {
             schema,
             cells,
             text: String::new(),
             too_large: false,
+            typed,
         }
     }
 
@@ -114,6 +154,15 @@ impl Builder {
         }
         Ok(self.into_batch())
     }
+
+    fn finish_or_empty(self) -> Result<RecordBatch, StructuredDiagnostic> {
+        let batch = self.finish()?;
+        Ok(if batch.is_empty() {
+            RecordBatch::empty()
+        } else {
+            batch
+        })
+    }
 }
 
 /// Where one row's cells go. A row shorter than the schema is padded with nulls and cells past
@@ -130,9 +179,20 @@ impl RowSink<'_> {
             Datum::Null => self.push(Cell::Null),
             Datum::Bool(b) => self.push(Cell::Bool(b)),
             Datum::Int(n) => self.push(Cell::Int(n)),
-            Datum::UInt(n) => self.push(Cell::UInt(n)),
+            Datum::UInt(n) => match self.ty() {
+                ColType::Any => self.push(Cell::UInt(n)),
+                _ => self.put_str(&n.to_string()),
+            },
             Datum::Float(n) => self.push(Cell::Float(n)),
             Datum::Str(s) => self.put_str(s),
+            Datum::Time(time) => match self.ty() {
+                ColType::Timestamp => self.push(Cell::UInt(time.0)),
+                _ => self.put_str(time.text().as_str()),
+            },
+            Datum::Mode(mode) => match self.ty() {
+                ColType::Mode => self.push(Cell::UInt(u64::from(mode.0))),
+                _ => self.put_str(mode.text().as_str()),
+            },
             Datum::Json(s) => {
                 let cell = match self.builder.append(s) {
                     Some((len, off)) => Cell::Json { len, off },
@@ -162,6 +222,16 @@ impl RowSink<'_> {
     /// A string cell from bytes that may not be UTF-8. Invalid sequences show as U+FFFD.
     pub fn put_lossy(&mut self, bytes: &[u8]) {
         self.put_str(&String::from_utf8_lossy(bytes));
+    }
+
+    /// The type of the column this cell goes into. A `UInt` is only a number in an untyped column,
+    /// because a typed column reads every `UInt` as a time or a mode.
+    fn ty(&self) -> ColType {
+        if !self.builder.typed {
+            return ColType::Any;
+        }
+        let columns = self.builder.schema.columns();
+        columns.get(self.col).map_or(ColType::Any, Column::ty)
     }
 
     fn above(&self) -> Option<Cell> {
@@ -206,6 +276,13 @@ impl<T: Record> Rows<T> {
     /// The batch, which keeps its schema when it has no rows.
     pub fn finish(self) -> Result<RecordBatch, StructuredDiagnostic> {
         self.builder.finish()
+    }
+
+    /// Like [`Rows::finish`], except that a batch with no rows has no columns either. That is how
+    /// every builtin that built its table from maps reported an empty result, and what `grep`
+    /// downstream of it relies on.
+    pub fn finish_or_empty(self) -> Result<RecordBatch, StructuredDiagnostic> {
+        self.builder.finish_or_empty()
     }
 }
 
