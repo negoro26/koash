@@ -1,5 +1,7 @@
+use std::cmp::{Ordering, Reverse};
+
 use shell_kernel::Session;
-use shell_value::{RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{Datum, StructuredDiagnostic, Value};
 
 use super::common::usage_error;
 use crate::args::Args;
@@ -42,33 +44,55 @@ impl Builtin for SortBy {
                 return Err(usage_error(problem, "sort-by [--desc] <column>"));
             }
         };
-        let batch = input.into_batch();
+        let mut batch = input.into_batch();
         let Some(col_idx) = batch.col_index(&col) else {
             return Ok(Value::from_batch(batch));
         };
-        let nrows = batch.nrows();
-        let ncols = batch.ncols();
-        let mut order: Vec<usize> = (0..nrows).collect();
-        order.sort_by(|&a, &b| {
-            let va = &batch.row(a)[col_idx];
-            let vb = &batch.row(b)[col_idx];
-            let ord = match (va.as_f64(), vb.as_f64()) {
-                (Some(na), Some(nb)) => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
-                _ => {
-                    let sa = va.as_str().unwrap_or("");
-                    let sb = vb.as_str().unwrap_or("");
-                    sa.cmp(sb)
-                }
-            };
-            if desc { ord.reverse() } else { ord }
-        });
-        let mut out_cells = Vec::with_capacity(nrows * ncols);
-        for idx in order {
-            out_cells.extend_from_slice(batch.row(idx));
-        }
-        Ok(Value::from_batch(RecordBatch {
-            columns: batch.columns,
-            cells: out_cells,
-        }))
+        let order = if desc {
+            batch.order_by(|row| Reverse(SortKey::of(row.get(col_idx))))
+        } else {
+            batch.order_by(|row| SortKey::of(row.get(col_idx)))
+        };
+        batch.take_rows(order);
+        Ok(Value::from_batch(batch))
     }
 }
+
+/// Numbers compare as numbers, everything else as text, with non-strings as the empty string.
+/// Mixed columns therefore have no total order; the sort is stable over whatever it yields.
+struct SortKey<'a> {
+    num: Option<f64>,
+    text: &'a str,
+}
+
+impl<'a> SortKey<'a> {
+    fn of(cell: Datum<'a>) -> Self {
+        Self {
+            num: cell.as_f64(),
+            text: cell.as_str().unwrap_or(""),
+        }
+    }
+}
+
+impl Ord for SortKey<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.num, other.num) {
+            (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
+            _ => self.text.cmp(other.text),
+        }
+    }
+}
+
+impl PartialOrd for SortKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SortKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for SortKey<'_> {}

@@ -1,5 +1,5 @@
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{Datum, StructuredDiagnostic, Value};
 
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
@@ -38,54 +38,58 @@ impl Builtin for Where {
         let field = &args[0];
         let op = &args[1];
         let rhs_raw = &args[2];
-        let batch = input.into_batch();
+        let mut batch = input.into_batch();
         let Some(col_idx) = batch.col_index(field) else {
-            return Ok(Value::from_batch(RecordBatch::new(batch.columns)));
+            batch.truncate_rows(0);
+            return Ok(Value::from_batch(batch));
         };
 
-        let mut out_cells = Vec::new();
-        for r in 0..batch.nrows() {
-            let row = batch.row(r);
-            if eval_cell_predicate(&row[col_idx], op, rhs_raw) {
-                out_cells.extend_from_slice(row);
-            }
-        }
-        Ok(Value::from_batch(RecordBatch {
-            columns: batch.columns,
-            cells: out_cells,
-        }))
+        let predicate = Predicate::new(op, rhs_raw);
+        let mut scratch = String::new();
+        batch.retain_rows(|row| predicate.matches(row.get(col_idx), &mut scratch));
+        Ok(Value::from_batch(batch))
     }
 }
 
-fn eval_cell_predicate(lhs: &CellVal, op: &str, rhs_raw: &str) -> bool {
-    if let Some(lhs_num) = lhs.as_f64()
-        && let Some(rhs_num) = parse_size_or_number(rhs_raw)
-    {
-        return match op {
-            ">" => lhs_num > rhs_num,
-            ">=" => lhs_num >= rhs_num,
-            "<" => lhs_num < rhs_num,
-            "<=" => lhs_num <= rhs_num,
-            "==" | "=" => (lhs_num - rhs_num).abs() < f64::EPSILON,
-            "!=" => (lhs_num - rhs_num).abs() >= f64::EPSILON,
-            _ => false,
-        };
+struct Predicate<'a> {
+    op: &'a str,
+    rhs_raw: &'a str,
+    rhs_num: Option<f64>,
+}
+
+impl<'a> Predicate<'a> {
+    fn new(op: &'a str, rhs_raw: &'a str) -> Self {
+        Self {
+            op,
+            rhs_raw,
+            rhs_num: parse_size_or_number(rhs_raw),
+        }
     }
 
-    let owned;
-    let lhs_str = if let Some(s) = lhs.as_str() {
-        s
-    } else {
-        owned = lhs.format_to_string();
-        &owned
-    };
-    match op {
-        "==" | "=" => lhs_str == rhs_raw,
-        "!=" => lhs_str != rhs_raw,
-        "contains" | "=~" => lhs_str.contains(rhs_raw),
-        ">" => lhs_str > rhs_raw,
-        "<" => lhs_str < rhs_raw,
-        _ => false,
+    fn matches(&self, lhs: Datum<'_>, scratch: &mut String) -> bool {
+        if let Some(lhs_num) = lhs.as_f64()
+            && let Some(rhs_num) = self.rhs_num
+        {
+            return match self.op {
+                ">" => lhs_num > rhs_num,
+                ">=" => lhs_num >= rhs_num,
+                "<" => lhs_num < rhs_num,
+                "<=" => lhs_num <= rhs_num,
+                "==" | "=" => (lhs_num - rhs_num).abs() < f64::EPSILON,
+                "!=" => (lhs_num - rhs_num).abs() >= f64::EPSILON,
+                _ => false,
+            };
+        }
+
+        let lhs_str = lhs.text(scratch);
+        match self.op {
+            "==" | "=" => lhs_str == self.rhs_raw,
+            "!=" => lhs_str != self.rhs_raw,
+            "contains" | "=~" => lhs_str.contains(self.rhs_raw),
+            ">" => lhs_str > self.rhs_raw,
+            "<" => lhs_str < self.rhs_raw,
+            _ => false,
+        }
     }
 }
 
