@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use serde::Serialize;
-use shell_value::{StructuredRecord, Value, format_cell};
+use shell_value::{Datum, RecordBatch, Records, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceMode {
@@ -27,7 +27,7 @@ struct TspTableFrame<'a> {
     tsp: &'static str,
     kind: &'static str,
     columns: &'a [String],
-    rows: &'a [StructuredRecord],
+    rows: Records<'a>,
 }
 
 #[derive(Serialize)]
@@ -53,16 +53,15 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
                 return;
             }
             let columns: Vec<String> = batch.columns.iter().map(|c| c.to_string()).collect();
-            let records = batch.to_maps();
             let frame = TspTableFrame {
                 tsp: "1.0",
                 kind: "table",
                 columns: &columns,
-                rows: &records,
+                rows: batch.records(),
             };
             if let Ok(json) = serde_json::to_string(&frame) {
                 let _ = write!(writer, "\x1b]9001;{json}\x07");
-                let _ = writeln!(writer, "{}", render_unicode_preview(&columns, &records));
+                let _ = writeln!(writer, "{}", render_unicode_preview(&columns, &batch));
                 let _ = writer.flush();
             }
         }
@@ -82,16 +81,24 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
     }
 }
 
-fn render_unicode_preview(columns: &[String], records: &[StructuredRecord]) -> String {
+/// The cell as the preview prints it: JSON text for everything but strings, so a float shows as `2.0`.
+fn preview_text(cell: Datum<'_>) -> String {
+    match cell {
+        Datum::Null => String::new(),
+        Datum::Str(s) => s.to_string(),
+        other => serde_json::to_string(&other).unwrap_or_default(),
+    }
+}
+
+fn render_unicode_preview(columns: &[String], batch: &RecordBatch) -> String {
     let mut widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
-    let rows: Vec<Vec<String>> = records
-        .iter()
-        .map(|rec| {
-            columns
-                .iter()
+    let rows: Vec<Vec<String>> = batch
+        .rows()
+        .map(|row| {
+            row.iter()
                 .enumerate()
-                .map(|(i, col)| {
-                    let s = rec.get(col).map(format_cell).unwrap_or_default();
+                .map(|(i, cell)| {
+                    let s = preview_text(cell);
                     widths[i] = widths[i].max(s.len());
                     s
                 })

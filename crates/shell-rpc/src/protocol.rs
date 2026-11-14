@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use shell_builtins::LspDiagnostic;
-use shell_value::{StructuredDiagnostic, StructuredRecord};
+use shell_value::{Records, StructuredDiagnostic};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RpcRequest {
@@ -87,7 +87,7 @@ pub struct RpcResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
-pub enum RpcEvent {
+pub enum RpcEvent<'a> {
     ProcessSpawned {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<serde_json::Value>,
@@ -99,7 +99,7 @@ pub enum RpcEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        records: Option<Vec<StructuredRecord>>,
+        records: Option<Records<'a>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         compact: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

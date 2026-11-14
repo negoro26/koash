@@ -1,6 +1,6 @@
 use std::io::{BufWriter, Write};
 
-use crate::{RecordBatch, StructuredRecord};
+use crate::RecordBatch;
 
 pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bool) {
     let ncols = batch.ncols();
@@ -107,12 +107,4 @@ pub fn batch_to_compact_sigil(batch: &RecordBatch) -> String {
         out.push('\n');
     }
     out
-}
-
-pub fn records_to_compact_sigil(records: &[StructuredRecord]) -> String {
-    if records.is_empty() {
-        return String::new();
-    }
-    let batch = RecordBatch::from_maps(records.to_vec());
-    batch_to_compact_sigil(&batch)
 }

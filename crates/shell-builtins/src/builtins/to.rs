@@ -31,8 +31,7 @@ impl Builtin for ToFormat {
         let batch = input.into_batch();
         match fmt {
             "json" => {
-                let records = batch.to_maps();
-                let mut json = serde_json::to_string_pretty(&records)
+                let mut json = serde_json::to_string_pretty(&batch.records())
                     .map_err(|e| StructuredDiagnostic::new("E_JSON", e.to_string(), None, None))?;
                 json.push('\n');
                 Ok(Value::from_bytes(json.into_bytes()))

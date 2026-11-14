@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use crate::{CellVal, Datum, StructuredRecord};
+use crate::{CellVal, Datum, StructuredRecord, json};
 
 #[derive(Debug, Clone)]
 pub struct RecordBatch {
@@ -200,24 +200,51 @@ impl RecordBatch {
         }
     }
 
-    pub fn to_maps(&self) -> Vec<StructuredRecord> {
-        let ncols = self.columns.len();
-        if ncols == 0 {
-            return Vec::new();
-        }
-        let nrows = self.nrows();
-        let mut out = Vec::with_capacity(nrows);
-        for r in 0..nrows {
-            let row = &self.cells[r * ncols..(r + 1) * ncols];
-            let mut map = StructuredRecord::new();
-            for (c, col) in self.columns.iter().enumerate() {
-                if !matches!(row[c], CellVal::Null) {
-                    map.insert(col.to_string(), row[c].to_json());
+    /// The first `rows` rows of `batches` as one batch.
+    ///
+    /// The columns are the names that have a non-null cell in those rows, in the order a walk over
+    /// the rows meets them, each row visited in name order. Cells follow the JSON rule: a name
+    /// repeated in a batch keeps its last non-null cell. Rows with no non-null cell are lost.
+    pub fn merged(batches: &[RecordBatch], rows: usize) -> Self {
+        let mut names: Vec<Cow<'static, str>> = Vec::new();
+        let mut left = rows;
+        for batch in batches {
+            let order = json::name_order(batch);
+            for row in batch.rows().take(left) {
+                for col in json::visible_columns(&batch.columns, &order, row) {
+                    let name = &batch.columns[col];
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
                 }
             }
-            out.push(map);
+            left = left.saturating_sub(batch.nrows());
         }
-        out
+
+        let mut cells = Vec::new();
+        let mut left = rows;
+        for batch in batches {
+            let order = json::name_order(batch);
+            let slot: Vec<Option<usize>> = batch
+                .columns
+                .iter()
+                .map(|name| names.iter().position(|n| n == name))
+                .collect();
+            for row in batch.rows().take(left) {
+                let start = cells.len();
+                cells.resize(start + names.len(), CellVal::Null);
+                for col in json::visible_columns(&batch.columns, &order, row) {
+                    if let Some(at) = slot[col] {
+                        cells[start + at] = CellVal::from(row.get(col));
+                    }
+                }
+            }
+            left = left.saturating_sub(batch.nrows());
+        }
+        Self {
+            columns: names.into(),
+            cells,
+        }
     }
 }
 
