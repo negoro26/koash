@@ -1324,3 +1324,52 @@ fn redo_brings_back_a_tree_that_rollback_deleted_even_when_an_earlier_record_nam
         "redo must restore the pre-rollback state"
     );
 }
+
+#[test]
+fn startup_sweep_never_follows_a_symlinked_undo_dir() {
+    let dir = scratch_dir("sweep-symlink");
+    let victim = dir.join("victim");
+    std::fs::create_dir_all(victim.join("old_work")).expect("victim dir");
+    std::fs::write(victim.join("old_work/keep.txt"), "user data\n").expect("victim file");
+    let aged = Command::new("touch")
+        .args(["-d", "2 hours ago"])
+        .arg(victim.join("old_work"))
+        .status()
+        .expect("touch");
+    assert!(aged.success());
+    std::fs::create_dir_all(dir.join(".koa")).expect(".koa");
+    std::os::unix::fs::symlink("../victim", dir.join(".koa/undo")).expect("symlink");
+
+    let out = koa_c(&dir, "echo hi", Duration::from_secs(10)).expect("koa -c finishes");
+    assert!(out.status.success());
+    assert!(
+        victim.join("old_work/keep.txt").exists(),
+        "the sweep must not delete through a symlinked .koa/undo"
+    );
+}
+
+#[test]
+fn undo_snapshots_are_invisible_to_git() {
+    let dir = scratch_dir("undo-gitignore");
+    let init = Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(&dir)
+        .status();
+    if !init.is_ok_and(|s| s.success()) {
+        return;
+    }
+    std::fs::write(dir.join("f"), "secret\n").expect("seed");
+    let out = koa_c(
+        &dir,
+        "echo changed > f; /usr/bin/git status --porcelain --untracked-files=all",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("f"), "git sees the user's file: {stdout}");
+    assert!(
+        !stdout.contains(".koa"),
+        "undo snapshots must not show up as untracked files: {stdout}"
+    );
+}

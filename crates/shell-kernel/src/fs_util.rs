@@ -4,7 +4,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const FICLONE: nix::libc::c_ulong = 0x4004_9409;
@@ -73,16 +73,18 @@ fn try_lock_exclusive(file: &File) -> bool {
 /// Removes every child directory of `parent` whose owner is gone and returns how many it
 /// removed. A child without a lease file is left alone while it is younger than
 /// [`LEASE_GRACE`], because its owner creates the directory before it takes the lease.
+/// Symlinks are never followed, so a checkout that ships `.koa/undo` as a link cannot
+/// turn the sweep into a delete of the link's target.
 pub(crate) fn sweep_unleased_dirs(parent: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return 0;
     };
     let mut reaped = 0usize;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
+        let path = entry.path();
         let can_reap = match OpenOptions::new()
             .read(true)
             .write(true)
@@ -96,6 +98,36 @@ pub(crate) fn sweep_unleased_dirs(parent: &Path) -> usize {
         }
     }
     reaped
+}
+
+/// A directory that is itself not a symlink.
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+}
+
+/// `root/.koa/<child>` when neither `.koa` nor `<child>` is a symlink.
+pub(crate) fn state_subdir(root: &Path, child: &str) -> Option<PathBuf> {
+    let state = root.join(".koa");
+    let dir = state.join(child);
+    (is_real_dir(&state) && is_real_dir(&dir)).then_some(dir)
+}
+
+/// Creates `root/.koa` with a `.gitignore` that ignores everything in it, so undo
+/// snapshots and session copies of user files never get committed by `git add -A`.
+pub(crate) fn state_dir(root: &Path) -> io::Result<PathBuf> {
+    let dir = root.join(".koa");
+    std::fs::create_dir_all(&dir)?;
+    if !is_real_dir(&dir) {
+        return Err(io::Error::other(format!(
+            "{} is not a real directory",
+            dir.display()
+        )));
+    }
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "*\n")?;
+    }
+    Ok(dir)
 }
 
 fn is_older_than(path: &Path, age: Duration) -> bool {

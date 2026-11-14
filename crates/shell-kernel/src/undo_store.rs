@@ -6,7 +6,7 @@ use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
-use crate::fs_util::{Lease, LeaseError, reflink};
+use crate::fs_util::{Lease, LeaseError, reflink, state_dir};
 
 /// A saved copy of one file. Dropping it deletes the copy, so a record that is evicted,
 /// replaced, or left over when the session ends cleans up after itself.
@@ -98,7 +98,7 @@ impl UndoStore {
 
 impl OpenStore {
     fn create(root: &Path, session_id: &str) -> io::Result<Self> {
-        let dir = root.join(".koa").join("undo").join(session_id);
+        let dir = state_dir(root)?.join("undo").join(session_id);
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)

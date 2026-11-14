@@ -5,7 +5,9 @@ use std::time::{Duration, SystemTime};
 use rustc_hash::FxHashMap;
 use shell_value::StructuredDiagnostic;
 
-use crate::fs_util::{Lease, LeaseError, reflink_or_copy, sweep_unleased_dirs};
+use crate::fs_util::{
+    Lease, LeaseError, reflink_or_copy, state_dir, state_subdir, sweep_unleased_dirs,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutationState {
@@ -24,7 +26,9 @@ pub struct CowWorkspace {
 
 impl CowWorkspace {
     pub fn new(root: &Path, session_id: &str) -> Result<Self, StructuredDiagnostic> {
-        let session_dir = root.join(".koa").join("sessions").join(session_id);
+        let state =
+            state_dir(root).map_err(|e| StructuredDiagnostic::from_io("E_COW_DIR", &e, None))?;
+        let session_dir = state.join("sessions").join(session_id);
         let work_dir = session_dir.join("work");
         std::fs::create_dir_all(&work_dir)
             .map_err(|e| StructuredDiagnostic::from_io("E_COW_DIR", &e, None))?;
@@ -138,8 +142,11 @@ impl CowWorkspace {
 
     /// Removes the session directories and undo stores that a crashed koa left under `root`.
     pub fn sweep_orphans(root: &Path) -> usize {
-        let state = root.join(".koa");
-        sweep_unleased_dirs(&state.join("sessions")) + sweep_unleased_dirs(&state.join("undo"))
+        ["sessions", "undo"]
+            .into_iter()
+            .filter_map(|child| state_subdir(root, child))
+            .map(|dir| sweep_unleased_dirs(&dir))
+            .sum()
     }
 
     pub fn sweep_stale_spills(max_age: Duration) -> usize {
