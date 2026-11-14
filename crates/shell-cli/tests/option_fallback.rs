@@ -128,6 +128,17 @@ fn without_an_executable_an_unknown_option_stays_an_args_error() {
 }
 
 #[test]
+fn a_file_without_the_executable_bit_is_not_a_fallback_target() {
+    let s = Scratch::new("not-exec");
+    let bin = Scratch::new("bin-not-exec");
+    bin.write("ls", b"#!/bin/sh\necho wrong\n");
+    let r = run_with_path(&s.0, "ls -1", Some(&bin.0));
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("E_ARGS"), "{}", r.stderr);
+    assert!(!r.stdout.contains("wrong"), "{}", r.stdout);
+}
+
+#[test]
 fn a_builtin_that_reads_dashes_as_operands_never_falls_back() {
     let s = Scratch::new("patch-dash");
     s.write("f", b"old\n");
