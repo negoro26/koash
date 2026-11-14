@@ -1048,10 +1048,10 @@ fn ls_long_option_with_an_a_in_it_does_not_show_hidden_files() {
     let s = Scratch::new("ls-substring");
     s.write("shown", b"");
     s.write(".hidden", b"");
-    let r = run(&s.0, &format!("ls --author {}", s.q(".")));
+    let r = run_builtins_only(&s, &format!("ls --author {}", s.q(".")));
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("--author"), "{}", r.stderr);
     assert!(!r.stdout.contains(".hidden"), "{}", r.stdout);
-    assert!(r.stdout.contains("shown"), "{}", r.stdout);
-    assert_eq!(r.code, 0, "{}", r.stderr);
 }
 
 /// uutils ls.rs:848-851 (`DirArgs`): a symlink operand that points at a directory lists the directory.
@@ -1386,7 +1386,7 @@ fn grep_recurses_into_a_directory_with_dash_r() {
 fn grep_unknown_option_is_a_usage_error() {
     let s = Scratch::new("grep-unknown");
     s.write("f", b"needle\n");
-    let r = run(&s.0, &format!("grep --bogus needle {}", s.q("f")));
+    let r = run_builtins_only(&s, &format!("grep --bogus needle {}", s.q("f")));
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
 }

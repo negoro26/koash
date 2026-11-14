@@ -34,6 +34,13 @@ impl Scratch {
     fn write(&self, rel: &str, content: &[u8]) {
         fs::write(self.path(rel), content).expect("write fixture");
     }
+
+    fn write_executable(&self, rel: &str, content: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        self.write(rel, content.as_bytes());
+        fs::set_permissions(self.path(rel), fs::Permissions::from_mode(0o755))
+            .expect("mark fixture executable");
+    }
 }
 
 impl Drop for Scratch {
@@ -141,30 +148,61 @@ fn a_file_without_the_executable_bit_is_not_a_fallback_target() {
 #[test]
 fn a_builtin_that_reads_dashes_as_operands_never_falls_back() {
     let s = Scratch::new("patch-dash");
+    let bin = Scratch::new("bin-patch-dash");
+    let marker = s.path("fake-patch-ran");
+    bin.write_executable(
+        "patch",
+        &format!("#!/bin/sh\necho ran > '{}'\n", marker.display()),
+    );
     s.write("f", b"old\n");
-    let table = run(&s.0, &format!("cat {}", s.q("f"))).stdout;
-    let row = table.lines().last().expect("cat row");
-    let hash = row.split_whitespace().nth(2).expect("line hash");
-    let anchor = format!("1:{hash}");
-    let r = run(&s.0, &format!("patch {} {anchor} -x", s.q("f")));
+    let rows = run_with_path(
+        &s.0,
+        &format!("cat {} | select hash | to json", s.q("f")),
+        Some(&bin.0),
+    );
+    assert_eq!(rows.code, 0, "{}", rows.stderr);
+    let rows: serde_json::Value = serde_json::from_str(&rows.stdout).expect("cat rows as json");
+    let hash = rows[0]["hash"].as_str().expect("line hash");
+    let r = run_with_path(
+        &s.0,
+        &format!("patch {} 1:{hash} -x", s.q("f")),
+        Some(&bin.0),
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(notices(&r.stderr).is_empty(), "{}", r.stderr);
+    assert!(!marker.exists(), "the real patch on PATH must not run");
     assert_eq!(fs::read_to_string(s.path("f")).unwrap(), "-x\n");
 }
 
 #[test]
 fn the_notice_is_printed_once_per_command_per_session() {
     let s = Scratch::new("notice-once");
-    s.write("a", b"");
-    let r = run(&s.0, &format!("ls -1 {0}; ls -1 {0}; ls -h {0}", s.q("")));
+    s.write("a", b"payload");
+    let r = run(
+        &s.0,
+        &format!(
+            "ls -1 {0}; ls -1 {0}; ls -h {0}; cp -a {1} {2}",
+            s.q(""),
+            s.q("a"),
+            s.q("b")
+        ),
+    );
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "a\na\na\n");
+    assert_eq!(fs::read(s.path("b")).expect("cp ran"), b"payload");
     let lines = notices(&r.stderr);
-    assert_eq!(lines.len(), 1, "{}", r.stderr);
+    assert_eq!(lines.len(), 2, "{}", r.stderr);
     assert!(
         lines[0].starts_with("koa: ls: '-1' is not built in, running /")
             && lines[0].ends_with("/ls"),
         "{}",
         lines[0]
+    );
+    assert!(
+        lines[1].starts_with("koa: cp: '-a' is not built in, running /")
+            && lines[1].ends_with("/cp"),
+        "{}",
+        lines[1]
     );
 }
 
