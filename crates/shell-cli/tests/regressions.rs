@@ -1021,3 +1021,29 @@ fn removing_a_fifo_still_makes_undo_refuse() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
 }
+
+#[test]
+fn hashline_builtins_print_the_columns_help_lists_for_them() {
+    let dir = scratch_dir("hashline-columns");
+    std::fs::write(dir.join("a.txt"), "alpha\nbeta\n").expect("write a.txt");
+    let run = |script: &str| {
+        let out = koa_c(&dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for (name, script) in [
+        ("cat", "cat a.txt"),
+        ("head", "head -n 1 a.txt"),
+        ("tail", "tail -n 1 a.txt"),
+        ("grep", "grep alpha a.txt"),
+        ("refs", "refs alpha"),
+    ] {
+        let compact = run(&format!("{script} | to compact"));
+        let header = compact.lines().next().unwrap_or_default();
+        let printed = header.trim_start_matches("@schema:").replace('|', ", ");
+        let listed = run(&format!("help {name} | to json"));
+        assert!(
+            listed.contains(&format!("\"columns\": \"{printed}\"")),
+            "{name} prints `{printed}` but help says: {listed}"
+        );
+    }
+}

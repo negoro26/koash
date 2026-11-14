@@ -82,7 +82,7 @@ fn schema_json(sig: &Signature) -> serde_json::Value {
         "name": sig.name,
         "description": sig.description,
         "flags": flag_spellings(sig.flags),
-        "columns": sig.columns,
+        "columns": sig.column_names().collect::<Vec<_>>(),
         "reads_input": sig.input != InputMode::None,
     })
 }

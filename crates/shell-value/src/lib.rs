@@ -2,6 +2,7 @@ mod batch;
 mod cell;
 mod datum;
 mod json;
+mod schema;
 mod text;
 
 use std::collections::BTreeMap;
@@ -15,6 +16,7 @@ pub use batch::{RecordBatch, Row, RowOrder};
 pub use cell::CellVal;
 pub use datum::Datum;
 pub use json::{Records, StructuredRecord};
+pub use schema::{Column, Schema};
 pub use text::{batch_to_compact_sigil, render_batch_table};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

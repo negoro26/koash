@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "List running processes",
     flags: &[],
-    columns: &["pid", "name", "state", "cmdline"],
+    columns: crate::builtin::columns!["pid", "name", "state", "cmdline"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

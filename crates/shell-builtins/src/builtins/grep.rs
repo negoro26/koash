@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,12 +7,19 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::{Searcher, SearcherBuilder};
 use ignore::WalkBuilder;
 use shell_kernel::Session;
-use shell_value::{CellVal, Datum, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
+use shell_value::{
+    CellVal, Column, Datum, RecordBatch, Schema, StructuredDiagnostic, Value, hashline_bytes,
+};
 
-use super::common::{check_killed, hashline_schema, resolve_path, search_file_with_hashline};
+use super::common::{
+    HASHLINE_COLUMNS, check_killed, hashline_schema, resolve_path, search_file_with_hashline,
+};
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
+
+static FILE_COLUMNS: [Column; 1] = [Column::new("file")];
+static COUNT_COLUMNS: [Column; 2] = [Column::new("file"), Column::new("count")];
 
 pub(super) struct Grep;
 
@@ -61,7 +67,7 @@ static SIGNATURE: Signature = Signature {
         Flag::long_valued("include", "search only files whose name matches the glob"),
         Flag::long_valued("exclude", "skip files whose name matches the glob"),
     ],
-    columns: &["file", "line", "hash", "text"],
+    columns: &HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,
@@ -113,8 +119,7 @@ impl Builtin for Grep {
                     let hash_col = in_batch.col_index("hash");
 
                     let mut batch = if opts.files_only {
-                        let cols: Arc<[Cow<'static, str>]> = Arc::new([Cow::Borrowed("file")]);
-                        RecordBatch::with_capacity(cols, 16)
+                        RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 16)
                     } else {
                         RecordBatch::with_capacity(hashline_schema(), 64)
                     };
@@ -174,19 +179,16 @@ impl Builtin for Grep {
                             batch.cells.push(CellVal::Str(text.to_string()));
                         }
                         if opts.count_only {
-                            let cols: Arc<[Cow<'static, str>]> =
-                                Arc::new([Cow::Borrowed("file"), Cow::Borrowed("count")]);
-                            let mut c_batch = RecordBatch::with_capacity(cols, 1);
+                            let mut c_batch =
+                                RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 1);
                             c_batch.cells.push(CellVal::Str("<input>".to_string()));
                             c_batch.cells.push(CellVal::UInt(count));
                             return Ok(Value::from_batch(c_batch));
                         }
                     } else if let Some(p_idx) = file_col {
                         let mut seen = std::collections::HashSet::new();
-                        let mut count_batch = RecordBatch::with_capacity(
-                            Arc::new([Cow::Borrowed("file"), Cow::Borrowed("count")]),
-                            16,
-                        );
+                        let mut count_batch =
+                            RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 16);
                         for row in in_batch.rows() {
                             if let Some(p_str) = row.get(p_idx).as_str()
                                 && seen.insert(p_str.to_string())
@@ -224,16 +226,13 @@ impl Builtin for Grep {
                                 Ok(true)
                             }),
                         );
-                        let cols: Arc<[Cow<'static, str>]> =
-                            Arc::new([Cow::Borrowed("file"), Cow::Borrowed("count")]);
-                        let mut c_batch = RecordBatch::with_capacity(cols, 1);
+                        let mut c_batch = RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 1);
                         c_batch.cells.push(CellVal::SharedStr(stdin_cell));
                         c_batch.cells.push(CellVal::UInt(count));
                         return Ok(Value::from_batch(c_batch));
                     }
                     if opts.files_only {
-                        let cols: Arc<[Cow<'static, str>]> = Arc::new([Cow::Borrowed("file")]);
-                        let mut f_batch = RecordBatch::with_capacity(cols, 1);
+                        let mut f_batch = RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 1);
                         let mut hit = false;
                         let _ = searcher.search_slice(
                             &matcher,
@@ -278,14 +277,11 @@ impl Builtin for Grep {
         };
 
         let mut batch = if opts.files_only {
-            RecordBatch::with_capacity(Arc::new([Cow::Borrowed("file")]), 32)
+            RecordBatch::with_capacity(Schema::of(&FILE_COLUMNS), 32)
         } else {
             RecordBatch::with_capacity(hashline_schema(), 64)
         };
-        let mut count_batch = RecordBatch::with_capacity(
-            Arc::new([Cow::Borrowed("file"), Cow::Borrowed("count")]),
-            32,
-        );
+        let mut count_batch = RecordBatch::with_capacity(Schema::of(&COUNT_COLUMNS), 32);
 
         for path_arg in search_paths {
             let target = resolve_path(session, path_arg);

@@ -29,7 +29,7 @@ static SIGNATURE: Signature = Signature {
             "long listing; every record already carries size, time, and mode",
         ),
     ],
-    columns: &["name", "ext", "kind", "size", "modified", "permissions"],
+    columns: crate::builtin::columns!["name", "ext", "kind", "size", "modified", "permissions"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

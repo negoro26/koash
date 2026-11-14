@@ -18,7 +18,7 @@ static SIGNATURE: Signature = Signature {
         ),
         Flag::short_switch('P', "print the physical directory, symlinks resolved"),
     ],
-    columns: &["path"],
+    columns: crate::builtin::columns!["path"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

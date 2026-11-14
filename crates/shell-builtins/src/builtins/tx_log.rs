@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &["tx_log"],
     description: "List recorded transactional micro-commits",
     flags: &[],
-    columns: &["tx_id", "command", "files"],
+    columns: crate::builtin::columns!["tx_id", "command", "files"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,

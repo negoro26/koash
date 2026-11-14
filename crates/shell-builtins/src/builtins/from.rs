@@ -1,9 +1,6 @@
-use std::borrow::Cow;
-use std::sync::Arc;
-
 use serde_json::Value as JsonVal;
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{CellVal, RecordBatch, Schema, StructuredDiagnostic, Value};
 
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
@@ -77,27 +74,23 @@ fn batch_from_json_objects(objs: Vec<serde_json::Map<String, JsonVal>>) -> Recor
     if objs.is_empty() {
         return RecordBatch::empty();
     }
-    let mut columns: Vec<Cow<'static, str>> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     for map in &objs {
         for k in map.keys() {
-            if !columns.iter().any(|c| c.as_ref() == k.as_str()) {
-                columns.push(Cow::Owned(k.clone()));
+            if !names.contains(&k.as_str()) {
+                names.push(k);
             }
         }
     }
-    let ncols = columns.len();
-    let mut cells = Vec::with_capacity(objs.len() * ncols);
+    let mut batch = RecordBatch::with_capacity(Schema::named(names), objs.len());
     for mut map in objs {
-        for col in &columns {
-            let cell = match map.remove(col.as_ref()) {
+        for col in 0..batch.ncols() {
+            let cell = match map.remove(batch.schema().columns()[col].name()) {
                 Some(v) => CellVal::from_json(v),
                 None => CellVal::Null,
             };
-            cells.push(cell);
+            batch.cells.push(cell);
         }
     }
-    RecordBatch {
-        columns: Arc::from(columns),
-        cells,
-    }
+    batch
 }
