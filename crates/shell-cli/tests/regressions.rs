@@ -1249,3 +1249,52 @@ fn evicting_a_ledger_entry_deletes_its_snapshot() {
         "60 edits keep at most the 50 ledger entries' snapshots, found {snapshots}"
     );
 }
+
+#[test]
+fn undo_refuses_after_an_external_ran_with_nothing_recorded_before_it() {
+    let dir = scratch_dir("undo-opaque-floor");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let out = koa_c(
+        &dir,
+        "/bin/cp f g; undo; echo st=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E_TX_OPAQUE") && stderr.contains("/bin/cp"),
+        "undo must refuse and name the command, stderr: {stderr}"
+    );
+    assert!(
+        out_text(&out).contains("st=1"),
+        "stdout: {}",
+        out_text(&out)
+    );
+    assert!(dir.join("g").exists(), "a refused undo must not touch g");
+}
+
+#[test]
+fn a_capturing_command_clears_the_refusal_left_by_an_earlier_external() {
+    let dir = scratch_dir("undo-opaque-floor-cleared");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let out = koa_c(
+        &dir,
+        "/bin/cp f g; echo new > f; undo; echo st=$?; cat f",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "original\n"
+    );
+    assert!(
+        out_text(&out).contains("st=0"),
+        "stdout: {}",
+        out_text(&out)
+    );
+}

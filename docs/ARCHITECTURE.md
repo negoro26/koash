@@ -89,6 +89,7 @@ A command that changes files calls `record_preimage` or `record_tree` before tou
 Commands with `TxPolicy::Skip` (`undo`, `redo`, `rollback`, `tx-log`) do not open an entry, so they do not appear in the ledger they read.
 An external process or a sub-kernel command (`@py`, `@js`) can change files the ledger cannot see.
 It marks the newest entry `opaque_after`. `undo` then refuses, and `rollback <id>` still works.
+With an empty ledger there is no entry to mark, so the session keeps the marker itself until the next transaction captures a path. `undo` refuses with `E_TX_OPAQUE` meanwhile.
 
 ### Snapshots
 

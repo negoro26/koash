@@ -176,6 +176,9 @@ pub struct Session {
     pub mutated_files: Vec<String>,
     pub tx_log: Vec<TxRecord>,
     redo_log: Vec<RedoRecord>,
+    /// An external ran while the ledger was empty. No entry can carry the marker, so the
+    /// session does, until the next transaction captures a path.
+    opaque_floor: Option<String>,
     undo_store: UndoStore,
     pub next_tx_id: usize,
     pub taint: TaintLevel,
@@ -253,6 +256,7 @@ impl Session {
             mutated_files: Vec::new(),
             tx_log: Vec::new(),
             redo_log: Vec::new(),
+            opaque_floor: None,
             undo_store,
             next_tx_id: 1,
             taint: TaintLevel::TrustedLocal,
@@ -294,6 +298,7 @@ impl Session {
             mutated_files: Vec::new(),
             tx_log: Vec::new(),
             redo_log: Vec::new(),
+            opaque_floor: None,
             undo_store: undo_store_for(self.cwd.clone(), uid),
             next_tx_id: self.next_tx_id,
             taint: self.taint,
@@ -357,6 +362,7 @@ impl Session {
             mutated_files: snap.mutated_files,
             tx_log: Vec::new(),
             redo_log: Vec::new(),
+            opaque_floor: None,
             undo_store,
             next_tx_id: 1,
             taint: TaintLevel::TrustedLocal,
@@ -456,6 +462,7 @@ impl Session {
         tx.index.insert(path.to_path_buf(), tx.preimages.len());
         tx.preimages.push((path.to_path_buf(), pre));
         self.redo_log.clear();
+        self.opaque_floor = None;
         Ok(descend)
     }
 
@@ -481,10 +488,17 @@ impl Session {
     /// write back is stale.
     pub fn mark_opaque(&mut self, what: String) {
         self.redo_log.clear();
-        if let Some(tx) = self.tx_log.last_mut()
-            && tx.opaque_after.is_none()
-        {
-            tx.opaque_after = Some(what);
+        match self.tx_log.last_mut() {
+            Some(tx) => {
+                if tx.opaque_after.is_none() {
+                    tx.opaque_after = Some(what);
+                }
+            }
+            None => {
+                if self.opaque_floor.is_none() {
+                    self.opaque_floor = Some(what);
+                }
+            }
         }
     }
 
@@ -600,6 +614,14 @@ impl Session {
     pub fn undo_last(&mut self) -> Result<Option<(String, usize)>, StructuredDiagnostic> {
         self.finish_tx();
         let Some(last) = self.tx_log.last() else {
+            if let Some(cmd) = &self.opaque_floor {
+                return Err(StructuredDiagnostic::new(
+                    "E_TX_OPAQUE",
+                    format!("\"{cmd}\" ran and is not undoable; nothing is recorded before it"),
+                    None,
+                    None,
+                ));
+            }
             return Ok(None);
         };
         if let Some(cmd) = &last.opaque_after {
