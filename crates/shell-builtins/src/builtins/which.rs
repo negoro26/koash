@@ -15,6 +15,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: false,
 };
 
 impl Builtin for Which {

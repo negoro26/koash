@@ -16,6 +16,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::SoleStage,
     tx: TxPolicy::Track,
+    strict_options: false,
 };
 
 impl Builtin for Unset {

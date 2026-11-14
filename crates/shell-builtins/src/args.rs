@@ -6,6 +6,8 @@
 //! (`--force`, never a prefix of one), `--long=value`, `--` ends options, and a lone
 //! `-` is an operand. Options and operands may be interleaved. An unknown option or
 //! a missing value is an `E_ARGS` error, so nothing runs on a mistyped flag.
+//! `Args::unknown_option` tells the two apart for the executor: an unknown option is
+//! handed to the real program of the same name, a bad value stays an error.
 
 use std::str::FromStr;
 
@@ -51,12 +53,47 @@ enum Parsed<'a> {
     Operand,
 }
 
+enum Rejected {
+    /// As the user typed it: `-h` or `--author`.
+    UnknownOption(String),
+    Invalid(StructuredDiagnostic),
+}
+
+impl Rejected {
+    fn into_diagnostic(self, sig: &Signature) -> StructuredDiagnostic {
+        match self {
+            Self::UnknownOption(spelling) => {
+                args_error(sig, format!("unknown option '{spelling}'"))
+            }
+            Self::Invalid(diag) => diag,
+        }
+    }
+}
+
+impl From<StructuredDiagnostic> for Rejected {
+    fn from(diag: StructuredDiagnostic) -> Self {
+        Self::Invalid(diag)
+    }
+}
+
 impl<'a> Args<'a> {
     pub fn parse(
         sig: &'static Signature,
         args: &'a [String],
     ) -> Result<Self, StructuredDiagnostic> {
-        Self::parse_with(sig, args, Mode::Gnu)
+        Self::parse_with(sig, args, Mode::Gnu).map_err(|rejected| rejected.into_diagnostic(sig))
+    }
+
+    /// The first option in `args` that `sig` does not declare. A declared option with a
+    /// missing or invalid value is not unknown.
+    pub fn unknown_option(sig: &'static Signature, args: &'a [String]) -> Option<String> {
+        if !args.iter().any(|a| a.len() > 1 && a.starts_with('-')) {
+            return None;
+        }
+        match Self::parse_with(sig, args, Mode::Gnu) {
+            Err(Rejected::UnknownOption(spelling)) => Some(spelling),
+            _ => None,
+        }
     }
 
     /// `echo`-style parsing: see `Mode::Leading`.
@@ -64,14 +101,14 @@ impl<'a> Args<'a> {
         sig: &'static Signature,
         args: &'a [String],
     ) -> Result<Self, StructuredDiagnostic> {
-        Self::parse_with(sig, args, Mode::Leading)
+        Self::parse_with(sig, args, Mode::Leading).map_err(|rejected| rejected.into_diagnostic(sig))
     }
 
     fn parse_with(
         sig: &'static Signature,
         args: &'a [String],
         mode: Mode,
-    ) -> Result<Self, StructuredDiagnostic> {
+    ) -> Result<Self, Rejected> {
         let mut out = Args {
             given: Vec::new(),
             operands: Vec::new(),
@@ -154,23 +191,22 @@ fn parse_one<'a>(
     arg: &'a str,
     args: &'a [String],
     next: &mut usize,
-) -> Result<Parsed<'a>, StructuredDiagnostic> {
+) -> Result<Parsed<'a>, Rejected> {
     if let Some(long) = arg.strip_prefix("--") {
         let (name, inline) = match long.split_once('=') {
             Some((name, value)) => (name, Some(value)),
             None => (long, None),
         };
         let flag = find_long(sig, name, false)
-            .ok_or_else(|| args_error(sig, format!("unknown option '--{name}'")))?;
+            .ok_or_else(|| Rejected::UnknownOption(format!("--{name}")))?;
         let value = match (flag.value, inline) {
             (true, Some(v)) => Some(v),
             (true, None) => Some(take_value(sig, flag, args, next)?),
             (false, None) => None,
             (false, Some(_)) => {
-                return Err(args_error(
-                    sig,
-                    format!("option '--{name}' does not take a value"),
-                ));
+                return Err(
+                    args_error(sig, format!("option '--{name}' does not take a value")).into(),
+                );
             }
         };
         return Ok(Parsed::Flags(vec![(flag, value)]));
@@ -197,7 +233,7 @@ fn parse_one<'a>(
             .flags
             .iter()
             .find(|f| f.short == Some(c))
-            .ok_or_else(|| args_error(sig, format!("unknown option '-{c}'")))?;
+            .ok_or_else(|| Rejected::UnknownOption(format!("-{c}")))?;
         if !flag.value {
             found.push((flag, None));
             continue;
@@ -251,6 +287,7 @@ mod tests {
         input: InputMode::None,
         placement: Placement::Any,
         tx: TxPolicy::Track,
+        strict_options: true,
     };
 
     static PLAIN: Signature = Signature {
@@ -262,6 +299,7 @@ mod tests {
         input: InputMode::None,
         placement: Placement::Any,
         tx: TxPolicy::Track,
+        strict_options: true,
     };
 
     fn argv(words: &[&str]) -> Vec<String> {
@@ -366,6 +404,32 @@ mod tests {
         let err = Args::parse(&SIG, &owned).err().unwrap();
         assert_eq!(err.code, "E_ARGS");
         assert!(err.hint.is_some_and(|h| h.contains("--recursive")));
+    }
+
+    #[test]
+    fn unknown_option_names_the_first_undeclared_spelling() {
+        let owned = argv(&["-rx", "f"]);
+        assert_eq!(Args::unknown_option(&SIG, &owned).as_deref(), Some("-x"));
+        let owned = argv(&["-r", "--author", "-y"]);
+        assert_eq!(
+            Args::unknown_option(&SIG, &owned).as_deref(),
+            Some("--author")
+        );
+    }
+
+    #[test]
+    fn unknown_option_ignores_operands_values_and_bad_values() {
+        for words in [
+            &["-rf", "a", "-", "--", "-x"][..],
+            &["-n", "-x"],
+            &["-name", "-x"],
+            &["-n"],
+            &["--hidden=1"],
+            &[],
+        ] {
+            let owned = argv(words);
+            assert_eq!(Args::unknown_option(&SIG, &owned), None, "{words:?}");
+        }
     }
 
     #[test]
