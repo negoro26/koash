@@ -78,8 +78,9 @@ scripts/profile.sh samply     -- -c '...'   # opens the Firefox Profiler
 scripts/profile.sh heaptrack  -- -c '...'   # allocations
 scripts/profile.sh cachegrind -- -c '...'   # cache misses
 scripts/profile.sh strace     -- -c '...'   # syscall counts
-hyperfine -N "target/release/koa -c 'ls | first 1'" "bash -c 'ls | head -1'"
 ```
+
+`scripts/bench.sh <koa> [<koa-to-compare>]` times `ls`, a filtered `ls` pipeline and `cat | last` on 20, 1,000 and 20,000 files and a 200,000-line file, next to `/bin/ls -la` and `tail`. It checks the outputs first and refuses to time a wrong answer. Performance PRs report its numbers for the base and the branch.
 
 To debug, use `lldb-dap` (any DAP client) or `rust-lldb` / `rust-gdb`. Load `$(rustc --print sysroot)/lib/rustlib/etc/lldb_lookup.py` in lldb-dap's `initCommands` so `Vec`, `String` and `PathBuf` print readably. Dependencies build with line tables only, and workspace crates keep full debug info.
 
