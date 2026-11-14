@@ -25,7 +25,7 @@ use brush_core::variables::ShellValueLiteral;
 use brush_core::{ExecutionResult, ProfileLoadBehavior, RcLoadBehavior, Shell, SourceInfo};
 use brush_parser::word::{Parameter, ParameterExpr, TildeExpr, WordPiece, WordPieceWithSource};
 use nix::unistd::Pid;
-use shell_kernel::{ChildGroup, KillSwitch, ResolvedSpawn, Session, SessionEnv, spawn_resolved};
+use shell_kernel::{ChildGroup, KillSwitch, ResolvedSpawn, Session, spawn_resolved};
 use shell_syntax::Span;
 use shell_value::StructuredDiagnostic;
 
@@ -124,7 +124,10 @@ impl ProcessLauncher for KoaLauncher {
         trace_spawn(&request);
 
         let (kill, grouped) = {
-            let mut ctx = self.0.lock().map_err(|_| io::Error::other("launcher state"))?;
+            let mut ctx = self
+                .0
+                .lock()
+                .map_err(|_| io::Error::other("launcher state"))?;
             ctx.spawned.push(request.argv0.clone());
             (ctx.kill.clone(), ctx.group_children)
         };
@@ -138,6 +141,11 @@ impl ProcessLauncher for KoaLauncher {
             ProcessGroup::Join(pgid) => ChildGroup::Join(Pid::from_raw(pgid)),
             _ => ChildGroup::Leader,
         };
+        let mut extra = Vec::new();
+        for (fd, file) in request.open_files.iter_fds().filter(|(fd, _)| *fd > 2) {
+            let borrowed = file.try_borrow_as_fd().map_err(io::Error::other)?;
+            extra.push((fd, borrowed.try_clone_to_owned()?));
+        }
         let mut child = spawn_resolved(ResolvedSpawn {
             program: &program,
             argv0: Some(&request.argv0),
@@ -149,6 +157,7 @@ impl ProcessLauncher for KoaLauncher {
             stderr: stdio_for(&request, 2)?,
             group,
             tty: None,
+            fds: extra,
         })?;
 
         let tracked = match (&kill, group) {
@@ -206,7 +215,10 @@ fn diag_from_brush(code: &str, err: impl std::fmt::Display) -> StructuredDiagnos
 }
 
 impl Host {
-    async fn new(cwd: &Path, launcher: KoaLauncher) -> Result<Shell<KoaExt>, StructuredDiagnostic> {
+    async fn build_shell(
+        cwd: &Path,
+        launcher: KoaLauncher,
+    ) -> Result<Shell<KoaExt>, StructuredDiagnostic> {
         Shell::builder_with_extensions::<KoaExt>()
             .default_builtins(BuiltinSet::BashMode)
             .process_launcher(launcher)
@@ -230,11 +242,7 @@ impl Host {
             .set_working_dir(&session.cwd)
             .map_err(|e| diag_from_brush("E_CWD", e))?;
         let wanted = session.env.materialize();
-        for stale in self
-            .pushed_env
-            .iter()
-            .filter(|k| !wanted.contains_key(*k))
-        {
+        for stale in self.pushed_env.iter().filter(|k| !wanted.contains_key(*k)) {
             let _ = shell.env_mut().unset(stale);
         }
         for (key, value) in &wanted {
@@ -331,7 +339,7 @@ pub fn run_embedded(session: &mut Session, raw: &str, sink: &Sink) -> i32 {
         },
     };
     if host.shell.is_none() {
-        match rt.block_on(Host::new(&session.cwd, host.launcher.clone())) {
+        match rt.block_on(Host::build_shell(&session.cwd, host.launcher.clone())) {
             Ok(shell) => host.shell = Some(shell),
             Err(diag) => {
                 sink.diag(&diag);
@@ -565,8 +573,20 @@ fn idents(text: &str) -> Vec<String> {
 }
 
 const DYNAMIC_VARS: [&str; 14] = [
-    "RANDOM", "SECONDS", "LINENO", "BASHPID", "PPID", "UID", "EUID", "HOSTNAME", "PWD", "OLDPWD",
-    "REPLY", "OPTARG", "OPTIND", "EPOCHSECONDS",
+    "RANDOM",
+    "SECONDS",
+    "LINENO",
+    "BASHPID",
+    "PPID",
+    "UID",
+    "EUID",
+    "HOSTNAME",
+    "PWD",
+    "OLDPWD",
+    "REPLY",
+    "OPTARG",
+    "OPTIND",
+    "EPOCHSECONDS",
 ];
 
 /// Collects every path a bash line may write, over-approximating where the text cannot say.
@@ -708,7 +728,10 @@ impl<'a> Walker<'a> {
             C::Subshell(s) => self.subshell(&s.list, st),
             C::Arithmetic(a) => self.taint(&a.expr.value, st),
             C::ArithmeticForClause(f) => {
-                for expr in [&f.initializer, &f.condition, &f.updater].into_iter().flatten() {
+                for expr in [&f.initializer, &f.condition, &f.updater]
+                    .into_iter()
+                    .flatten()
+                {
                     self.taint(&expr.value, st);
                 }
                 self.fixpoint(st, |me, st| me.list(&f.body.list, st));
@@ -915,7 +938,8 @@ impl<'a> Walker<'a> {
             }
             ast::IoRedirect::HereDocument(_, doc) => {
                 if doc.requires_expansion
-                    && let Ok(pieces) = brush_parser::word::parse_heredoc(&doc.doc.value, &self.opts)
+                    && let Ok(pieces) =
+                        brush_parser::word::parse_heredoc(&doc.doc.value, &self.opts)
                 {
                     self.pieces(&pieces, st);
                 }
@@ -945,7 +969,12 @@ impl<'a> Walker<'a> {
             .iter()
             .flat_map(|p| p.0.iter())
             .map(|i| (true, i))
-            .chain(cmd.suffix.iter().flat_map(|s| s.0.iter()).map(|i| (false, i)));
+            .chain(
+                cmd.suffix
+                    .iter()
+                    .flat_map(|s| s.0.iter())
+                    .map(|i| (false, i)),
+            );
         let mut name_pending = true;
         for (is_prefix, item) in items {
             if !is_prefix && name_pending {
@@ -1024,7 +1053,9 @@ impl<'a> Walker<'a> {
         }
         match name.as_str() {
             "cd" => {
-                let operand = args.iter().find(|(raw, _)| !raw.starts_with('-') || raw == "-");
+                let operand = args
+                    .iter()
+                    .find(|(raw, _)| !raw.starts_with('-') || raw == "-");
                 st.cwd = match operand {
                     None => None,
                     Some((_, Some(dir))) if dir != "-" => self.resolve(dir, st),
@@ -1121,6 +1152,12 @@ impl<'a> Walker<'a> {
                 });
                 if let Some(body) = body {
                     self.call(&name, &body);
+                    // The body may assign globals or change directory; nothing the caller knew still holds.
+                    for value in st.vars.values_mut() {
+                        *value = None;
+                    }
+                    st.cwd = None;
+                    st.dynamic = true;
                 }
             }
         }
@@ -1145,6 +1182,3 @@ impl<'a> Walker<'a> {
         self.active.remove(name);
     }
 }
-
-#[allow(dead_code)]
-fn _assert_session_env_is_used(_: &SessionEnv) {}

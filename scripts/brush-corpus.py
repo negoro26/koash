@@ -50,25 +50,31 @@ CASES = [
     ("export_env", "export FOO=bar; echo $(printenv FOO)", "ok"),
     ("cmd_not_found", "$(true); nonexistent-cmd-xyz; echo st=$?", "ok"),
     ("syntax_error", "echo $(true) ; if then fi", "ok"),
-    ("w_for_static", "for i in 1 2 3; do echo $i > out$i; done; echo $(ls out*)", "writes"),
-    ("w_append_trunc", "echo more >> old; echo new > in.txt; echo $(cat old)", "writes"),
-    ("w_func", "f() { echo hi > fout; }; f; echo $(cat fout)", "writes"),
+    ("w_for_static", "for i in 1 2 3; do echo $i > out$i; done; echo $(echo out*)", "writes"),
+    ("w_append_trunc", "echo more >> old; echo new > in.txt; echo $(<old)", "writes"),
+    ("w_func", "f() { echo hi > fout; }; f; echo $(<fout)", "writes"),
     ("w_subst_inner", "echo $(echo inner > inner.txt; echo done)", "writes"),
     ("w_if_branch", "if [ -f old ]; then echo yes > yes.txt; else echo no > no.txt; fi; echo $(true)", "writes"),
     ("w_case_branch", "x=b; case $x in a) echo A > ca;; b) echo B > cb;; esac; echo $(true)", "writes"),
-    ("w_var_target", "t=vt.txt; echo data > $t; echo $(cat $t)", "writes"),
-    ("w_group_redirect", "{ echo one; echo $(echo two); } > grp.txt; cat grp.txt", "writes"),
-    ("w_exec_fd", "exec 3> f3; echo hi >&3; exec 3>&-; echo $(cat f3)", "writes"),
-    ("w_both", "echo $(echo e) &> both.txt; echo $(cat both.txt)", "writes"),
+    ("w_var_target", "t=vt.txt; echo data > $t; echo $(<$t)", "writes"),
+    ("w_group_redirect", "{ echo one; echo $(echo two); } > grp.txt; echo $(<grp.txt)", "writes"),
+    ("w_exec_fd", "exec 3> f3; echo hi >&3; exec 3>&-; echo $(<f3)", "writes"),
+    ("w_both", "echo $(echo e) &> both.txt; echo $(<both.txt)", "writes"),
     ("w_cd_relative", "cd sub && echo x > rel.txt; echo $(true)", "writes"),
-    ("w_counter_loop", "n=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(ls w*)", "writes"),
+    ("w_counter_loop", "n=0; while [ $n -lt 3 ]; do echo $n > w$n; n=$((n+1)); done; echo $(echo w*)", "writes"),
     ("w_read_loop", "while read l; do echo x > \"p_$l\"; done < in.txt; echo $(true)", "writes"),
     ("w_glob_for", "for f in *.txt; do echo x > $f.bak; done; echo $(true)", "writes"),
     ("w_eval_dynamic", "c=\"echo hi > ev.txt\"; eval \"$c\"; echo $(true)", "writes"),
+    ("adv_func_global", "x=a; f() { x=b; }; f; echo hit > $x; echo $(true)", "writes"),
+    ("adv_func_cd", "f() { cd sub; }; f; echo hit > rel.txt; echo $(true)", "writes"),
+    ("adv_nameref", "x=a; declare -n r=x; r=b; echo hit > $x; echo $(true)", "writes"),
+    ("adv_ifs_split", "v='a b'; echo hit > $v; echo $(true)", "writes"),
+    ("adv_source", "echo 'echo hit > src.txt' > s.sh; . ./s.sh; echo $(true)", "writes"),
+    ("w_ext_reader", "echo data > ext.txt; echo $(cat ext.txt)", "external_reader"),
     ("w_tee_external", "echo hi | tee t.txt; echo $(true)", "external_writer"),
     ("x_select", "select x in a b; do echo \"sel=$x\"; break; done <<< 1", "expect_fail"),
     ("x_wait_n", "sleep 0.1 & sleep 0.3 & wait -n; echo first-done $(true); wait", "expect_fail"),
-    ("x_bang", "sleep 0.2 & p=$!; [ -n \"$p\" ] && echo has-pid || echo no-pid; wait", "expect_fail"),
+    ("x_bang", "sleep 0.2 & p=$!; [ -n \"$p\" ] && echo has-pid$(true) || echo no-pid; wait", "expect_fail"),
 ]
 
 
@@ -140,18 +146,20 @@ def diff_fields(a, b):
 def undo_check(script, root, allow_abs=False):
     """Runs `script` as a stdin line, then undo and tx-log, in a fresh fixture."""
     d = fixture(root)
+    seed = "echo seed > seed.txt"
+    rc0, _, _ = run([PROTO], d, stdin=(seed + "\n").encode())
     before = snap(d)
     one_line = script.replace("\n", "; ")
-    stdin = (one_line + "\nundo\ntx-log\n").encode()
-    rc, out, err = run([PROTO], d, stdin=stdin)
-    after = snap(d)
+    stdin = (seed + "\n" + one_line + "\ntx-log\nundo\n").encode()
+    d2 = fixture(root)
+    rc, out, err = run([PROTO], d2, stdin=stdin)
+    after = snap(d2)
+    before = {k: v for k, v in before.items()}
     ok_restored = after == before
     opaque = re.search(r"E_TX_OPAQUE", err) is not None
-    opaque_col = None
-    for line in out.splitlines():
-        if line.startswith("-----") or line.startswith("command"):
-            continue
+    d = d2
     return {
+        "outcome": "RESTORED" if ok_restored and not opaque else ("GUARDED" if opaque else "SILENT-LOSS"),
         "restored": ok_restored,
         "opaque_error": opaque,
         "stderr": norm(err, d).strip()[:300],
@@ -192,9 +200,13 @@ def trace_check(script, root):
             m = re.search(r'execve\("([^"]+)"', line)
             if m and "= 0" in line:
                 execs.append(m.group(1))
-    # the first execve is koa itself
     execs = execs[1:]
-    return {"embeds": embeds, "spawns": spawns, "execves": execs}
+    return {
+        "embeds": embeds,
+        "spawns": spawns,
+        "execves": execs,
+        "match": sorted(os.path.basename(x) for x in spawns) == sorted(os.path.basename(x) for x in execs),
+    }
 
 
 def main():
@@ -209,7 +221,7 @@ def main():
             entry["base_vs_sh"] = diff_fields(r["sh"], r["base"])
             entry["sh"] = {k: r["sh"][k] for k in ("rc", "stdout", "stderr")}
             entry["proto"] = {k: r["proto"][k] for k in ("rc", "stdout", "stderr")}
-            if kind in ("writes", "writes_abs", "external_writer"):
+            if kind in ("writes", "external_reader", "external_writer"):
                 entry["undo"] = undo_check(script, root)
             entry["trace"] = trace_check(script, root)
             report["cases"][cid] = entry

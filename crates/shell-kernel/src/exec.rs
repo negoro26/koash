@@ -1,5 +1,5 @@
 use std::io::ErrorKind;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
@@ -82,6 +82,7 @@ pub struct ResolvedSpawn<'a> {
     pub stderr: Stdio,
     pub group: ChildGroup,
     pub tty: Option<RawFd>,
+    pub fds: Vec<(RawFd, OwnedFd)>,
 }
 
 /// The one place koa turns a fully resolved command (cwd, complete environment, stdio) into a child process.
@@ -106,7 +107,37 @@ pub fn spawn_resolved(spec: ResolvedSpawn) -> std::io::Result<Child> {
             die_with_parent: false,
         },
     );
+    let staged = stage_fds(spec.fds)?;
+    if !staged.is_empty() {
+        let pairs: Vec<(RawFd, RawFd)> = staged.iter().map(|(t, f)| (*t, f.as_raw_fd())).collect();
+        // SAFETY: only dup2, which is async-signal-safe, runs between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                for &(target, source) in &pairs {
+                    if libc::dup2(source, target) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
     command.spawn()
+}
+
+/// Moves every source above all targets first, so installing one target cannot clobber another source.
+fn stage_fds(fds: Vec<(RawFd, OwnedFd)>) -> std::io::Result<Vec<(RawFd, OwnedFd)>> {
+    let floor = fds.iter().map(|(target, _)| *target).max().unwrap_or(0) + 1;
+    let mut staged = Vec::with_capacity(fds.len());
+    for (target, fd) in fds {
+        // SAFETY: F_DUPFD_CLOEXEC returns a fresh descriptor that this function then owns.
+        let high = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, floor) };
+        if high < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        staged.push((target, unsafe { OwnedFd::from_raw_fd(high) }));
+    }
+    Ok(staged)
 }
 
 pub struct ExternalSpec<'a> {
@@ -170,6 +201,7 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
         stderr: spec.stderr,
         group: spec.group,
         tty,
+        fds: Vec::new(),
     })
     .map_err(|e| {
         let (status, code, what) = match e.kind() {
