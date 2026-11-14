@@ -1,5 +1,6 @@
 mod batch;
 mod cell;
+mod datum;
 mod json;
 mod text;
 
@@ -10,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use shell_syntax::{Span, SyntaxError};
 use thiserror::Error;
 
-pub use batch::RecordBatch;
+pub use batch::{RecordBatch, Row, RowOrder};
 pub use cell::CellVal;
+pub use datum::Datum;
 pub use json::{StructuredRecord, format_cell};
 pub use text::{batch_to_compact_sigil, records_to_compact_sigil, render_batch_table};
 

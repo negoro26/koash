@@ -8,7 +8,7 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::{Searcher, SearcherBuilder};
 use ignore::WalkBuilder;
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
+use shell_value::{CellVal, Datum, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
 
 use super::common::{check_killed, hashline_schema, resolve_path, search_file_with_hashline};
 use super::fs_ops::{describe, fail};
@@ -122,9 +122,9 @@ impl Builtin for Grep {
                     if let Some(t_idx) = text_col {
                         let mut seen_files = std::collections::HashSet::new();
                         let mut count: u64 = 0;
-                        for r in 0..in_batch.nrows() {
-                            let row = in_batch.row(r);
-                            let Some(text) = row[t_idx].as_str() else {
+                        let mut shared_file: Option<Arc<str>> = None;
+                        for (r, row) in in_batch.rows().enumerate() {
+                            let Some(text) = row.get(t_idx).as_str() else {
                                 continue;
                             };
                             let mut matched = false;
@@ -143,23 +143,29 @@ impl Builtin for Grep {
                                 count += 1;
                                 continue;
                             }
-                            let file_val = match file_col {
-                                Some(f_idx) => row[f_idx].clone(),
-                                None => CellVal::Str("<input>".to_string()),
+                            let file = file_col.map(|f_idx| row.get(f_idx));
+                            let file_val = match file {
+                                Some(Datum::Str(label)) => {
+                                    CellVal::SharedStr(shared_label(&mut shared_file, label))
+                                }
+                                Some(other) => CellVal::from(other),
+                                None => {
+                                    CellVal::SharedStr(shared_label(&mut shared_file, "<input>"))
+                                }
                             };
                             if opts.files_only {
-                                let label = file_val.as_str().unwrap_or("<input>").to_string();
-                                if seen_files.insert(label) {
+                                let label = file.and_then(|d| d.as_str()).unwrap_or("<input>");
+                                if seen_files.insert(label.to_string()) {
                                     batch.cells.push(file_val);
                                 }
                                 continue;
                             }
                             let line_val = match line_col {
-                                Some(l_idx) => row[l_idx].clone(),
+                                Some(l_idx) => CellVal::from(row.get(l_idx)),
                                 None => CellVal::UInt((r + 1) as u64),
                             };
                             let hash_val = match hash_col {
-                                Some(h_idx) => row[h_idx].clone(),
+                                Some(h_idx) => CellVal::from(row.get(h_idx)),
                                 None => CellVal::Hash(hashline_bytes(text.as_bytes())),
                             };
                             batch.cells.push(file_val);
@@ -181,9 +187,8 @@ impl Builtin for Grep {
                             Arc::new([Cow::Borrowed("file"), Cow::Borrowed("count")]),
                             16,
                         );
-                        for r in 0..in_batch.nrows() {
-                            let row = in_batch.row(r);
-                            if let Some(p_str) = row[p_idx].as_str()
+                        for row in in_batch.rows() {
+                            if let Some(p_str) = row.get(p_idx).as_str()
                                 && seen.insert(p_str.to_string())
                             {
                                 let target = resolve_path(session, p_str);
@@ -433,4 +438,16 @@ fn search_target_file(
         return;
     }
     search_file_with_hashline(searcher, matcher, path, label, cells);
+}
+
+/// The label's `Arc`, reusing the previous one while consecutive rows carry the same text.
+fn shared_label(previous: &mut Option<Arc<str>>, label: &str) -> Arc<str> {
+    match previous {
+        Some(shared) if **shared == *label => Arc::clone(shared),
+        _ => {
+            let shared: Arc<str> = Arc::from(label);
+            *previous = Some(Arc::clone(&shared));
+            shared
+        }
+    }
 }

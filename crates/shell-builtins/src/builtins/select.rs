@@ -1,6 +1,3 @@
-use std::borrow::Cow;
-use std::sync::Arc;
-
 use shell_kernel::Session;
 use shell_value::{RecordBatch, StructuredDiagnostic, Value};
 
@@ -38,29 +35,12 @@ impl Builtin for Select {
                 Some("example: ls | select name size".to_string()),
             ));
         }
-        let batch = input.into_batch();
-        let mut keep_cols = Vec::new();
-        let mut keep_indices = Vec::new();
-        for col in args {
-            if let Some(idx) = batch.col_index(col) {
-                keep_cols.push(Cow::Owned(col.clone()));
-                keep_indices.push(idx);
-            }
-        }
-        if keep_cols.is_empty() {
+        let mut batch = input.into_batch();
+        let keep: Vec<usize> = args.iter().filter_map(|col| batch.col_index(col)).collect();
+        if keep.is_empty() {
             return Ok(Value::from_batch(RecordBatch::empty()));
         }
-        let nrows = batch.nrows();
-        let mut out_cells = Vec::with_capacity(nrows * keep_cols.len());
-        for r in 0..nrows {
-            let row = batch.row(r);
-            for &idx in &keep_indices {
-                out_cells.push(row[idx].clone());
-            }
-        }
-        Ok(Value::from_batch(RecordBatch {
-            columns: Arc::from(keep_cols),
-            cells: out_cells,
-        }))
+        batch.select_columns(&keep);
+        Ok(Value::from_batch(batch))
     }
 }

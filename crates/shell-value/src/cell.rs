@@ -1,7 +1,6 @@
-use std::io::Write;
 use std::sync::Arc;
 
-use crate::json::format_cell;
+use crate::Datum;
 
 #[derive(Debug, Clone)]
 pub enum CellVal {
@@ -17,23 +16,17 @@ pub enum CellVal {
 }
 
 impl CellVal {
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn datum(&self) -> Datum<'_> {
         match self {
-            CellVal::SharedStr(s) => Some(s),
-            CellVal::Str(s) => Some(s),
-            CellVal::Hash(h) => std::str::from_utf8(h).ok(),
-            CellVal::Json(serde_json::Value::String(s)) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_f64(&self) -> Option<f64> {
-        match self {
-            CellVal::Int(n) => Some(*n as f64),
-            CellVal::UInt(n) => Some(*n as f64),
-            CellVal::Float(n) => Some(*n),
-            CellVal::Json(v) => v.as_f64(),
-            _ => None,
+            CellVal::Null => Datum::Null,
+            CellVal::Bool(b) => Datum::Bool(*b),
+            CellVal::Int(n) => Datum::Int(*n),
+            CellVal::UInt(n) => Datum::UInt(*n),
+            CellVal::Float(n) => Datum::Float(*n),
+            CellVal::SharedStr(s) => Datum::Str(s),
+            CellVal::Str(s) => Datum::Str(s),
+            CellVal::Hash(h) => Datum::Str(std::str::from_utf8(h).unwrap_or("")),
+            CellVal::Json(v) => Datum::Json(v),
         }
     }
 
@@ -68,119 +61,22 @@ impl CellVal {
             CellVal::Json(v) => v.clone(),
         }
     }
-
-    pub fn display_len(&self, scratch: &mut String) -> usize {
-        match self {
-            CellVal::Null => 0,
-            CellVal::Bool(true) => 4,
-            CellVal::Bool(false) => 5,
-            CellVal::Hash(_) => 3,
-            CellVal::SharedStr(s) => s.len(),
-            CellVal::Str(s) => s.len(),
-            CellVal::UInt(u) => uint_decimal_len(*u),
-            CellVal::Int(i) => {
-                if *i >= 0 {
-                    uint_decimal_len(*i as u64)
-                } else {
-                    1 + uint_decimal_len(i.wrapping_neg() as u64)
-                }
-            }
-            CellVal::Float(f) => {
-                scratch.clear();
-                let _ = std::fmt::Write::write_fmt(scratch, format_args!("{f}"));
-                scratch.len()
-            }
-            CellVal::Json(v) => {
-                scratch.clear();
-                let _ = std::fmt::Write::write_fmt(scratch, format_args!("{v}"));
-                scratch.len()
-            }
-        }
-    }
-
-    pub fn write_to<W: Write>(&self, w: &mut W, scratch: &mut String) -> usize {
-        match self {
-            CellVal::Null => 0,
-            CellVal::Bool(true) => {
-                let _ = w.write_all(b"true");
-                4
-            }
-            CellVal::Bool(false) => {
-                let _ = w.write_all(b"false");
-                5
-            }
-            CellVal::Hash(h) => {
-                let _ = w.write_all(h);
-                3
-            }
-            CellVal::SharedStr(s) => {
-                let _ = w.write_all(s.as_bytes());
-                s.len()
-            }
-            CellVal::Str(s) => {
-                let _ = w.write_all(s.as_bytes());
-                s.len()
-            }
-            CellVal::UInt(u) => write_uint_stack(w, *u),
-            CellVal::Int(i) => {
-                if *i >= 0 {
-                    write_uint_stack(w, *i as u64)
-                } else {
-                    let _ = w.write_all(b"-");
-                    1 + write_uint_stack(w, i.wrapping_neg() as u64)
-                }
-            }
-            CellVal::Float(f) => {
-                scratch.clear();
-                let _ = std::fmt::Write::write_fmt(scratch, format_args!("{f}"));
-                let _ = w.write_all(scratch.as_bytes());
-                scratch.len()
-            }
-            CellVal::Json(v) => {
-                scratch.clear();
-                let _ = std::fmt::Write::write_fmt(scratch, format_args!("{v}"));
-                let _ = w.write_all(scratch.as_bytes());
-                scratch.len()
-            }
-        }
-    }
-
-    pub fn format_to_string(&self) -> String {
-        match self {
-            CellVal::Null => String::new(),
-            CellVal::Bool(b) => b.to_string(),
-            CellVal::Int(n) => n.to_string(),
-            CellVal::UInt(n) => n.to_string(),
-            CellVal::Float(n) => n.to_string(),
-            CellVal::SharedStr(s) => s.to_string(),
-            CellVal::Str(s) => s.clone(),
-            CellVal::Hash(h) => String::from_utf8_lossy(h).into_owned(),
-            CellVal::Json(v) => format_cell(v),
-        }
-    }
 }
 
-fn uint_decimal_len(mut n: u64) -> usize {
-    let mut len = 1usize;
-    while n >= 10 {
-        n /= 10;
-        len += 1;
-    }
-    len
-}
-
-fn write_uint_stack<W: Write>(w: &mut W, mut n: u64) -> usize {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-        if n == 0 {
-            break;
+impl From<Datum<'_>> for CellVal {
+    /// A three-byte string becomes `Hash`, which stores it inline and reads back as the same string.
+    fn from(d: Datum<'_>) -> Self {
+        match d {
+            Datum::Null => CellVal::Null,
+            Datum::Bool(b) => CellVal::Bool(b),
+            Datum::Int(n) => CellVal::Int(n),
+            Datum::UInt(n) => CellVal::UInt(n),
+            Datum::Float(n) => CellVal::Float(n),
+            Datum::Str(s) => match <[u8; 3]>::try_from(s.as_bytes()) {
+                Ok(hash) => CellVal::Hash(hash),
+                Err(_) => CellVal::Str(s.to_string()),
+            },
+            Datum::Json(v) => CellVal::Json(v.clone()),
         }
     }
-    let slice = &buf[i..];
-    let _ = w.write_all(slice);
-    slice.len()
 }
