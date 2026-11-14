@@ -86,9 +86,30 @@ A usage error is different: it is returned as `Err`, so it is fatal and exits 2 
 A command that changes files calls `record_preimage` or `record_tree` before touching a path and `record_mutation` after.
 `finish_tx` drops entries that captured nothing.
 `undo` and `rollback <id>` restore preimages newest first.
-Commands with `TxPolicy::Skip` (`undo`, `rollback`, `tx-log`) do not open an entry, so they do not appear in the ledger they read.
+Commands with `TxPolicy::Skip` (`undo`, `redo`, `rollback`, `tx-log`) do not open an entry, so they do not appear in the ledger they read.
 An external process or a sub-kernel command (`@py`, `@js`) can change files the ledger cannot see.
 It marks the newest entry `opaque_after`. `undo` then refuses, and `rollback <id>` still works.
+With an empty ledger there is no entry to mark, so the session keeps the marker itself until the next transaction captures a path. `undo` refuses with `E_TX_OPAQUE` meanwhile.
+
+### Snapshots
+
+A preimage of a file is a snapshot file on disk, never bytes in memory.
+The store is `<start cwd>/.koa/undo/<pid>-<session uid>/`, created on the first snapshot, in the directory that the CoW workspaces already use.
+`undo_store::UndoStore` makes each snapshot with a reflink (`FICLONE`), which shares blocks and costs the same for a 1 MB file and a 10 GB file. Where the filesystem cannot clone (tmpfs, another mount), it copies instead.
+Only copied bytes count against the 64 MiB per-record limit, and a record holds at most 10,000 paths. Over either limit the record is marked `opaque_after`, so `undo` refuses instead of restoring less than it should.
+A `Snapshot` deletes its file when dropped, so evicting a record from the 50-entry ledger frees its snapshots.
+The store holds an exclusive `flock` for the life of the session and is removed when the `Session` drops.
+`CowWorkspace::sweep_orphans` removes the stores and CoW directories of dead processes. The CLI and the RPC servers call it at startup.
+If the store cannot be created, the record is marked `opaque_after`; capture is never skipped silently.
+
+### Redo
+
+`rollback_tx` (and so `undo`) first saves what it is about to overwrite, then restores the preimages.
+It keeps the removed records and that saved state as a `RedoRecord` on `Session`'s redo stack.
+`redo` restores the saved state and puts the records back on the ledger, oldest first.
+A new capture or `mark_opaque` clears the stack, because the saved state would no longer match the disk.
+If the saved state does not fit the capture limits, the rollback still happens and `redo` has nothing to re-apply.
+`tx-log` reports the number of pending redo records in its `redo` column.
 
 ## Adding a command
 
