@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 use nix::libc;
@@ -155,6 +156,21 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
         session.give_terminal(Pid::from_raw(child.id() as i32));
     }
     Ok(child)
+}
+
+/// The first executable file called `name` on the session's `PATH`, which is where
+/// `spawn_external` would find it.
+pub fn find_executable(session: &Session, name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = session.env.get("PATH")?;
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
 }
 
 #[derive(Debug)]

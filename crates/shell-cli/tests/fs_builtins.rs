@@ -140,6 +140,13 @@ fn run(cwd: &Path, script: &str) -> Run {
     koa(cwd, script).run()
 }
 
+/// Runs with no program on PATH, so an option a builtin lacks is the builtin's own usage error
+/// and not a hand-off to the real tool.
+fn run_builtins_only(s: &Scratch, script: &str) -> Run {
+    let empty = s.mkdir("no-programs");
+    koa(&s.0, script).env("PATH", empty.to_string_lossy()).run()
+}
+
 // ---------------------------------------------------------------- rm
 
 /// uutils rm.rs:826-840 (`handle_dir`): a directory without -r or -d is "Is a directory".
@@ -252,11 +259,11 @@ fn rm_force_ignores_missing_operands_silently() {
 fn rm_unknown_option_is_a_usage_error_that_touches_nothing() {
     let s = Scratch::new("rm-unknown");
     s.write("a", b"x");
-    let r = run(&s.0, &format!("rm --frobnicate {}", s.q("a")));
+    let r = run_builtins_only(&s, &format!("rm --frobnicate {}", s.q("a")));
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("--frobnicate"), "{}", r.stderr);
     assert!(s.exists("a"));
-    let r = run(&s.0, &format!("rm -x {}", s.q("a")));
+    let r = run_builtins_only(&s, &format!("rm -x {}", s.q("a")));
     assert_eq!(r.code, 2);
     assert!(s.exists("a"));
 }
@@ -532,7 +539,7 @@ fn cp_unknown_option_is_a_usage_error_not_an_operand() {
     let s = Scratch::new("cp-unknown");
     s.write("a", b"A");
     s.write("b", b"B");
-    let r = run(&s.0, &format!("cp --bogus {} {}", s.q("a"), s.q("b")));
+    let r = run_builtins_only(&s, &format!("cp --bogus {} {}", s.q("a"), s.q("b")));
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
     assert_eq!(s.read("b"), "B");
@@ -748,7 +755,7 @@ fn mkdir_verbose_names_each_created_directory() {
 #[test]
 fn mkdir_unknown_option_is_a_usage_error_that_creates_nothing() {
     let s = Scratch::new("mkdir-unknown");
-    let r = run(&s.0, &format!("mkdir --exact-typo {}", s.q("x")));
+    let r = run_builtins_only(&s, &format!("mkdir --exact-typo {}", s.q("x")));
     assert_eq!(r.code, 2);
     assert!(!s.exists("x"));
 }
@@ -857,7 +864,7 @@ fn cat_raw_number_flag_numbers_the_lines() {
 fn cat_unknown_option_is_a_usage_error() {
     let s = Scratch::new("cat-unknown");
     s.write("a", b"A\n");
-    let r = run(&s.0, &format!("cat -Z {}", s.q("a")));
+    let r = run_builtins_only(&s, &format!("cat -Z {}", s.q("a")));
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("-Z"), "{}", r.stderr);
 }
@@ -1043,8 +1050,8 @@ fn ls_long_option_with_an_a_in_it_does_not_show_hidden_files() {
     s.write(".hidden", b"");
     let r = run(&s.0, &format!("ls --author {}", s.q(".")));
     assert!(!r.stdout.contains(".hidden"), "{}", r.stdout);
-    assert_eq!(r.code, 2, "{}", r.stderr);
-    assert!(r.stderr.contains("--author"), "{}", r.stderr);
+    assert!(r.stdout.contains("shown"), "{}", r.stdout);
+    assert_eq!(r.code, 0, "{}", r.stderr);
 }
 
 /// uutils ls.rs:848-851 (`DirArgs`): a symlink operand that points at a directory lists the directory.
@@ -1428,7 +1435,7 @@ fn echo_prints_unknown_dash_words_literally() {
 #[test]
 fn kill_rejects_an_unknown_option_without_signalling() {
     let s = Scratch::new("kill-unknown");
-    let r = run(&s.0, "kill --bogus 1");
+    let r = run_builtins_only(&s, "kill --bogus 1");
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
 }

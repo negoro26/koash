@@ -12,7 +12,7 @@ pub(super) struct Help;
 static SIGNATURE: Signature = Signature {
     name: "help",
     aliases: &[],
-    description: "Show builtin commands and flags",
+    description: "Show builtin commands and flags; other options run the system command",
     flags: &[],
     columns: &["command", "description", "flags", "columns"],
     input: InputMode::None,
