@@ -75,6 +75,7 @@ struct Koa<'a> {
     stdin: Option<Vec<u8>>,
     envs: Vec<(String, String)>,
     removed: Vec<&'static str>,
+    umask: Option<&'static str>,
 }
 
 fn koa<'a>(cwd: &'a Path, script: impl Into<String>) -> Koa<'a> {
@@ -84,6 +85,7 @@ fn koa<'a>(cwd: &'a Path, script: impl Into<String>) -> Koa<'a> {
         stdin: None,
         envs: Vec::new(),
         removed: vec!["CDPATH"],
+        umask: None,
     }
 }
 
@@ -104,8 +106,20 @@ impl Koa<'_> {
         self
     }
 
+    fn umask(mut self, mask: &'static str) -> Self {
+        self.umask = Some(mask);
+        self
+    }
+
     fn run(self) -> Run {
-        let mut cmd = Command::new(KOA);
+        let mut cmd = match self.umask {
+            Some(mask) => {
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args(["-c", "umask \"$1\"; shift; exec \"$@\"", "sh", mask, KOA]);
+                cmd
+            }
+            None => Command::new(KOA),
+        };
         cmd.arg("-c")
             .arg(&self.script)
             .current_dir(self.cwd)
@@ -417,11 +431,63 @@ fn cp_preserve_keeps_mode_and_mtime() {
         .unwrap()
         .set_modified(stamp)
         .unwrap();
-    let r = run(&s.0, &format!("cp -p {} {}", s.q("a"), s.q("b")));
+    let r = koa(&s.0, format!("cp -p {} {}", s.q("a"), s.q("b")))
+        .umask("077")
+        .run();
     assert_eq!(r.code, 0, "{}", r.stderr);
     let meta = fs::metadata(s.path("b")).unwrap();
     assert_eq!(meta.permissions().mode() & 0o777, 0o640);
     assert_eq!(meta.modified().unwrap(), stamp);
+}
+
+/// coreutils cp: a new file gets the source mode filtered by the umask, and setuid bits are dropped.
+#[test]
+fn cp_without_preserve_applies_the_umask_to_a_new_file() {
+    let s = Scratch::new("cp-umask");
+    for (mode, expected) in [(0o666, 0o644), (0o755, 0o755), (0o4755, 0o755)] {
+        let a = s.write("a", b"A");
+        fs::set_permissions(&a, fs::Permissions::from_mode(mode)).unwrap();
+        let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+            .umask("022")
+            .run();
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert_eq!(
+            fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o7777,
+            expected,
+            "source mode {mode:o} under umask 022"
+        );
+        fs::remove_file(s.path("a")).unwrap();
+        fs::remove_file(s.path("b")).unwrap();
+    }
+    let a = s.write("a", b"A");
+    fs::set_permissions(&a, fs::Permissions::from_mode(0o664)).unwrap();
+    let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+        .umask("027")
+        .run();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+}
+
+/// coreutils cp: an existing destination keeps its own mode and gets the new content.
+#[test]
+fn cp_onto_an_existing_file_keeps_its_mode() {
+    let s = Scratch::new("cp-existing-mode");
+    let a = s.write("a", b"new");
+    fs::set_permissions(&a, fs::Permissions::from_mode(0o644)).unwrap();
+    let b = s.write("b", b"old");
+    fs::set_permissions(&b, fs::Permissions::from_mode(0o600)).unwrap();
+    let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+        .umask("022")
+        .run();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "new");
+    assert_eq!(
+        fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]
