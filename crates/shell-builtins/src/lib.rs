@@ -2,6 +2,7 @@ pub mod args;
 pub mod builtin;
 pub mod builtins;
 pub mod code_intel;
+pub mod embedded;
 pub mod lsp;
 pub mod pipeline;
 pub mod sink;

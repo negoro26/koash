@@ -75,6 +75,11 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
     }
 
     begin_pipeline_tx(session, pipeline);
+    if let [Command::PosixFallback { raw, .. }] = pipeline.commands.as_slice() {
+        let status = crate::embedded::run_embedded(session, raw, sink);
+        session.finish_tx();
+        return status;
+    }
     let stages = build_stages(session, pipeline);
     let status = if background
         && stages
@@ -112,7 +117,7 @@ fn command_name(session: &Session, cmd: &Command) -> Option<String> {
             .words
             .first()
             .map(|w| expand_word(w, &session.env, session.last_status)),
-        Command::PosixFallback { .. } => None,
+        Command::PosixFallback { raw, .. } => Some(raw.clone()),
     }
 }
 

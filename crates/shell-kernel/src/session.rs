@@ -93,6 +93,8 @@ pub struct Session {
     pub kill: KillSwitch,
     pub uid: u64,
     reports: Vec<StructuredDiagnostic>,
+    /// The in-process bash evaluator for this session, owned by `shell-builtins`.
+    pub embedded: Option<Box<dyn std::any::Any + Send>>,
 }
 
 impl Session {
@@ -166,6 +168,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid: next_session_uid(),
             reports: Vec::new(),
+            embedded: None,
         })
     }
 
@@ -204,6 +207,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid: next_session_uid(),
             reports: Vec::new(),
+            embedded: None,
         }
     }
 
@@ -263,6 +267,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid: next_session_uid(),
             reports: Vec::new(),
+            embedded: None,
         })
     }
 

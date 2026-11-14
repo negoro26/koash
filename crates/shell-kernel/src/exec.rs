@@ -71,6 +71,44 @@ pub fn prepare_child(command: &mut Command, setup: ChildSetup) {
     }
 }
 
+pub struct ResolvedSpawn<'a> {
+    pub program: &'a str,
+    pub argv0: Option<&'a str>,
+    pub args: &'a [String],
+    pub cwd: &'a std::path::Path,
+    pub env: &'a [(String, String)],
+    pub stdin: Stdio,
+    pub stdout: Stdio,
+    pub stderr: Stdio,
+    pub group: ChildGroup,
+    pub tty: Option<RawFd>,
+}
+
+/// The one place koa turns a fully resolved command (cwd, complete environment, stdio) into a child process.
+pub fn spawn_resolved(spec: ResolvedSpawn) -> std::io::Result<Child> {
+    let mut command = Command::new(spec.program);
+    if let Some(argv0) = spec.argv0 {
+        command.arg0(argv0);
+    }
+    command
+        .args(spec.args)
+        .current_dir(spec.cwd)
+        .env_clear()
+        .envs(spec.env.iter().map(|(k, v)| (k, v)))
+        .stdin(spec.stdin)
+        .stdout(spec.stdout)
+        .stderr(spec.stderr);
+    prepare_child(
+        &mut command,
+        ChildSetup {
+            group: spec.group,
+            tty: spec.tty,
+            die_with_parent: false,
+        },
+    );
+    command.spawn()
+}
+
 pub struct ExternalSpec<'a> {
     pub argv: &'a [String],
     pub env: &'a [(String, String)],
@@ -111,30 +149,29 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
         });
     }
 
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(&session.cwd)
-        .env_clear()
-        .envs(session.env.materialize())
-        .envs(spec.env.iter().map(|(k, v)| (k, v)))
-        .stdin(spec.stdin)
-        .stdout(spec.stdout)
-        .stderr(spec.stderr);
+    let env: Vec<(String, String)> = session
+        .env
+        .materialize()
+        .into_iter()
+        .chain(spec.env.iter().cloned())
+        .collect();
     let tty = spec
         .claim_terminal
         .then(|| session.tty.as_ref().map(AsRawFd::as_raw_fd))
         .flatten();
-    prepare_child(
-        &mut command,
-        ChildSetup {
-            group: spec.group,
-            tty,
-            die_with_parent: false,
-        },
-    );
-
-    let child = command.spawn().map_err(|e| {
+    let child = spawn_resolved(ResolvedSpawn {
+        program,
+        argv0: None,
+        args,
+        cwd: &session.cwd,
+        env: &env,
+        stdin: spec.stdin,
+        stdout: spec.stdout,
+        stderr: spec.stderr,
+        group: spec.group,
+        tty,
+    })
+    .map_err(|e| {
         let (status, code, what) = match e.kind() {
             ErrorKind::NotFound if program.contains('/') => {
                 (127, "E_NOT_FOUND", "No such file or directory".to_string())
