@@ -45,6 +45,6 @@ impl Builtin for TxLog {
                 rec
             })
             .collect();
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

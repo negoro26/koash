@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use shell_kernel::Session;
-use shell_value::{RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{StructuredDiagnostic, Value};
 
 use super::common::{
-    HASHLINE_COLUMNS, hashline_schema, operands_read_stdin, push_hashline_rows, resolve_path,
+    HASHLINE_COLUMNS, HashlineRows, operands_read_stdin, push_hashline_rows, resolve_path,
     text_lines,
 };
 use super::fs_ops::{describe, fail};
@@ -29,7 +27,7 @@ static SIGNATURE: Signature = Signature {
             "number the lines of raw output (Hashline rows always carry line numbers)",
         ),
     ],
-    columns: &HASHLINE_COLUMNS,
+    columns: HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,
@@ -67,7 +65,7 @@ impl Builtin for Cat {
 
         let mut stdin = Some(input);
         let mut out = Vec::new();
-        let mut batch = RecordBatch::new(hashline_schema());
+        let mut rows = HashlineRows::new();
         let mut numbered = 0u64;
         for operand in operands {
             let (label, bytes) = if *operand == "-" {
@@ -87,8 +85,7 @@ impl Builtin for Cat {
                 }
             };
             if !raw {
-                let label: Arc<str> = Arc::from(label);
-                push_hashline_rows(&mut batch, &label, 1, text_lines(&bytes));
+                push_hashline_rows(&mut rows, label, 1, text_lines(&bytes));
             } else if number {
                 for line in bytes.split_inclusive(|b| *b == b'\n') {
                     numbered += 1;
@@ -102,7 +99,7 @@ impl Builtin for Cat {
         Ok(if raw {
             Value::from_bytes(out)
         } else {
-            Value::from_batch(batch)
+            Value::from_batch(rows.finish()?)
         })
     }
 }

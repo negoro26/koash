@@ -1,11 +1,10 @@
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use grep_searcher::Searcher;
 use grep_searcher::sinks::UTF8;
 use shell_kernel::Session;
-use shell_value::{CellVal, Column, RecordBatch, Schema, StructuredDiagnostic, hashline_bytes};
+use shell_value::{Column, Record, Rows, StructuredDiagnostic, hashline_bytes, record};
 
 use crate::args::Args;
 use crate::builtin::Signature;
@@ -31,15 +30,27 @@ pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
     }
 }
 
-pub(crate) static HASHLINE_COLUMNS: [Column; 4] = [
-    Column::new("file"),
-    Column::new("line"),
-    Column::new("hash"),
-    Column::new("text"),
-];
+record! {
+    pub(crate) struct HashlineRow<'a> {
+        file: &'a str,
+        line: u64,
+        hash: &'a str,
+        text: &'a str,
+    }
+}
 
-pub(crate) fn hashline_schema() -> Schema {
-    Schema::of(&HASHLINE_COLUMNS)
+pub(crate) const HASHLINE_COLUMNS: &[Column] = <HashlineRow<'static> as Record>::COLUMNS;
+
+pub(crate) type HashlineRows = Rows<HashlineRow<'static>>;
+
+pub(crate) fn push_hashline_row(rows: &mut HashlineRows, file: &str, line: u64, text: &str) {
+    let tag = hashline_bytes(text.as_bytes());
+    rows.push(&HashlineRow {
+        file,
+        line,
+        hash: std::str::from_utf8(&tag).unwrap_or(""),
+        text,
+    });
 }
 
 /// Splits bytes into lines like `str::lines` does, without requiring UTF-8: a final newline
@@ -55,19 +66,18 @@ pub(crate) fn text_lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 
 /// Appends one Hashline row per line, numbered from `first`. Invalid UTF-8 shows as U+FFFD.
 pub(crate) fn push_hashline_rows<'a>(
-    batch: &mut RecordBatch,
-    label: &Arc<str>,
+    rows: &mut HashlineRows,
+    label: &str,
     first: u64,
     lines: impl Iterator<Item = &'a [u8]>,
 ) {
     for (offset, line) in lines.enumerate() {
-        let text = String::from_utf8_lossy(line).into_owned();
-        batch.cells.push(CellVal::SharedStr(Arc::clone(label)));
-        batch.cells.push(CellVal::UInt(first + offset as u64));
-        batch
-            .cells
-            .push(CellVal::Hash(hashline_bytes(text.as_bytes())));
-        batch.cells.push(CellVal::Str(text));
+        push_hashline_row(
+            rows,
+            label,
+            first + offset as u64,
+            &String::from_utf8_lossy(line),
+        );
     }
 }
 
@@ -86,20 +96,15 @@ pub(crate) fn search_file_with_hashline(
     matcher: &grep_regex::RegexMatcher,
     path: &Path,
     label: &str,
-    cells: &mut Vec<CellVal>,
+    rows: &mut HashlineRows,
 ) {
-    let mut shared_label: Option<Arc<str>> = None;
     let _ = searcher.search_path(
         matcher,
         path,
         UTF8(|line_number, line| {
             let trimmed = line.strip_suffix('\n').unwrap_or(line);
             let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
-            let file_cell = shared_label.get_or_insert_with(|| Arc::from(label));
-            cells.push(CellVal::SharedStr(Arc::clone(file_cell)));
-            cells.push(CellVal::UInt(line_number));
-            cells.push(CellVal::Hash(hashline_bytes(trimmed.as_bytes())));
-            cells.push(CellVal::Str(trimmed.to_string()));
+            push_hashline_row(rows, label, line_number, trimmed);
             Ok(true)
         }),
     );

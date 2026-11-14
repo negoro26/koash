@@ -1,6 +1,6 @@
 use serde_json::Value as JsonVal;
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, Schema, StructuredDiagnostic, Value};
+use shell_value::{RecordBatch, StructuredDiagnostic, StructuredRecord, Value};
 
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
@@ -52,10 +52,10 @@ impl Builtin for FromFormat {
                             objs.push(m);
                         }
                     }
-                    return Ok(Value::from_batch(batch_from_json_objects(objs)));
+                    return Ok(Value::from_batch(batch_from_json_objects(objs)?));
                 }
                 JsonVal::Object(map) => {
-                    return Ok(Value::from_batch(batch_from_json_objects(vec![map])));
+                    return Ok(Value::from_batch(batch_from_json_objects(vec![map])?));
                 }
                 _ => {}
             }
@@ -66,31 +66,16 @@ impl Builtin for FromFormat {
                 objs.push(map);
             }
         }
-        Ok(Value::from_batch(batch_from_json_objects(objs)))
+        Ok(Value::from_batch(batch_from_json_objects(objs)?))
     }
 }
 
-fn batch_from_json_objects(objs: Vec<serde_json::Map<String, JsonVal>>) -> RecordBatch {
-    if objs.is_empty() {
-        return RecordBatch::empty();
-    }
-    let mut names: Vec<&str> = Vec::new();
-    for map in &objs {
-        for k in map.keys() {
-            if !names.contains(&k.as_str()) {
-                names.push(k);
-            }
-        }
-    }
-    let mut batch = RecordBatch::with_capacity(Schema::named(names), objs.len());
-    for mut map in objs {
-        for col in 0..batch.ncols() {
-            let cell = match map.remove(batch.schema().columns()[col].name()) {
-                Some(v) => CellVal::from_json(v),
-                None => CellVal::Null,
-            };
-            batch.cells.push(cell);
-        }
-    }
-    batch
+fn batch_from_json_objects(
+    objs: Vec<serde_json::Map<String, JsonVal>>,
+) -> Result<RecordBatch, StructuredDiagnostic> {
+    let records = objs
+        .into_iter()
+        .map(|map| map.into_iter().collect::<StructuredRecord>())
+        .collect();
+    RecordBatch::from_maps(records)
 }

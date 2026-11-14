@@ -125,7 +125,7 @@ impl Builtin for Discover {
             })
             .collect();
 
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }
 

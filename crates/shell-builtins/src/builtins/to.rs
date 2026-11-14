@@ -28,7 +28,7 @@ impl Builtin for ToFormat {
         input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         let fmt = args.first().map(|s| s.as_str()).unwrap_or("json");
-        let batch = input.into_batch();
+        let batch = input.into_batch()?;
         match fmt {
             "json" => {
                 let mut json = serde_json::to_string_pretty(&batch.records())

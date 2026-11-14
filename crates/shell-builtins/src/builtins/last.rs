@@ -31,7 +31,7 @@ impl Builtin for Last {
             .first()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1);
-        let mut batch = input.into_batch();
+        let mut batch = input.into_batch()?;
         batch.tail_rows(n);
         Ok(Value::from_batch(batch))
     }

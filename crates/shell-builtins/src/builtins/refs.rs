@@ -2,9 +2,9 @@ use grep_regex::RegexMatcherBuilder;
 use grep_searcher::Searcher;
 use ignore::WalkBuilder;
 use shell_kernel::Session;
-use shell_value::{RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{StructuredDiagnostic, Value};
 
-use super::common::{HASHLINE_COLUMNS, check_killed, hashline_schema, search_file_with_hashline};
+use super::common::{HASHLINE_COLUMNS, HashlineRows, check_killed, search_file_with_hashline};
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Refs;
@@ -14,7 +14,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Find symbol references across workspace",
     flags: &[],
-    columns: &HASHLINE_COLUMNS,
+    columns: HASHLINE_COLUMNS,
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
@@ -44,7 +44,7 @@ impl Builtin for Refs {
             .build(symbol)
             .map_err(|e| StructuredDiagnostic::new("E_REGEX", e.to_string(), None, None))?;
         let mut searcher = Searcher::new();
-        let mut batch = RecordBatch::with_capacity(hashline_schema(), 32);
+        let mut rows = HashlineRows::with_capacity(32);
         let walker = WalkBuilder::new(&session.cwd).build();
         for entry_res in walker {
             check_killed(session)?;
@@ -59,14 +59,8 @@ impl Builtin for Refs {
                 .strip_prefix(&session.cwd)
                 .unwrap_or(entry.path())
                 .to_string_lossy();
-            search_file_with_hashline(
-                &mut searcher,
-                &matcher,
-                entry.path(),
-                &rel,
-                &mut batch.cells,
-            );
+            search_file_with_hashline(&mut searcher, &matcher, entry.path(), &rel, &mut rows);
         }
-        Ok(Value::from_batch(batch))
+        Ok(Value::from_batch(rows.finish()?))
     }
 }

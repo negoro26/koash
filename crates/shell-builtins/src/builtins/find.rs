@@ -89,7 +89,7 @@ impl Builtin for Find {
                 "E_FIND",
                 format!("find: '{label}': {}", describe(&e)),
             );
-            return Ok(Value::from_records(Vec::new()));
+            return Value::from_records(Vec::new());
         }
 
         let mut builder = WalkBuilder::new(&root);
@@ -147,6 +147,6 @@ impl Builtin for Find {
             records.push(rec);
         }
 
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

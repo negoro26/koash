@@ -83,6 +83,6 @@ impl Builtin for Stat {
             );
             records.push(rec);
         }
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

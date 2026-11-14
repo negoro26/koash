@@ -1,17 +1,19 @@
 use shell_kernel::Session;
-use shell_value::{Column, RecordBatch, Schema, StructuredDiagnostic, Value};
+use shell_value::{Rows, StructuredDiagnostic, Value, record};
 
 use super::catalog;
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy, flag_spellings};
 
 pub(super) struct Help;
 
-static COLUMNS: [Column; 4] = [
-    Column::new("command"),
-    Column::new("flags"),
-    Column::new("columns"),
-    Column::new("description"),
-];
+record! {
+    struct HelpRow<'a> {
+        command: &'a str,
+        flags: &'a str,
+        columns: &'a str,
+        description: &'a str,
+    }
+}
 
 static SIGNATURE: Signature = Signature {
     name: "help",
@@ -36,7 +38,7 @@ impl Builtin for Help {
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         let filter = args.first().map(|s| s.as_str());
-        let mut batch = RecordBatch::with_capacity(Schema::of(&COLUMNS), catalog().count());
+        let mut rows = Rows::<HelpRow<'static>>::with_capacity(catalog().count());
         for schema in catalog() {
             if let Some(q) = filter
                 && !schema.name.eq_ignore_ascii_case(q)
@@ -45,19 +47,13 @@ impl Builtin for Help {
             {
                 continue;
             }
-            batch
-                .cells
-                .push(shell_value::CellVal::Str(schema.name.to_string()));
-            batch.cells.push(shell_value::CellVal::Str(
-                flag_spellings(schema.flags).join(" "),
-            ));
-            batch.cells.push(shell_value::CellVal::Str(
-                schema.column_names().collect::<Vec<_>>().join(", "),
-            ));
-            batch
-                .cells
-                .push(shell_value::CellVal::Str(schema.description.to_string()));
+            rows.push(&HelpRow {
+                command: schema.name,
+                flags: &flag_spellings(schema.flags).join(" "),
+                columns: &schema.column_names().collect::<Vec<_>>().join(", "),
+                description: schema.description,
+            });
         }
-        Ok(Value::from_batch(batch))
+        Ok(Value::from_batch(rows.finish()?))
     }
 }

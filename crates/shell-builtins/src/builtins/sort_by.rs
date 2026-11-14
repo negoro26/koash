@@ -44,7 +44,7 @@ impl Builtin for SortBy {
                 return Err(usage_error(problem, "sort-by [--desc] <column>"));
             }
         };
-        let mut batch = input.into_batch();
+        let mut batch = input.into_batch()?;
         let Some(col_idx) = batch.col_index(&col) else {
             return Ok(Value::from_batch(batch));
         };

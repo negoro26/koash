@@ -101,7 +101,7 @@ pub fn run_prewalk(
         records.push(rec);
     }
 
-    Ok(Value::from_records(records))
+    Value::from_records(records)
 }
 
 pub fn run_ast(
@@ -151,7 +151,7 @@ pub fn run_ast(
         }
     }
 
-    Ok(Value::from_records(records))
+    Value::from_records(records)
 }
 
 fn extract_skeleton_bytes(bytes: &[u8]) -> String {
