@@ -1039,11 +1039,164 @@ fn hashline_builtins_print_the_columns_help_lists_for_them() {
     ] {
         let compact = run(&format!("{script} | to compact"));
         let header = compact.lines().next().unwrap_or_default();
-        let printed = header.trim_start_matches("@schema:").replace('|', ", ");
-        let listed = run(&format!("help {name} | to json"));
-        assert!(
-            listed.contains(&format!("\"columns\": \"{printed}\"")),
-            "{name} prints `{printed}` but help says: {listed}"
-        );
+        let printed = header
+            .strip_prefix("@schema:")
+            .unwrap_or_else(|| panic!("`{script}` printed no table: {compact:?}"))
+            .replace('|', ", ");
+        let listed: serde_json::Value =
+            serde_json::from_str(&run(&format!("help {name} | to json")))
+                .expect("help prints JSON");
+        let row = listed
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["command"] == name))
+            .unwrap_or_else(|| panic!("help lists no `{name}`: {listed}"));
+        assert_eq!(row["columns"], printed, "{name}");
     }
+}
+
+/// An isolated fork's workspace root is the one directory `rm -r` must never take, however it is
+/// spelled. The session runs inside a scratch directory, so a regression only empties that.
+#[test]
+fn rm_recursive_refuses_the_workspace_root_of_an_isolated_fork() {
+    let dir = scratch_dir("rm-workspace-root")
+        .canonicalize()
+        .expect("canonical scratch dir");
+    std::fs::write(dir.join("keep.txt"), "precious").expect("write keep.txt");
+    std::fs::create_dir(dir.join("sub")).expect("create sub");
+    std::fs::write(dir.join("sub/inner.txt"), "inner").expect("write inner.txt");
+    let mut rpc = RpcClient::start(&dir);
+    let parent = rpc.create_session();
+    rpc.send(serde_json::json!({
+        "id": 2,
+        "method": "session.fork",
+        "params": {"session_id": parent, "isolated": true}
+    }));
+    let fork_line = rpc
+        .lines
+        .recv_timeout(Duration::from_secs(5))
+        .expect("session.fork response");
+    let fork: serde_json::Value = serde_json::from_str(&fork_line).expect("session.fork is json");
+    let sid = fork["result"]["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session_id in {fork_line}"))
+        .to_string();
+
+    for (id, root) in [
+        (3, dir.display().to_string()),
+        (4, format!("{}/", dir.display())),
+    ] {
+        rpc.send(serde_json::json!({
+            "id": id,
+            "method": "exec",
+            "params": {"session_id": sid, "command": format!("rm -r '{root}'")}
+        }));
+        let events: Vec<serde_json::Value> = rpc
+            .lines_until_completed(id, Duration::from_secs(10))
+            .iter()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let completed = events
+            .iter()
+            .find(|v| v["event"] == "completed")
+            .unwrap_or_else(|| panic!("no completed event for {root}: {events:?}"));
+        assert_eq!(completed["exit_code"], 1, "{root}: {events:?}");
+        let stderr: String = events.iter().filter_map(|v| v["stderr"].as_str()).collect();
+        assert!(stderr.contains("E_RM"), "{root}: {stderr}");
+        assert!(stderr.contains("workspace root"), "{root}: {stderr}");
+        assert!(!stderr.contains("filesystem root"), "{root}: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("keep.txt")).expect("keep.txt survives"),
+            "precious",
+            "{root}"
+        );
+        assert!(dir.join("sub/inner.txt").exists(), "{root}");
+    }
+}
+
+fn koa_stdout(dir: &Path, script: &str) -> String {
+    let out = koa_c(dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "`{script}` failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf-8 stdout")
+}
+
+fn json_strings(json: &serde_json::Value, key: &str) -> Vec<String> {
+    json.as_array()
+        .expect("a json array")
+        .iter()
+        .map(|row| row[key].as_str().expect("string field").to_string())
+        .collect()
+}
+
+const SHELL_CONTROL: [&str; 5] = ["unset", "exit", "jobs", "fg", "bg"];
+
+#[test]
+fn help_and_schemas_list_pipeline_commands_and_leave_out_shell_control() {
+    let dir = scratch_dir("catalog");
+
+    let help: serde_json::Value =
+        serde_json::from_str(&koa_stdout(&dir, "help | select command | to json"))
+            .expect("help renders as json");
+    let helped = json_strings(&help, "command");
+
+    let mut rpc = RpcClient::start(&dir);
+    rpc.send(serde_json::json!({"id": 1, "method": "session.schemas"}));
+    let line = rpc
+        .lines
+        .recv_timeout(Duration::from_secs(5))
+        .expect("session.schemas response");
+    let response: serde_json::Value = serde_json::from_str(&line).expect("schemas is json");
+    let schemas = json_strings(&response["result"]["schemas"], "name");
+
+    for (source, names) in [("help", &helped), ("session.schemas", &schemas)] {
+        for known in ["ls", "cat", "undo"] {
+            assert!(
+                names.iter().any(|n| n == known),
+                "{source} lacks `{known}`: {names:?}"
+            );
+        }
+        for hidden in SHELL_CONTROL {
+            assert!(
+                !names.iter().any(|n| n == hidden),
+                "{source} lists shell-control command `{hidden}`: {names:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn underscore_spellings_are_accepted_for_hyphenated_commands() {
+    let fixture = |name: &str| {
+        let dir = scratch_dir(name);
+        std::fs::write(dir.join("a"), "").expect("write a");
+        std::fs::write(dir.join("b"), "").expect("write b");
+        dir
+    };
+
+    let hyphen = koa_stdout(
+        &fixture("alias-sort-hyphen"),
+        "ls | sort-by --desc name | select name | to json",
+    );
+    let underscore = koa_stdout(
+        &fixture("alias-sort-underscore"),
+        "ls | sort_by --desc name | select name | to json",
+    );
+    assert_eq!(underscore, hyphen);
+    let rows: serde_json::Value = serde_json::from_str(&underscore).expect("json rows");
+    assert_eq!(json_strings(&rows, "name"), ["b", "a"]);
+
+    let hyphen = koa_stdout(
+        &fixture("alias-log-hyphen"),
+        "rm a; tx-log | where command == rm | to json",
+    );
+    let underscore = koa_stdout(
+        &fixture("alias-log-underscore"),
+        "rm a; tx_log | where command == rm | to json",
+    );
+    assert_eq!(underscore, hyphen);
+    let rows: serde_json::Value = serde_json::from_str(&underscore).expect("json rows");
+    assert_eq!(json_strings(&rows, "tx_id"), ["tx_001"]);
 }

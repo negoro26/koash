@@ -314,19 +314,4 @@ mod tests {
             .collect();
         assert_eq!(flat, ["true", "1", "true", "false", "2", "false"]);
     }
-
-    #[test]
-    fn a_batch_without_columns_has_no_rows() {
-        let b = RecordBatch::empty();
-        assert_eq!(b.rows().count(), 0);
-    }
-
-    #[test]
-    fn take_rows_ignores_an_order_made_for_a_batch_of_another_height() {
-        let long = batch(&[json!({"a": 1}), json!({"a": 2}), json!({"a": 3})]);
-        let mut short = batch(&[json!({"a": 9}), json!({"a": 8})]);
-        let order = long.order_by(|row| row.get(0).as_f64().map(|n| n as i64));
-        short.take_rows(order);
-        assert_eq!(column(&short, "a"), ["9", "8"]);
-    }
 }

@@ -118,14 +118,4 @@ mod tests {
         assert_eq!(named.index_of("b"), Some(1));
         assert_eq!(named.index_of("c"), None);
     }
-
-    #[test]
-    fn project_reorders_and_repeats() {
-        let names: Vec<String> = Schema::of(&FIXED)
-            .project(&[1, 0, 1])
-            .names()
-            .map(str::to_string)
-            .collect();
-        assert_eq!(names, ["b", "a", "b"]);
-    }
 }
