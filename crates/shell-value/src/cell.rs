@@ -47,20 +47,6 @@ impl CellVal {
             other => CellVal::Json(other),
         }
     }
-
-    pub fn to_json(&self) -> serde_json::Value {
-        match self {
-            CellVal::Null => serde_json::Value::Null,
-            CellVal::Bool(b) => serde_json::Value::Bool(*b),
-            CellVal::Int(n) => serde_json::Value::from(*n),
-            CellVal::UInt(n) => serde_json::Value::from(*n),
-            CellVal::Float(n) => serde_json::Value::from(*n),
-            CellVal::SharedStr(s) => serde_json::Value::String(s.to_string()),
-            CellVal::Str(s) => serde_json::Value::String(s.clone()),
-            CellVal::Hash(h) => serde_json::Value::String(String::from_utf8_lossy(h).into_owned()),
-            CellVal::Json(v) => v.clone(),
-        }
-    }
 }
 
 impl From<Datum<'_>> for CellVal {

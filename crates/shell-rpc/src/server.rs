@@ -9,7 +9,7 @@ use shell_builtins::{
 use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
 use shell_value::{
-    StructuredDiagnostic, StructuredRecord, TaintLevel, records_to_compact_sigil, redact_secrets,
+    RecordBatch, Records, StructuredDiagnostic, TaintLevel, batch_to_compact_sigil, redact_secrets,
 };
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -753,7 +753,7 @@ fn is_path_allowed(target: &Path, allowed: &[String]) -> bool {
 }
 
 struct RunOutput {
-    records: Vec<StructuredRecord>,
+    batches: Vec<RecordBatch>,
     stdout: Vec<u8>,
     stderr: String,
 }
@@ -761,7 +761,7 @@ struct RunOutput {
 impl RunOutput {
     fn empty() -> Self {
         Self {
-            records: Vec::new(),
+            batches: Vec::new(),
             stdout: Vec::new(),
             stderr: String::new(),
         }
@@ -773,7 +773,7 @@ impl RunOutput {
             match chunk {
                 Chunk::Stdout(bytes) => out.stdout.extend_from_slice(&bytes),
                 Chunk::Stderr(bytes) => out.stderr.push_str(&String::from_utf8_lossy(&bytes)),
-                Chunk::Batch(batch) => out.records.extend(batch.to_maps()),
+                Chunk::Batch(batch) => out.batches.push(batch),
                 Chunk::Diag(diag) => {
                     out.stderr.push_str(&diag.to_string());
                     out.stderr.push('\n');
@@ -802,13 +802,13 @@ async fn send_output<W: AsyncWrite + Unpin>(
     let mut spill_uri: Option<String> = None;
     let max_bytes = params.max_output_bytes.unwrap_or(usize::MAX);
 
-    if !out.records.is_empty() {
+    let records = Records::of(&out.batches);
+    if !records.is_empty() {
         let mut total_bytes = 0usize;
-        let mut batch = Vec::new();
+        let mut kept = 0usize;
         let mut spill_buf = String::new();
         let mut record_truncated = false;
-        for rec in out.records {
-            let serialized = serde_json::to_string(&rec).unwrap_or_default();
+        for serialized in records.json_lines() {
             if let Some((rule, line)) = match_stream_rule(&params.stream_rules, &serialized) {
                 let ev = RpcEvent::RuleTriggered {
                     id: id.clone(),
@@ -829,18 +829,16 @@ async fn send_output<W: AsyncWrite + Unpin>(
             let rec_size = serialized.len() + 1;
             if total_bytes + rec_size > max_bytes {
                 record_truncated = true;
-                for existing in &batch {
-                    if let Ok(s) = serde_json::to_string(existing) {
-                        spill_buf.push_str(&s);
-                        spill_buf.push('\n');
-                    }
+                for existing in records.json_lines().take(kept) {
+                    spill_buf.push_str(&existing);
+                    spill_buf.push('\n');
                 }
                 spill_buf.push_str(&serialized);
                 spill_buf.push('\n');
                 continue;
             }
             total_bytes += rec_size;
-            batch.push(rec);
+            kept += 1;
         }
         if record_truncated {
             truncated = true;
@@ -848,9 +846,9 @@ async fn send_output<W: AsyncWrite + Unpin>(
                 spill_uri = write_spill_file(spill_buf.as_bytes(), "ndjson");
             }
         }
-        if !batch.is_empty() {
+        if kept > 0 {
             let chunk = if params.format.as_deref() == Some("compact") {
-                let sigil = records_to_compact_sigil(&batch);
+                let sigil = batch_to_compact_sigil(&RecordBatch::merged(&out.batches, kept));
                 let safe = match redact_env {
                     Some(env) => redact_secrets(&sigil, env),
                     None => sigil,
@@ -865,7 +863,7 @@ async fn send_output<W: AsyncWrite + Unpin>(
             } else {
                 RpcEvent::StreamChunk {
                     id: id.clone(),
-                    records: Some(batch),
+                    records: Some(records.take(kept)),
                     compact: None,
                     stdout: None,
                     stderr: None,
