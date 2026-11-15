@@ -1172,6 +1172,67 @@ fn undo_after_rm_of_a_large_file_restores_it_byte_for_byte() {
     );
 }
 
+fn filesystem_type(dir: &Path) -> u64 {
+    let out = Command::new("stat")
+        .args(["-f", "-c", "%t"])
+        .arg(dir)
+        .output()
+        .expect("run stat");
+    assert!(out.status.success(), "stat -f failed on {}", dir.display());
+    u64::from_str_radix(String::from_utf8_lossy(&out.stdout).trim(), 16).expect("hex f_type")
+}
+
+const BTRFS_MAGIC: u64 = 0x9123_683E;
+const XFS_MAGIC: u64 = 0x5846_5342;
+
+#[test]
+fn a_file_over_the_copy_budget_is_undoable_exactly_when_the_filesystem_can_reflink() {
+    let base =
+        std::env::var_os("KOA_TEST_REFLINK_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    let dir = base.join(format!("koa-regress-{}-reflink", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    let _cleanup = RemoveOnDrop(dir.clone());
+    let can_reflink = matches!(filesystem_type(&dir), BTRFS_MAGIC | XFS_MAGIC);
+
+    let bytes: Vec<u8> = (0..80 * 1024 * 1024_u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    std::fs::write(dir.join("big"), &bytes).expect("write big");
+    let out = koa_c(
+        &dir,
+        "echo earlier > f; rm big; undo; echo st=$?; cat f",
+        Duration::from_secs(60),
+    )
+    .expect("koa -c finishes");
+    let stdout = out_text(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if can_reflink {
+        assert!(
+            stdout.contains("st=0"),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            std::fs::read(dir.join("big")).expect("big restored") == bytes,
+            "the restored file differs from the original"
+        );
+    } else {
+        assert!(
+            stderr.contains("E_TX_OPAQUE"),
+            "undo must refuse a 80 MiB file it can only copy, stderr: {stderr}"
+        );
+        assert!(stdout.contains("st=1"), "stdout: {stdout}");
+        assert!(
+            !dir.join("big").exists(),
+            "a refused undo must not bring the file back half-way"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f")).expect("earlier work stays"),
+            "earlier\n"
+        );
+    }
+}
+
 #[test]
 fn undo_snapshots_live_on_disk_only_while_the_process_runs() {
     let dir = scratch_dir("undo-store-lifetime");
