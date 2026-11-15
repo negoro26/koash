@@ -1068,9 +1068,8 @@ fn removing_a_fifo_still_makes_undo_refuse() {
 /// spelled. The session runs inside a scratch directory, so a regression only empties that.
 #[test]
 fn rm_recursive_refuses_the_workspace_root_of_an_isolated_fork() {
-    let dir = scratch_dir("rm-workspace-root")
-        .canonicalize()
-        .expect("canonical scratch dir");
+    let scratch = scratch_dir("rm-workspace-root");
+    let dir = scratch.canonicalize().expect("canonical scratch dir");
     std::fs::write(dir.join("keep.txt"), "precious").expect("write keep.txt");
     std::fs::create_dir(dir.join("sub")).expect("create sub");
     std::fs::write(dir.join("sub/inner.txt"), "inner").expect("write inner.txt");
