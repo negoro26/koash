@@ -1219,6 +1219,11 @@ fn a_file_over_the_copy_budget_is_undoable_exactly_when_the_filesystem_can_refli
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     let _cleanup = RemoveOnDrop(dir.clone());
     let can_reflink = matches!(filesystem_type(&dir), BTRFS_MAGIC | XFS_MAGIC);
+    assert!(
+        can_reflink || std::env::var_os("KOA_TEST_REFLINK_DIR").is_none(),
+        "KOA_TEST_REFLINK_DIR must point at btrfs or XFS, found f_type {:#x}",
+        filesystem_type(&dir)
+    );
 
     let bytes: Vec<u8> = (0..80 * 1024 * 1024_u32)
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
