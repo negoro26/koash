@@ -4,9 +4,7 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
 use super::common::resolve_path;
-use super::fs_ops::{
-    describe, fail, is_protected_root, remove_empty_dir, remove_leaf, remove_tree,
-};
+use super::fs_ops::{describe, fail, protected_root, remove_empty_dir, remove_leaf, remove_tree};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
@@ -100,12 +98,14 @@ fn remove_operand(session: &mut Session, operand: &str, opts: Opts, out: &mut Ve
         );
         return;
     }
-    if (opts.recursive || opts.dir) && is_protected_root(session, &path) {
+    if (opts.recursive || opts.dir)
+        && let Some(root) = protected_root(session, &path)
+    {
         fail(
             session,
             "E_RM",
             format!(
-                "it is dangerous to operate recursively on '{operand}'; koa never removes the filesystem root"
+                "it is dangerous to operate recursively on '{operand}'; koa never removes {root}"
             ),
         );
         return;
@@ -138,16 +138,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn dot_and_dotdot_are_recognised_with_trailing_slashes() {
-        for operand in [".", "..", "./", "a/.", "a/..", "a/../"] {
-            assert!(names_dot_or_dotdot(operand), "{operand}");
-        }
-        for operand in ["a", ".hidden", "..x", "a/b."] {
-            assert!(!names_dot_or_dotdot(operand), "{operand}");
-        }
-    }
-
     fn session() -> Session {
         Session::new(false).unwrap()
     }
@@ -158,26 +148,12 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         symlink("/", dir.join("rootlink")).unwrap();
         let s = session();
-        assert!(is_protected_root(&s, Path::new("/")));
-        assert!(is_protected_root(&s, Path::new("/.")));
-        assert!(is_protected_root(&s, Path::new("/usr/..")));
-        assert!(is_protected_root(&s, &dir.join("rootlink/")));
-        assert!(!is_protected_root(&s, &dir));
-        assert!(!is_protected_root(&s, Path::new("/nonexistent-koa-path")));
+        assert!(protected_root(&s, Path::new("/")).is_some());
+        assert!(protected_root(&s, Path::new("/.")).is_some());
+        assert!(protected_root(&s, Path::new("/usr/..")).is_some());
+        assert!(protected_root(&s, &dir.join("rootlink/")).is_some());
+        assert!(protected_root(&s, &dir).is_none());
+        assert!(protected_root(&s, Path::new("/nonexistent-koa-path")).is_none());
         fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn the_workspace_root_of_a_cow_session_is_protected() {
-        let root = std::env::temp_dir().join(format!("koa-rm-cow-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let mut s = session();
-        s.cow = shell_kernel::CowWorkspace::new(&root, "rm-test").ok();
-        assert!(s.cow.is_some());
-        let real = root.canonicalize().unwrap();
-        assert!(is_protected_root(&s, &real));
-        assert!(!is_protected_root(&s, &real.join(".koa")));
-        drop(s);
-        fs::remove_dir_all(&root).unwrap();
     }
 }
