@@ -1133,6 +1133,22 @@ fn sql_keeps_the_quotes_the_user_wrote() {
 }
 
 #[test]
+fn sql_concatenation_operator_is_part_of_the_query() {
+    let dir = scratch_dir("sql-concat");
+    for script in [
+        "@sql SELECT 'a' || 'b' AS v | to json",
+        "@sql SELECT 'a' ||'b' AS v | to json",
+        "@sql SELECT 'a'|| 'b' AS v | to json",
+    ] {
+        assert_eq!(
+            json_rows(&dir, script),
+            serde_json::json!([{"v": "ab"}]),
+            "{script}"
+        );
+    }
+}
+
+#[test]
 fn py_and_js_take_one_quoted_program_as_before() {
     if !have("python3") || !have("node") {
         return;
