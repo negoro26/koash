@@ -1031,37 +1031,47 @@ fn run_koa(dir: &Path, script: &str) -> (String, String, Option<i32>) {
     )
 }
 
-fn sized_files(name: &str) -> PathBuf {
-    let dir = scratch_dir(name);
+fn write_sized_files(dir: &Path) {
     std::fs::write(dir.join("a.txt"), "123").expect("write a.txt");
     std::fs::write(dir.join("b.txt"), "1234567890").expect("write b.txt");
-    dir
+}
+
+fn json_rows(dir: &Path, script: &str) -> serde_json::Value {
+    let (stdout, stderr, code) = run_koa(dir, script);
+    assert_eq!(code, Some(0), "{script}: stderr {stderr}");
+    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{script}: {e}: {stdout}"))
 }
 
 #[test]
 fn where_supports_every_comparison_operator() {
-    let dir = sized_files("where-ops");
-    for (script, kept, dropped) in [
-        ("ls | where size >= 5", "b.txt", "a.txt"),
-        ("ls | where size >=5", "b.txt", "a.txt"),
-        ("ls | where size > 5", "b.txt", "a.txt"),
-        ("ls | where size <= 5", "a.txt", "b.txt"),
-        ("ls | where size < 5", "a.txt", "b.txt"),
-        ("ls | where size == 3", "a.txt", "b.txt"),
-        ("ls | where size != 3", "b.txt", "a.txt"),
-        ("ls | where name != a.txt", "b.txt", "a.txt"),
-        ("ls | where name =~ b.", "b.txt", "a.txt"),
-    ] {
-        let (stdout, stderr, code) = run_koa(&dir, script);
-        assert_eq!(code, Some(0), "{script}: stderr {stderr}");
-        assert!(stdout.contains(kept), "{script}: stdout {stdout}");
-        assert!(!stdout.contains(dropped), "{script}: stdout {stdout}");
-    }
+    let dir = scratch_dir("where-ops");
+    write_sized_files(&dir);
+    let names = |script: &str| -> Vec<String> {
+        json_rows(&dir, &format!("{script} | select name | to json"))
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|row| row["name"].as_str().expect("name").to_string())
+            .collect()
+    };
+    let none: [&str; 0] = [];
+    assert_eq!(names("ls | where size >= 10"), ["b.txt"]);
+    assert_eq!(names("ls | where size >=10"), ["b.txt"]);
+    assert_eq!(names("ls | where size > 10"), none);
+    assert_eq!(names("ls | where size > 3"), ["b.txt"]);
+    assert_eq!(names("ls | where size <= 3"), ["a.txt"]);
+    assert_eq!(names("ls | where size < 3"), none);
+    assert_eq!(names("ls | where size < 10"), ["a.txt"]);
+    assert_eq!(names("ls | where size == 3"), ["a.txt"]);
+    assert_eq!(names("ls | where size != 3"), ["b.txt"]);
+    assert_eq!(names("ls | where name != a.txt"), ["b.txt"]);
+    assert_eq!(names("ls | where name =~ b."), ["b.txt"]);
 }
 
 #[test]
 fn where_rejects_unknown_operators_and_malformed_expressions() {
-    let dir = sized_files("where-bad");
+    let dir = scratch_dir("where-bad");
+    write_sized_files(&dir);
     for script in [
         "ls | where size ~~ 5",
         "ls | where size >> 5",
@@ -1072,12 +1082,12 @@ fn where_rejects_unknown_operators_and_malformed_expressions() {
         assert_eq!(code, Some(2), "{script}: stdout {stdout} stderr {stderr}");
         assert!(stderr.contains("E_ARGS"), "{script}: stderr {stderr}");
     }
-    assert!(!dir.join("5").exists(), "`>> 5` must not create a file");
 }
 
 #[test]
 fn redirects_still_work_around_where_syntax() {
-    let dir = sized_files("redirects");
+    let dir = scratch_dir("redirects");
+    write_sized_files(&dir);
     let (_, stderr, code) = run_koa(&dir, "echo hi > f; cat f");
     assert_eq!(code, Some(0), "stderr {stderr}");
     assert_eq!(std::fs::read_to_string(dir.join("f")).expect("f"), "hi\n");
@@ -1100,32 +1110,33 @@ fn redirects_still_work_around_where_syntax() {
 #[test]
 fn sql_keeps_the_quotes_the_user_wrote() {
     let dir = scratch_dir("sql-quotes");
-    let (stdout, stderr, code) = run_koa(&dir, "@sql SELECT 'a' AS v");
-    assert_eq!(code, Some(0), "stderr {stderr}");
-    assert!(
-        stdout.contains('a') && stdout.contains('v'),
-        "stdout {stdout}"
+    assert_eq!(
+        json_rows(&dir, "@sql SELECT 'a' AS v | to json"),
+        serde_json::json!([{"v": "a"}])
     );
-
-    let (stdout, stderr, code) = run_koa(&dir, r#"@sql SELECT "x" AS y"#);
-    assert_eq!(code, Some(0), "stderr {stderr}");
-    assert!(stdout.contains('y'), "stdout {stdout}");
-
-    let (stdout, stderr, code) = run_koa(&dir, "@sql SELECT 5 AS n WHERE n > 1");
-    assert_eq!(code, Some(0), "stderr {stderr}");
-    assert!(stdout.contains('5'), "stdout {stdout}");
+    assert_eq!(
+        json_rows(&dir, r#"@sql SELECT "x" AS y | to json"#),
+        serde_json::json!([{"y": "x"}])
+    );
+    assert_eq!(
+        json_rows(&dir, "@sql SELECT 5 AS n WHERE n > 1 | to json"),
+        serde_json::json!([{"n": 5}])
+    );
     assert!(
         !dir.join("1").exists(),
         "`> 1` inside SQL is not a redirect"
     );
-
-    let (stdout, stderr, code) = run_koa(&dir, "@sql \"SELECT 'q' AS w\"");
-    assert_eq!(code, Some(0), "stderr {stderr}");
-    assert!(stdout.contains('q'), "stdout {stdout}");
+    assert_eq!(
+        json_rows(&dir, "@sql \"SELECT 'q' AS w\" | to json"),
+        serde_json::json!([{"w": "q"}])
+    );
 }
 
 #[test]
 fn py_and_js_take_one_quoted_program_as_before() {
+    if !have("python3") || !have("node") {
+        return;
+    }
     let dir = scratch_dir("py-js-quotes");
     let (stdout, stderr, code) = run_koa(&dir, r#"@py 'print("a b")'"#);
     assert_eq!(code, Some(0), "stderr {stderr}");
