@@ -7,7 +7,7 @@
 
 use std::fs::{self, FileTimes, Metadata};
 use std::io;
-use std::os::unix::fs::{MetadataExt, symlink};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use shell_kernel::Session;
@@ -76,12 +76,17 @@ pub(super) fn is_inside(src: &Path, dest: &Path) -> bool {
     }
 }
 
-/// The filesystem root and the session's workspace root are never removed.
-pub(super) fn is_protected_root(session: &Session, path: &Path) -> bool {
-    let Ok(real) = path.canonicalize() else {
-        return false;
-    };
-    real.parent().is_none() || session.cow.as_ref().is_some_and(|c| real == c.root)
+/// Names the root `path` is when it is one koa never removes: the filesystem root, or the
+/// session's workspace root.
+pub(super) fn protected_root(session: &Session, path: &Path) -> Option<&'static str> {
+    let real = path.canonicalize().ok()?;
+    if real.parent().is_none() {
+        Some("the filesystem root")
+    } else if session.cow.as_ref().is_some_and(|c| real == c.root) {
+        Some("the workspace root")
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------- removal
@@ -422,16 +427,30 @@ fn copy_symlink(src: &Path, dest: &Path, replace: bool) -> io::Result<()> {
     symlink(target, dest)
 }
 
-/// `fs::copy` also copies the permission bits. With `force`, a destination that cannot
-/// be opened is removed and the copy retried, as `cp -f` does.
+/// Copies the contents the way coreutils `cp` does without `-p`: a new file gets the source's
+/// permission bits minus setuid, setgid and sticky, filtered by the umask, and an existing
+/// destination keeps its own mode. With `force`, a destination that cannot be opened is removed
+/// and the copy retried, as `cp -f` does.
 fn copy_regular(src: &Path, dest: &Path, force: bool) -> io::Result<()> {
-    match fs::copy(src, dest) {
+    match copy_contents(src, dest) {
         Err(e) if force && e.kind() == io::ErrorKind::PermissionDenied => {
             fs::remove_file(dest)?;
-            fs::copy(src, dest).map(drop)
+            copy_contents(src, dest)
         }
-        other => other.map(drop),
+        other => other,
     }
+}
+
+fn copy_contents(src: &Path, dest: &Path) -> io::Result<()> {
+    let mut reader = fs::File::open(src)?;
+    let mode = reader.metadata()?.mode() & 0o777;
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(dest)?;
+    io::copy(&mut reader, &mut writer).map(drop)
 }
 
 fn preserve_attributes(
