@@ -110,6 +110,7 @@ It keeps the removed records and that saved state as a `RedoRecord` on `Session`
 A new capture or `mark_opaque` clears the stack, because the saved state would no longer match the disk.
 If the saved state does not fit the capture limits, the rollback still happens and `redo` has nothing to re-apply.
 `tx-log` reports the number of pending redo records in its `redo` column.
+When the ledger is empty but a redo is pending, it prints one row with null `tx_id` and `command`, so the pending redo is still visible.
 
 ## Adding a command
 

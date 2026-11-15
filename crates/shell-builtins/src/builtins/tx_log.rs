@@ -46,7 +46,16 @@ impl Builtin for TxLog {
                 );
                 rec
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if records.is_empty() && redo > 0 {
+            let mut rec = StructuredRecord::new();
+            rec.insert("tx_id".to_string(), JsonVal::Null);
+            rec.insert("command".to_string(), JsonVal::Null);
+            rec.insert("files".to_string(), json!(0));
+            rec.insert("redo".to_string(), json!(redo));
+            rec.insert("opaque_after".to_string(), JsonVal::Null);
+            return Ok(Value::from_records(vec![rec]));
+        }
         Ok(Value::from_records(records))
     }
 }
