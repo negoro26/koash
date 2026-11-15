@@ -5,19 +5,20 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
 use super::catalog;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy, flag_spellings};
 
 pub(super) struct Help;
 
 static SIGNATURE: Signature = Signature {
     name: "help",
     aliases: &[],
-    description: "Show builtin commands and flags",
+    description: "Show builtin commands and flags; other options run the system command",
     flags: &[],
     columns: &["command", "description", "flags", "columns"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: false,
 };
 
 impl Builtin for Help {
@@ -50,9 +51,9 @@ impl Builtin for Help {
             batch
                 .cells
                 .push(shell_value::CellVal::Str(schema.name.to_string()));
-            batch
-                .cells
-                .push(shell_value::CellVal::Str(schema.flags.join(" ")));
+            batch.cells.push(shell_value::CellVal::Str(
+                flag_spellings(schema.flags).join(" "),
+            ));
             batch
                 .cells
                 .push(shell_value::CellVal::Str(schema.columns.join(", ")));

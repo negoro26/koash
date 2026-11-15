@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use shell_builtins::{
-    Chunk, InputMode, Signature, Sink, catalog, post_edit_diagnostics, run_program,
+    Chunk, InputMode, Signature, Sink, catalog, flag_spellings, post_edit_diagnostics, run_program,
 };
 use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
@@ -81,7 +81,7 @@ fn schema_json(sig: &Signature) -> serde_json::Value {
     serde_json::json!({
         "name": sig.name,
         "description": sig.description,
-        "flags": sig.flags,
+        "flags": flag_spellings(sig.flags),
         "columns": sig.columns,
         "reads_input": sig.input != InputMode::None,
     })
@@ -875,6 +875,23 @@ async fn send_output<W: AsyncWrite + Unpin>(
         }
     }
 
+    // Chunks are merged per kind, so the interleaving is lost. Notices such as "running the
+    // real ls" must precede the output they announce.
+    if !out.stderr.is_empty() {
+        let text = match redact_env {
+            Some(env) => redact_secrets(&out.stderr, env),
+            None => out.stderr,
+        };
+        let chunk = RpcEvent::StreamChunk {
+            id: id.clone(),
+            records: None,
+            compact: None,
+            stdout: None,
+            stderr: Some(text),
+        };
+        send_json(writer, &chunk).await?;
+    }
+
     if !out.stdout.is_empty() {
         let bytes = out.stdout;
         let text_full = String::from_utf8_lossy(&bytes);
@@ -918,21 +935,6 @@ async fn send_output<W: AsyncWrite + Unpin>(
                 send_json(writer, &chunk).await?;
             }
         }
-    }
-
-    if !out.stderr.is_empty() {
-        let text = match redact_env {
-            Some(env) => redact_secrets(&out.stderr, env),
-            None => out.stderr,
-        };
-        let chunk = RpcEvent::StreamChunk {
-            id: id.clone(),
-            records: None,
-            compact: None,
-            stdout: None,
-            stderr: Some(text),
-        };
-        send_json(writer, &chunk).await?;
     }
 
     Ok(OutputSummary {

@@ -60,8 +60,8 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
             .signature()
             .flags
             .iter()
-            .filter(|f| f.starts_with(current_word))
-            .map(|f| (*f).to_string())
+            .flat_map(|f| f.spellings())
+            .filter(|spelling| spelling.starts_with(current_word))
             .collect();
         if !matches.is_empty() {
             matches.sort();

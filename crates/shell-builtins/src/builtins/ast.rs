@@ -14,6 +14,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: true,
 };
 
 impl Builtin for Ast {
@@ -27,6 +28,6 @@ impl Builtin for Ast {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        crate::code_intel::run_ast(session, args)
+        crate::code_intel::run_ast(session, &SIGNATURE, args)
     }
 }
