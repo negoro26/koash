@@ -176,13 +176,19 @@ impl<'a> Parser<'a> {
         matches!(first.parts.as_slice(), [WordPart::Literal { text, .. }] if text.len() > 1 && text.starts_with('@'))
     }
 
+    fn is_py_sigil(words: &[Word]) -> bool {
+        matches!(words.first().map(|w| w.parts.as_slice()), Some([WordPart::Literal { text, .. }]) if text == "@py")
+    }
+
     /// The source of a sigil command (`@sql`, `@py`, `@js`) is code in another language, so its
     /// arguments are taken verbatim from `src` up to the end of the command. `||` belongs to the
-    /// source (SQL concatenation, JS logical or). A lone word keeps its shell meaning: it is the
-    /// quoted program and may be followed by redirections.
-    fn take_sigil_source(&mut self) -> Option<Word> {
-        let is_end = |kind: &TokenKind| {
-            matches!(
+    /// source when the language has that operator (SQL concatenation, JS logical or); Python has
+    /// none, so after `@py` it still chains shell commands. A lone word keeps its shell meaning:
+    /// it is the quoted program and may be followed by redirections.
+    fn take_sigil_source(&mut self, or_is_source: bool) -> Option<Word> {
+        let is_end = |kind: &TokenKind| match kind {
+            TokenKind::OrIf => !or_is_source,
+            kind => matches!(
                 kind,
                 TokenKind::Pipe
                     | TokenKind::Semi
@@ -190,7 +196,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Amp
                     | TokenKind::Newline
                     | TokenKind::Eof
-            )
+            ),
         };
         let rest = &self.tokens[self.pos..];
         let len = rest.iter().take_while(|t| !is_end(&t.kind)).count();
@@ -294,7 +300,7 @@ impl<'a> Parser<'a> {
         loop {
             if words.len() == 1
                 && Self::is_sigil_cmd(&words)
-                && let Some(code) = self.take_sigil_source()
+                && let Some(code) = self.take_sigil_source(!Self::is_py_sigil(&words))
             {
                 overall_span = Some(overall_span.map_or(code.span, |s| s.merge(code.span)));
                 words.push(code);

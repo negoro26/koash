@@ -1149,6 +1149,21 @@ fn sql_concatenation_operator_is_part_of_the_query() {
 }
 
 #[test]
+fn or_is_source_after_js_and_a_shell_chain_after_py() {
+    if !have("python3") || !have("node") {
+        return;
+    }
+    let dir = scratch_dir("sigil-or");
+    let (stdout, _, code) = run_koa(&dir, "@py import no_such_module_zz || echo recovered");
+    assert_eq!(code, Some(0));
+    assert_eq!(stdout, "recovered\n");
+
+    let (stdout, _, code) = run_koa(&dir, "@js throw 0 || new Error");
+    assert_eq!(code, Some(1), "`new Error` must not run as a shell command");
+    assert_eq!(stdout, "");
+}
+
+#[test]
 fn py_and_js_take_one_quoted_program_as_before() {
     if !have("python3") || !have("node") {
         return;
