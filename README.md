@@ -39,7 +39,7 @@ koa --tsp -c "ls"
 
 - **Structured pipelines.** `ls`, `stat`, `find`, `ps`, `cat`, `grep` and `env` produce tables that `where`, `select`, `sort-by`, `first`, `last`, `from` and `to` filter in-process. At an external command the table becomes NDJSON or text, and external output comes back as lines.
 - **Hashline anchors.** `cat`, `grep` and `ast` print a `line:hash` tag per line. `patch file N:hash 'text'` refuses the edit when line `N` has changed since you read it.
-- **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one and `rollback <tx>` reverts back to a point. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
+- **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one, `redo` re-applies it, and `rollback <tx>` reverts back to a point. Snapshots live on disk under `.koa/undo`, as reflinks on btrfs and XFS and as copies elsewhere. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
 - **Sub-kernels.** `@sql` runs in an in-process SQLite database. `@py` and `@js` keep a `python3` or `node` worker alive per session, so variables survive between commands.
 - **Discovery.** `discover "<intent>"` ranks builtins by BM25 over their descriptions.
 - **Code tools.** `prewalk` and `ast` parse source with tree-sitter. `diag` runs `cargo check`. `refs` and `rename` are text search and replace over the workspace, not LSP-backed.

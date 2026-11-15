@@ -1,8 +1,10 @@
 pub mod cow;
 pub mod env;
 pub mod exec;
+mod fs_util;
 pub mod kill;
 pub mod session;
+mod undo_store;
 pub mod word_expand;
 
 pub use cow::{CowWorkspace, MutationState};
@@ -13,5 +15,6 @@ pub use exec::{
     wait_foreground,
 };
 pub use kill::KillSwitch;
-pub use session::{Job, JobState, Session, TxRecord};
+pub use session::{Job, JobState, Preimage, Session, TxRecord};
+pub use undo_store::Snapshot;
 pub use word_expand::expand_word;

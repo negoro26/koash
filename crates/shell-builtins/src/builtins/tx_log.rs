@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &["tx_log"],
     description: "List recorded transactional micro-commits",
     flags: &[],
-    columns: &["tx_id", "command", "files"],
+    columns: &["tx_id", "command", "files", "redo"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,
@@ -29,6 +29,7 @@ impl Builtin for TxLog {
         _args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
+        let redo = session.redo_depth();
         let records = session
             .tx_log
             .iter()
@@ -37,6 +38,7 @@ impl Builtin for TxLog {
                 rec.insert("tx_id".to_string(), JsonVal::String(tx.id.clone()));
                 rec.insert("command".to_string(), JsonVal::String(tx.command.clone()));
                 rec.insert("files".to_string(), json!(tx.preimages.len()));
+                rec.insert("redo".to_string(), json!(redo));
                 rec.insert(
                     "opaque_after".to_string(),
                     tx.opaque_after
@@ -45,7 +47,16 @@ impl Builtin for TxLog {
                 );
                 rec
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if records.is_empty() && redo > 0 {
+            let mut rec = StructuredRecord::new();
+            rec.insert("tx_id".to_string(), JsonVal::Null);
+            rec.insert("command".to_string(), JsonVal::Null);
+            rec.insert("files".to_string(), json!(0));
+            rec.insert("redo".to_string(), json!(redo));
+            rec.insert("opaque_after".to_string(), JsonVal::Null);
+            return Ok(Value::from_records(vec![rec]));
+        }
         Ok(Value::from_records(records))
     }
 }

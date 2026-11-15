@@ -1064,6 +1064,238 @@ fn removing_a_fifo_still_makes_undo_refuse() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
 }
 
+fn undo_store_sessions(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir.join(".koa/undo"))
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+fn out_text(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn redo_after_undo_restores_the_post_edit_content() {
+    let dir = scratch_dir("redo-basic");
+    let out = koa_c(
+        &dir,
+        "echo first > f; echo second > f; undo; cat f; redo; cat f",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = out_text(&out);
+    let after_undo = stdout
+        .find("first")
+        .expect("undo shows the earlier content");
+    let after_redo = stdout
+        .rfind("second")
+        .expect("redo shows the edited content");
+    assert!(after_undo < after_redo, "stdout: {stdout}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "second\n"
+    );
+}
+
+#[test]
+fn a_new_edit_after_undo_clears_redo() {
+    let dir = scratch_dir("redo-cleared");
+    let out = koa_c(
+        &dir,
+        "echo a > f; echo b > f; undo; echo c > f; redo; echo redo-status=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out_text(&out).contains("redo-status=0"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "c\n",
+        "redo must find nothing to re-apply after a new edit"
+    );
+}
+
+#[test]
+fn redo_after_an_external_write_never_overwrites_it() {
+    let dir = scratch_dir("redo-external");
+    let out = koa_c(
+        &dir,
+        "echo a > f; echo b > f; undo; /bin/sh -c 'echo ext > f'; redo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "ext\n"
+    );
+}
+
+#[test]
+fn redo_reapplies_a_rollback_and_the_ledger_is_whole_again() {
+    let dir = scratch_dir("redo-rollback");
+    let out = koa_c(
+        &dir,
+        "echo 1 > f; echo 2 > f; echo 3 > f; rollback tx_002; redo; undo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "2\n",
+        "redo must bring back tx_002 and tx_003, so undo reverts only tx_003"
+    );
+}
+
+#[test]
+fn tx_log_reports_pending_redo() {
+    let dir = scratch_dir("redo-tx-log");
+    let out = koa_c(
+        &dir,
+        "echo a > f; echo b > f; undo; tx-log | select redo | to json",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out_text(&out).contains("\"redo\": 1"),
+        "stdout: {}",
+        out_text(&out)
+    );
+}
+
+#[test]
+fn tx_log_reports_pending_redo_when_the_ledger_is_empty() {
+    let dir = scratch_dir("redo-tx-log-empty");
+    let out = koa_c(
+        &dir,
+        "echo a > f; undo; echo tx-log-follows; tx-log | select redo | to json",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = out_text(&out);
+    let (_, log) = stdout.split_once("tx-log-follows\n").expect("marker line");
+    let rows: serde_json::Value = serde_json::from_str(log)
+        .unwrap_or_else(|e| panic!("tx-log output is JSON ({e}): {stdout}"));
+    assert!(
+        rows.as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["redo"] == 1)),
+        "undo left one redo pending, so tx-log must say so: {rows}"
+    );
+}
+
+#[test]
+fn undo_after_rm_of_a_large_file_restores_it_byte_for_byte() {
+    let dir = scratch_dir("undo-large");
+    let bytes: Vec<u8> = (0..50 * 1024 * 1024_u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    std::fs::write(dir.join("big"), &bytes).expect("write big");
+    let out = koa_c(&dir, "rm big; undo", Duration::from_secs(60)).expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        std::fs::read(dir.join("big")).expect("big restored") == bytes,
+        "restored file differs from the original"
+    );
+}
+
+fn filesystem_type(dir: &Path) -> u64 {
+    let out = Command::new("stat")
+        .args(["-f", "-c", "%t"])
+        .arg(dir)
+        .output()
+        .expect("run stat");
+    assert!(out.status.success(), "stat -f failed on {}", dir.display());
+    u64::from_str_radix(String::from_utf8_lossy(&out.stdout).trim(), 16).expect("hex f_type")
+}
+
+const BTRFS_MAGIC: u64 = 0x9123_683E;
+const XFS_MAGIC: u64 = 0x5846_5342;
+
+#[test]
+fn a_file_over_the_copy_budget_is_undoable_exactly_when_the_filesystem_can_reflink() {
+    let base =
+        std::env::var_os("KOA_TEST_REFLINK_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    let dir = base.join(format!("koa-regress-{}-reflink", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    let _cleanup = ScratchDir(dir.clone());
+    let can_reflink = matches!(filesystem_type(&dir), BTRFS_MAGIC | XFS_MAGIC);
+    assert!(
+        can_reflink || std::env::var_os("KOA_TEST_REFLINK_DIR").is_none(),
+        "KOA_TEST_REFLINK_DIR must point at btrfs or XFS, found f_type {:#x}",
+        filesystem_type(&dir)
+    );
+
+    let bytes: Vec<u8> = (0..80 * 1024 * 1024_u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    std::fs::write(dir.join("big"), &bytes).expect("write big");
+    let out = koa_c(
+        &dir,
+        "echo earlier > f; rm big; undo; echo st=$?; cat f",
+        Duration::from_secs(60),
+    )
+    .expect("koa -c finishes");
+    let stdout = out_text(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if can_reflink {
+        assert!(
+            stdout.contains("st=0"),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            std::fs::read(dir.join("big")).expect("big restored") == bytes,
+            "the restored file differs from the original"
+        );
+    } else {
+        assert!(
+            stderr.contains("E_TX_OPAQUE"),
+            "undo must refuse a 80 MiB file it can only copy, stderr: {stderr}"
+        );
+        assert!(stdout.contains("st=1"), "stdout: {stdout}");
+        assert!(
+            !dir.join("big").exists(),
+            "a refused undo must not bring the file back half-way"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f")).expect("earlier work stays"),
+            "earlier\n"
+        );
+    }
+}
+
 /// An isolated fork's workspace root is the one directory `rm -r` must never take, however it is
 /// spelled. The session runs inside a scratch directory, so a regression only empties that.
 #[test]
@@ -1174,6 +1406,230 @@ fn help_and_schemas_list_pipeline_commands_and_leave_out_shell_control() {
             );
         }
     }
+}
+
+#[test]
+fn undo_snapshots_live_on_disk_only_while_the_process_runs() {
+    let dir = scratch_dir("undo-store-lifetime");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let out = koa_c(
+        &dir,
+        "echo changed > f; ls .koa/undo | select name | to json",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let entries: serde_json::Value = serde_json::from_str(&out_text(&out))
+        .unwrap_or_else(|e| panic!("ls output is JSON ({e}): {}", out_text(&out)));
+    assert_eq!(
+        entries.as_array().map(Vec::len),
+        Some(1),
+        "exactly one store directory must exist while the session runs: {entries}"
+    );
+    assert!(
+        undo_store_sessions(&dir).is_empty(),
+        "the store must be gone after exit: {:?}",
+        undo_store_sessions(&dir)
+    );
+}
+
+#[test]
+fn the_next_koa_sweeps_the_undo_store_of_a_killed_one() {
+    let dir = scratch_dir("undo-store-sweep");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let mut doomed = Command::new(KOA)
+        .arg("-c")
+        .arg("echo changed > f; sleep 5")
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn koa");
+    let start = Instant::now();
+    while std::fs::read_to_string(dir.join("f")).ok().as_deref() != Some("changed\n") {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "koa never performed the edit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    doomed.kill().expect("kill koa");
+    doomed.wait().expect("reap koa");
+    assert!(
+        !undo_store_sessions(&dir).is_empty(),
+        "a killed koa leaves its store behind"
+    );
+
+    let out = koa_c(&dir, "true", Duration::from_secs(10)).expect("koa -c finishes");
+    assert!(out.status.success());
+    assert!(
+        undo_store_sessions(&dir).is_empty(),
+        "the next koa must sweep the stale store: {:?}",
+        undo_store_sessions(&dir)
+    );
+}
+
+#[test]
+fn evicting_a_ledger_entry_deletes_its_snapshot() {
+    let dir = scratch_dir("undo-store-eviction");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let edits: String = (1..=60).map(|i| format!("echo {i} > f; ")).collect();
+    let out = koa_c(
+        &dir,
+        &format!("{edits}find .koa/undo -type f | select path; undo; cat f"),
+        Duration::from_secs(20),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let snapshots = out_text(&out).matches("snap-").count();
+    assert!(
+        (49..=50).contains(&snapshots),
+        "60 edits keep the snapshots of the last 49 or 50 ledger entries, found {snapshots}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "59\n",
+        "the surviving snapshots must be the newest ones, so undo reverts only the last edit"
+    );
+}
+
+#[test]
+fn undo_refuses_after_an_external_ran_with_nothing_recorded_before_it() {
+    let dir = scratch_dir("undo-opaque-floor");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let out = koa_c(
+        &dir,
+        "/bin/cp f g; undo; echo st=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E_TX_OPAQUE") && stderr.contains("/bin/cp"),
+        "undo must refuse and name the command, stderr: {stderr}"
+    );
+    assert!(
+        out_text(&out).contains("st=1"),
+        "stdout: {}",
+        out_text(&out)
+    );
+    assert!(dir.join("g").exists(), "a refused undo must not touch g");
+}
+
+#[test]
+fn a_capturing_command_clears_the_refusal_left_by_an_earlier_external() {
+    let dir = scratch_dir("undo-opaque-floor-cleared");
+    std::fs::write(dir.join("f"), "original\n").expect("write f");
+    let out = koa_c(
+        &dir,
+        "/bin/cp f g; echo new > f; undo; echo st=$?; cat f; undo; echo st2=$?",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f")).expect("f exists"),
+        "original\n"
+    );
+    let stdout = out_text(&out);
+    assert!(stdout.contains("st=0"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("st2=0"),
+        "a later undo on the emptied ledger must not refuse, stdout: {stdout}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn redo_brings_back_a_tree_that_rollback_deleted_even_when_an_earlier_record_names_its_root() {
+    let dir = scratch_dir("redo-tree");
+    std::fs::create_dir_all(dir.join("d")).expect("create d");
+    std::fs::write(dir.join("d/c"), "child\n").expect("write c");
+    let out = koa_c(
+        &dir,
+        "rm -r d; mkdir d; /bin/sh -c 'echo ext > d/x'; rollback tx_001; redo",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("d/x")).expect("d/x must be back after redo"),
+        "ext\n"
+    );
+    assert!(
+        !dir.join("d/c").exists(),
+        "redo must restore the pre-rollback state"
+    );
+}
+
+#[test]
+fn startup_sweep_never_follows_a_symlinked_undo_dir() {
+    let dir = scratch_dir("sweep-symlink");
+    let victim = dir.join("victim");
+    std::fs::create_dir_all(victim.join("old_work")).expect("victim dir");
+    std::fs::write(victim.join("old_work/keep.txt"), "user data\n").expect("victim file");
+    let aged = Command::new("touch")
+        .args(["-d", "2 hours ago"])
+        .arg(victim.join("old_work"))
+        .status()
+        .expect("touch");
+    assert!(aged.success());
+    std::fs::create_dir_all(dir.join(".koa")).expect(".koa");
+    std::os::unix::fs::symlink("../victim", dir.join(".koa/undo")).expect("symlink");
+
+    let out = koa_c(&dir, "echo hi", Duration::from_secs(10)).expect("koa -c finishes");
+    assert!(out.status.success());
+    assert!(
+        victim.join("old_work/keep.txt").exists(),
+        "the sweep must not delete through a symlinked .koa/undo"
+    );
+}
+
+#[test]
+fn undo_snapshots_are_invisible_to_git() {
+    let dir = scratch_dir("undo-gitignore");
+    let init = Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(&dir)
+        .status();
+    if !init.is_ok_and(|s| s.success()) {
+        return;
+    }
+    std::fs::write(dir.join("f"), "secret\n").expect("seed");
+    let out = koa_c(
+        &dir,
+        "echo changed > f; /usr/bin/git status --porcelain --untracked-files=all",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("f"), "git sees the user's file: {stdout}");
+    assert!(
+        !stdout.contains(".koa"),
+        "undo snapshots must not show up as untracked files: {stdout}"
+    );
 }
 
 #[test]
