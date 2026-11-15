@@ -1153,6 +1153,31 @@ fn tx_log_reports_pending_redo() {
 }
 
 #[test]
+fn tx_log_reports_pending_redo_when_the_ledger_is_empty() {
+    let dir = scratch_dir("redo-tx-log-empty");
+    let out = koa_c(
+        &dir,
+        "echo a > f; undo; echo tx-log-follows; tx-log | select redo | to json",
+        Duration::from_secs(10),
+    )
+    .expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = out_text(&out);
+    let (_, log) = stdout.split_once("tx-log-follows\n").expect("marker line");
+    let rows: serde_json::Value = serde_json::from_str(log)
+        .unwrap_or_else(|e| panic!("tx-log output is JSON ({e}): {stdout}"));
+    assert!(
+        rows.as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["redo"] == 1)),
+        "undo left one redo pending, so tx-log must say so: {rows}"
+    );
+}
+
+#[test]
 fn undo_after_rm_of_a_large_file_restores_it_byte_for_byte() {
     let dir = scratch_dir("undo-large");
     let _cleanup = RemoveOnDrop(dir.clone());
