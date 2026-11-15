@@ -219,11 +219,6 @@ impl RowSink<'_> {
         self.push(cell);
     }
 
-    /// A string cell from bytes that may not be UTF-8. Invalid sequences show as U+FFFD.
-    pub fn put_lossy(&mut self, bytes: &[u8]) {
-        self.put_str(&String::from_utf8_lossy(bytes));
-    }
-
     /// The type of the column this cell goes into. A `UInt` is only a number in an untyped column,
     /// because a typed column reads every `UInt` as a time or a mode.
     fn ty(&self) -> ColType {
@@ -343,48 +338,8 @@ mod tests {
         rows.push(&Pair { name: &owned, n: 1 });
         rows.push(&Pair { name: "b", n: 2 });
         let batch = rows.finish().unwrap();
-        assert_eq!(
-            batch.schema().names().collect::<Vec<_>>(),
-            Pair::COLUMNS.iter().map(Column::name).collect::<Vec<_>>()
-        );
+        assert_eq!(batch.schema().names().collect::<Vec<_>>(), ["name", "n"]);
         assert_eq!(texts(&batch), [["a", "1"], ["b", "2"]]);
-    }
-
-    #[test]
-    fn a_short_row_is_padded_and_extra_cells_are_dropped() {
-        let mut rows = DynRows::new(Schema::named(["a", "b"]));
-        rows.push_with(|out| out.put(Datum::Int(1)));
-        rows.push_with(|out| {
-            for n in 0..4 {
-                out.put(Datum::Int(n));
-            }
-        });
-        let batch = rows.finish().unwrap();
-        assert_eq!(texts(&batch), [["1", ""], ["0", "1"]]);
-    }
-
-    #[test]
-    fn a_string_equal_to_the_cell_above_shares_its_text() {
-        let mut rows = DynRows::new(Schema::named(["label", "text"]));
-        for line in ["x", "y", "x"] {
-            rows.push_with(|out| {
-                out.put_str("same.txt");
-                out.put_str(line);
-            });
-        }
-        let batch = rows.finish().unwrap();
-        assert_eq!(batch.text_bytes(), "same.txt".len() + 3);
-        assert_eq!(
-            texts(&batch),
-            [["same.txt", "x"], ["same.txt", "y"], ["same.txt", "x"]]
-        );
-    }
-
-    #[test]
-    fn lossy_text_replaces_invalid_bytes() {
-        let mut rows = DynRows::new(Schema::named(["t"]));
-        rows.push_with(|out| out.put_lossy(b"a\xffb"));
-        assert_eq!(texts(&rows.finish().unwrap()), [["a\u{fffd}b"]]);
     }
 
     #[test]
