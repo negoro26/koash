@@ -13,7 +13,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Re-apply the transactional micro-commit most recently undone",
     flags: &[],
-    columns: &["tx_id", "restored_files"],
+    columns: crate::builtin::columns!["tx_id", "restored_files"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,
