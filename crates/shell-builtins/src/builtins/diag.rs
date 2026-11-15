@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Run project diagnostics (cargo check) and emit structured errors",
     flags: &[],
-    columns: &["file", "line", "severity", "code", "message"],
+    columns: crate::builtin::columns!["file", "line", "severity", "code", "message"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

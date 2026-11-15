@@ -1,11 +1,8 @@
-use std::borrow::Cow;
-use std::sync::Arc;
-
-use crate::{CellVal, Datum, StructuredRecord, json};
+use crate::{CellVal, Column, Datum, Schema, StructuredRecord, json};
 
 #[derive(Debug, Clone)]
 pub struct RecordBatch {
-    pub columns: Arc<[Cow<'static, str>]>,
+    schema: Schema,
     pub cells: Vec<CellVal>,
 }
 
@@ -30,37 +27,35 @@ impl<'a> Row<'a> {
 pub struct RowOrder(Vec<usize>);
 
 impl RecordBatch {
-    pub fn new(columns: Arc<[Cow<'static, str>]>) -> Self {
+    pub fn new(schema: Schema) -> Self {
         Self {
-            columns,
+            schema,
             cells: Vec::new(),
         }
     }
 
-    pub fn with_capacity(columns: Arc<[Cow<'static, str>]>, row_cap: usize) -> Self {
-        let ncols = columns.len();
+    pub fn with_capacity(schema: Schema, row_cap: usize) -> Self {
+        let ncols = schema.len();
         Self {
-            columns,
+            schema,
             cells: Vec::with_capacity(row_cap * ncols),
         }
     }
 
     pub fn empty() -> Self {
-        Self {
-            columns: Arc::from([]),
-            cells: Vec::new(),
-        }
+        Self::new(Schema::empty())
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     pub fn ncols(&self) -> usize {
-        self.columns.len()
+        self.schema.len()
     }
 
     pub fn nrows(&self) -> usize {
-        self.cells
-            .len()
-            .checked_div(self.columns.len())
-            .unwrap_or(0)
+        self.cells.len().checked_div(self.schema.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -68,18 +63,18 @@ impl RecordBatch {
     }
 
     pub fn row(&self, idx: usize) -> Row<'_> {
-        let ncols = self.columns.len();
+        let ncols = self.schema.len();
         Row {
             cells: &self.cells[idx * ncols..(idx + 1) * ncols],
         }
     }
 
     pub fn col_index(&self, name: &str) -> Option<usize> {
-        self.columns.iter().position(|c| c.as_ref() == name)
+        self.schema.index_of(name)
     }
 
     pub fn truncate_rows(&mut self, n: usize) {
-        let keep = n.min(self.nrows()) * self.columns.len();
+        let keep = n.min(self.nrows()) * self.schema.len();
         self.cells.truncate(keep);
     }
 
@@ -87,19 +82,19 @@ impl RecordBatch {
         let nrows = self.nrows();
         let drop_rows = nrows.saturating_sub(n);
         if drop_rows > 0 {
-            self.cells.drain(..drop_rows * self.columns.len());
+            self.cells.drain(..drop_rows * self.schema.len());
         }
     }
 
     pub fn rows(&self) -> impl ExactSizeIterator<Item = Row<'_>> {
         self.cells
-            .chunks_exact(self.columns.len().max(1))
+            .chunks_exact(self.schema.len().max(1))
             .map(|cells| Row { cells })
     }
 
     /// Keeps the rows `keep` accepts, in order, without copying any cell.
     pub fn retain_rows(&mut self, mut keep: impl FnMut(Row<'_>) -> bool) {
-        let ncols = self.columns.len();
+        let ncols = self.schema.len();
         let mut write = 0;
         for read in 0..self.nrows() {
             let cells = &self.cells[read * ncols..(read + 1) * ncols];
@@ -130,7 +125,7 @@ impl RecordBatch {
     /// Reorders the rows by moving their cells. An order made for a batch of another height is
     /// ignored, because an out-of-range row would abort the shell.
     pub fn take_rows(&mut self, order: RowOrder) {
-        let ncols = self.columns.len();
+        let ncols = self.schema.len();
         if order.0.len() != self.nrows() {
             return;
         }
@@ -146,7 +141,7 @@ impl RecordBatch {
 
     /// Keeps the listed columns in the listed order. A column listed twice appears twice.
     pub fn select_columns(&mut self, cols: &[usize]) {
-        let ncols = self.columns.len();
+        let ncols = self.schema.len();
         let nrows = self.nrows();
         let first_use: Vec<usize> = cols
             .iter()
@@ -166,7 +161,7 @@ impl RecordBatch {
                 cells.push(cell);
             }
         }
-        self.columns = cols.iter().map(|&col| self.columns[col].clone()).collect();
+        self.schema = self.schema.project(cols);
         self.cells = cells;
     }
 
@@ -174,29 +169,26 @@ impl RecordBatch {
         if records.is_empty() {
             return Self::empty();
         }
-        let mut columns: Vec<Cow<'static, str>> = Vec::new();
+        let mut names: Vec<&str> = Vec::new();
         for rec in &records {
             for k in rec.keys() {
-                if !columns.iter().any(|c| c.as_ref() == k.as_str()) {
-                    columns.push(Cow::Owned(k.clone()));
+                if !names.contains(&k.as_str()) {
+                    names.push(k);
                 }
             }
         }
-        let ncols = columns.len();
-        let mut cells = Vec::with_capacity(records.len() * ncols);
+        let schema = Schema::named(names);
+        let mut cells = Vec::with_capacity(records.len() * schema.len());
         for mut rec in records {
-            for col in &columns {
-                let cell = match rec.remove(col.as_ref()) {
+            for col in schema.names() {
+                let cell = match rec.remove(col) {
                     Some(v) => CellVal::from_json(v),
                     None => CellVal::Null,
                 };
                 cells.push(cell);
             }
         }
-        Self {
-            columns: Arc::from(columns),
-            cells,
-        }
+        Self { schema, cells }
     }
 
     /// The first `rows` rows of `batches` as one batch.
@@ -206,13 +198,13 @@ impl RecordBatch {
     /// repeated in a batch keeps its last non-null cell. A row with no non-null cell stays as a row
     /// of nulls while any column survives, and vanishes with the columns when none does.
     pub fn merged(batches: &[RecordBatch], rows: usize) -> Self {
-        let mut names: Vec<Cow<'static, str>> = Vec::new();
+        let mut names: Vec<Column> = Vec::new();
         let mut left = rows;
         for batch in batches {
             let order = json::name_order(batch);
             for row in batch.rows().take(left) {
-                for col in json::visible_columns(&batch.columns, &order, row) {
-                    let name = &batch.columns[col];
+                for col in json::visible_columns(batch.schema.columns(), &order, row) {
+                    let name = &batch.schema.columns()[col];
                     if !names.contains(name) {
                         names.push(name.clone());
                     }
@@ -226,14 +218,15 @@ impl RecordBatch {
         for batch in batches {
             let order = json::name_order(batch);
             let slot: Vec<Option<usize>> = batch
-                .columns
+                .schema
+                .columns()
                 .iter()
                 .map(|name| names.iter().position(|n| n == name))
                 .collect();
             for row in batch.rows().take(left) {
                 let start = cells.len();
                 cells.resize(start + names.len(), CellVal::Null);
-                for col in json::visible_columns(&batch.columns, &order, row) {
+                for col in json::visible_columns(batch.schema.columns(), &order, row) {
                     if let Some(at) = slot[col] {
                         cells[start + at] = match row.get(col) {
                             // The RPC compact path used to round-trip through JSON, which has no NaN.
@@ -246,7 +239,7 @@ impl RecordBatch {
             left = left.saturating_sub(batch.nrows());
         }
         Self {
-            columns: names.into(),
+            schema: names.into(),
             cells,
         }
     }
@@ -316,7 +309,7 @@ mod tests {
             json!({"a": 2, "b": "y", "c": false}),
         ]);
         b.select_columns(&[2, 0, 2]);
-        let names: Vec<&str> = b.columns.iter().map(|c| c.as_ref()).collect();
+        let names: Vec<&str> = b.schema().names().collect();
         assert_eq!(names, ["c", "a", "c"]);
         assert_eq!(b.nrows(), 2);
         let flat: Vec<String> = b

@@ -1,7 +1,7 @@
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
-use super::common::operands_read_stdin;
+use super::common::{HASHLINE_COLUMNS, operands_read_stdin};
 use super::slice::{self, End};
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
@@ -12,7 +12,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Take last N records, file lines, or raw lines",
     flags: &slice::FLAGS,
-    columns: &["file", "line", "hash", "text"],
+    columns: &HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,

@@ -1,5 +1,5 @@
 use shell_kernel::Session;
-use shell_value::{StructuredDiagnostic, Value};
+use shell_value::{Column, StructuredDiagnostic, Value};
 
 use crate::sink::Sink;
 
@@ -126,13 +126,21 @@ pub fn flag_spellings(flags: &[Flag]) -> Vec<String> {
     flags.iter().flat_map(Flag::spellings).collect()
 }
 
+/// The columns of a builtin's output as a `&'static [Column]`, for [`Signature::columns`].
+macro_rules! columns {
+    ($($name:literal),* $(,)?) => {
+        &[$(::shell_value::Column::new($name)),*]
+    };
+}
+pub(crate) use columns;
+
 #[derive(Debug)]
 pub struct Signature {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
     pub description: &'static str,
     pub flags: &'static [Flag],
-    pub columns: &'static [&'static str],
+    pub columns: &'static [Column],
     pub input: InputMode,
     pub placement: Placement,
     pub tx: TxPolicy,
@@ -140,6 +148,12 @@ pub struct Signature {
     /// the same name instead when the session's PATH has one. Set only by commands whose
     /// every dash word goes through `Args`; the others take dash words as operands.
     pub strict_options: bool,
+}
+
+impl Signature {
+    pub fn column_names(&self) -> impl Iterator<Item = &'static str> {
+        self.columns.iter().map(Column::name)
+    }
 }
 
 pub trait Builtin: Sync {

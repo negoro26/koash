@@ -10,7 +10,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Structural symbol and definition search with Hashline anchors",
     flags: &[],
-    columns: &["file", "line", "hash", "kind", "text"],
+    columns: crate::builtin::columns!["file", "line", "hash", "kind", "text"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

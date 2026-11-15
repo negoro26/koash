@@ -78,9 +78,9 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
         if let Some(up) = upstream_cmd
             && let Some(builtin) = lookup(up)
         {
-            for col in builtin.signature().columns {
+            for col in builtin.signature().column_names() {
                 if col.starts_with(current_word) {
-                    cols.push((*col).to_string());
+                    cols.push(col.to_string());
                 }
             }
         }

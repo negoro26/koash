@@ -13,7 +13,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Rename symbol across workspace with micro-commit tracking",
     flags: &[],
-    columns: &["file", "replacements"],
+    columns: crate::builtin::columns!["file", "replacements"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

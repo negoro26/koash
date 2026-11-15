@@ -4,7 +4,7 @@ use ignore::WalkBuilder;
 use shell_kernel::Session;
 use shell_value::{RecordBatch, StructuredDiagnostic, Value};
 
-use super::common::{check_killed, hashline_schema, search_file_with_hashline};
+use super::common::{HASHLINE_COLUMNS, check_killed, hashline_schema, search_file_with_hashline};
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Refs;
@@ -14,7 +14,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Find symbol references across workspace",
     flags: &[],
-    columns: &["file", "line", "hash", "text"],
+    columns: &HASHLINE_COLUMNS,
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

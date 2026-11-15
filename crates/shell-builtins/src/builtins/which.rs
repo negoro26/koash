@@ -11,7 +11,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Locate executable in PATH",
     flags: &[],
-    columns: &["name", "path"],
+    columns: crate::builtin::columns!["name", "path"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

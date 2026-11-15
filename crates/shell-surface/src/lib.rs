@@ -52,7 +52,7 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
             if batch.is_empty() {
                 return;
             }
-            let columns: Vec<String> = batch.columns.iter().map(|c| c.to_string()).collect();
+            let columns: Vec<String> = batch.schema().names().map(str::to_string).collect();
             let frame = TspTableFrame {
                 tsp: "1.0",
                 kind: "table",

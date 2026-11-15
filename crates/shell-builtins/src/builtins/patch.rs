@@ -15,7 +15,7 @@ static SIGNATURE: Signature = Signature {
         "delete",
         "remove the line; written in place of the new text, which may itself start with a dash",
     )],
-    columns: &["file", "line", "old_hash", "new_hash", "status"],
+    columns: crate::builtin::columns!["file", "line", "old_hash", "new_hash", "status"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

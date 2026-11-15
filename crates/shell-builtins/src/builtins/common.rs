@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6,7 +5,7 @@ use std::sync::Arc;
 use grep_searcher::Searcher;
 use grep_searcher::sinks::UTF8;
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, hashline_bytes};
+use shell_value::{CellVal, Column, RecordBatch, Schema, StructuredDiagnostic, hashline_bytes};
 
 use crate::args::Args;
 use crate::builtin::Signature;
@@ -32,13 +31,15 @@ pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
     }
 }
 
-pub(crate) fn hashline_schema() -> Arc<[Cow<'static, str>]> {
-    Arc::new([
-        Cow::Borrowed("file"),
-        Cow::Borrowed("line"),
-        Cow::Borrowed("hash"),
-        Cow::Borrowed("text"),
-    ])
+pub(crate) static HASHLINE_COLUMNS: [Column; 4] = [
+    Column::new("file"),
+    Column::new("line"),
+    Column::new("hash"),
+    Column::new("text"),
+];
+
+pub(crate) fn hashline_schema() -> Schema {
+    Schema::of(&HASHLINE_COLUMNS)
 }
 
 /// Splits bytes into lines like `str::lines` does, without requiring UTF-8: a final newline

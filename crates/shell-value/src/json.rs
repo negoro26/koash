@@ -1,10 +1,9 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::slice;
 
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
-use crate::{Datum, RecordBatch, Row};
+use crate::{Column, Datum, RecordBatch, Row};
 
 pub type StructuredRecord = BTreeMap<String, serde_json::Value>;
 
@@ -44,15 +43,16 @@ impl Serialize for Datum<'_> {
 
 /// Column indices ordered by name, equal names in column order.
 pub(crate) fn name_order(batch: &RecordBatch) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..batch.columns.len()).collect();
-    order.sort_by(|&a, &b| batch.columns[a].cmp(&batch.columns[b]));
+    let columns = batch.schema().columns();
+    let mut order: Vec<usize> = (0..columns.len()).collect();
+    order.sort_by(|&a, &b| columns[a].name().cmp(columns[b].name()));
     order
 }
 
 /// The column that supplies each JSON key of a row, in key order: one per distinct name, the last
 /// non-null cell among columns of that name, and none for a name whose cells are all null.
 pub(crate) fn visible_columns<'a>(
-    columns: &'a [Cow<'static, str>],
+    columns: &'a [Column],
     order: &'a [usize],
     row: Row<'a>,
 ) -> impl Iterator<Item = usize> + 'a {
@@ -72,7 +72,7 @@ pub(crate) fn visible_columns<'a>(
 }
 
 struct JsonRow<'a> {
-    columns: &'a [Cow<'static, str>],
+    columns: &'a [Column],
     order: &'a [usize],
     row: Row<'a>,
 }
@@ -81,7 +81,7 @@ impl Serialize for JsonRow<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut map = s.serialize_map(None)?;
         for col in visible_columns(self.columns, self.order, self.row) {
-            map.serialize_entry(self.columns[col].as_ref(), &self.row.get(col))?;
+            map.serialize_entry(self.columns[col].name(), &self.row.get(col))?;
         }
         map.end()
     }
@@ -131,7 +131,7 @@ impl<'a> Records<'a> {
                 let order = name_order(batch);
                 batch.rows().map(move |row| {
                     let json = JsonRow {
-                        columns: &batch.columns,
+                        columns: batch.schema().columns(),
                         order: &order,
                         row,
                     };
@@ -150,7 +150,7 @@ impl Serialize for Records<'_> {
             let order = name_order(batch);
             for row in batch.rows().take(left) {
                 seq.serialize_element(&JsonRow {
-                    columns: &batch.columns,
+                    columns: batch.schema().columns(),
                     order: &order,
                     row,
                 })?;
@@ -171,7 +171,7 @@ impl RecordBatch {
         let order = name_order(self);
         for row in self.rows() {
             let json = JsonRow {
-                columns: &self.columns,
+                columns: self.schema().columns(),
                 order: &order,
                 row,
             };
@@ -187,7 +187,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::CellVal;
+    use crate::{CellVal, Schema};
 
     fn batch(rows: &[Value]) -> RecordBatch {
         let maps = rows
@@ -266,7 +266,7 @@ mod tests {
         let second = batch(&[json!({"d": "x", "b": 4}), json!({"e": 5})]);
         let both = [first, second];
         let names =
-            |b: &RecordBatch| -> Vec<String> { b.columns.iter().map(|c| c.to_string()).collect() };
+            |b: &RecordBatch| -> Vec<String> { b.schema().names().map(str::to_string).collect() };
         assert_eq!(names(&RecordBatch::merged(&both, 4)), ["a", "b", "d", "e"]);
         assert_eq!(names(&RecordBatch::merged(&both, 2)), ["a", "b"]);
         let merged = RecordBatch::merged(&both, 3);
@@ -278,7 +278,7 @@ mod tests {
 
     // The deleted `to_maps`, kept as the oracle the encoder must agree with.
     fn reference(batch: &RecordBatch) -> Vec<StructuredRecord> {
-        let ncols = batch.columns.len();
+        let ncols = batch.ncols();
         if ncols == 0 {
             return Vec::new();
         }
@@ -298,7 +298,7 @@ mod tests {
             .chunks_exact(ncols)
             .map(|row| {
                 let mut map = StructuredRecord::new();
-                for (col, cell) in batch.columns.iter().zip(row) {
+                for (col, cell) in batch.schema().names().zip(row) {
                     if !matches!(cell, CellVal::Null) {
                         map.insert(col.to_string(), to_json(cell));
                     }
@@ -309,10 +309,9 @@ mod tests {
     }
 
     fn hand_built(names: &[&'static str], cells: Vec<CellVal>) -> RecordBatch {
-        RecordBatch {
-            columns: names.iter().map(|n| Cow::Borrowed(*n)).collect(),
-            cells,
-        }
+        let mut batch = RecordBatch::new(Schema::named(names));
+        batch.cells = cells;
+        batch
     }
 
     fn odd_batch() -> RecordBatch {

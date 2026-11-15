@@ -22,7 +22,7 @@ static SIGNATURE: Signature = Signature {
         Flag::predicate("maxdepth", "descend at most N levels"),
         Flag::long_switch("hidden", "include entries whose name starts with a dot"),
     ],
-    columns: &["path", "ext", "kind", "size"],
+    columns: crate::builtin::columns!["path", "ext", "kind", "size"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,

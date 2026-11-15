@@ -1825,3 +1825,35 @@ fn py_and_js_take_one_quoted_program_as_before() {
     assert_eq!(code, Some(0), "stderr {stderr}");
     assert_eq!(stdout, "1\n2\n");
 }
+
+#[test]
+fn hashline_builtins_print_the_columns_help_lists_for_them() {
+    let dir = scratch_dir("hashline-columns");
+    std::fs::write(dir.join("a.txt"), "alpha\nbeta\n").expect("write a.txt");
+    let run = |script: &str| {
+        let out = koa_c(&dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for (name, script) in [
+        ("cat", "cat a.txt"),
+        ("head", "head -n 1 a.txt"),
+        ("tail", "tail -n 1 a.txt"),
+        ("grep", "grep alpha a.txt"),
+        ("refs", "refs alpha"),
+    ] {
+        let compact = run(&format!("{script} | to compact"));
+        let header = compact.lines().next().unwrap_or_default();
+        let printed = header
+            .strip_prefix("@schema:")
+            .unwrap_or_else(|| panic!("`{script}` printed no table: {compact:?}"))
+            .replace('|', ", ");
+        let listed: serde_json::Value =
+            serde_json::from_str(&run(&format!("help {name} | to json")))
+                .expect("help prints JSON");
+        let row = listed
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["command"] == name))
+            .unwrap_or_else(|| panic!("help lists no `{name}`: {listed}"));
+        assert_eq!(row["columns"], printed, "{name}");
+    }
+}
