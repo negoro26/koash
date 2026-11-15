@@ -42,8 +42,6 @@ fn stat_for_capture(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
     }
 }
 
-/// Records what `path` holds now. A regular file is saved as a snapshot that may write at most
-/// `copy_budget` bytes.
 fn save_state(
     store: &mut UndoStore,
     path: &Path,
@@ -122,7 +120,6 @@ pub struct SessionSnapshot {
     pub mutated_files: Vec<String>,
 }
 
-/// What a path held at one moment. A file's bytes live in a snapshot on disk.
 #[derive(Debug)]
 pub enum Preimage {
     Absent,
@@ -139,7 +136,6 @@ impl Preimage {
     }
 }
 
-/// Bytes one record may write when the filesystem cannot share blocks. Shared blocks are free.
 const TX_CAPTURE_MAX_COPY_BYTES: u64 = 64 * 1024 * 1024;
 const TX_CAPTURE_MAX_ENTRIES: usize = 10_000;
 const LEDGER_MAX_RECORDS: usize = 50;
@@ -154,8 +150,6 @@ pub struct TxRecord {
     copied_bytes: u64,
 }
 
-/// Transactions that `undo` or `rollback` took off the ledger, with the state they replaced.
-/// `redo` puts both back.
 #[derive(Debug)]
 struct RedoRecord {
     txs: Vec<TxRecord>,
@@ -176,8 +170,6 @@ pub struct Session {
     pub mutated_files: Vec<String>,
     pub tx_log: Vec<TxRecord>,
     redo_log: Vec<RedoRecord>,
-    /// An external ran while the ledger was empty. No entry can carry the marker, so the
-    /// session does, until the next transaction captures a path.
     opaque_floor: Option<String>,
     undo_store: UndoStore,
     pub next_tx_id: usize,
@@ -273,9 +265,6 @@ impl Session {
         })
     }
 
-    /// Records a failure that does not stop the running builtin. A command that handles
-    /// several operands reports each failed one here and carries on; the executor prints
-    /// the reports after the command returns and turns them into exit status 1.
     pub fn report(&mut self, diag: StructuredDiagnostic) {
         self.reports.push(diag);
     }
@@ -284,8 +273,6 @@ impl Session {
         std::mem::take(&mut self.reports)
     }
 
-    /// Whether this is the first time `command` fell back to the real program in this
-    /// session, so the user is told once and not on every later call.
     pub fn first_fallback(&mut self, command: &str) -> bool {
         self.fallback_noticed.insert(command.to_string())
     }
@@ -476,7 +463,6 @@ impl Session {
         Ok(descend)
     }
 
-    /// Character devices and FIFOs hold no state to restore, so writing to them never blocks `undo`.
     pub fn record_output_target(&mut self, path: &Path) -> bool {
         let stateless = std::fs::metadata(path).is_ok_and(|m| {
             let kind = m.file_type();
@@ -494,8 +480,6 @@ impl Session {
         self.mark_opaque(format!("{command}: {reason}"));
     }
 
-    /// Something changed the filesystem in a way `undo` cannot reverse, so anything `redo` would
-    /// write back is stale.
     pub fn mark_opaque(&mut self, what: String) {
         self.redo_log.clear();
         match self.tx_log.last_mut() {
@@ -559,8 +543,6 @@ impl Session {
         Ok(restored)
     }
 
-    /// Saves what rolling `txs` back is about to overwrite, so `redo` can put it back. `None`
-    /// when it does not fit the capture limits: the rollback still goes ahead, without a redo.
     fn save_replaced(&mut self, txs: &[TxRecord]) -> Option<Vec<(PathBuf, Preimage)>> {
         let mut saved: Vec<(PathBuf, Preimage)> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -602,8 +584,6 @@ impl Session {
         Some(saved)
     }
 
-    /// Re-applies the most recently undone transactions: puts back the state the undo replaced and
-    /// returns the transactions to the ledger. Returns the oldest of them and the paths restored.
     pub fn redo_last(&mut self) -> Result<Option<(String, usize)>, StructuredDiagnostic> {
         self.finish_tx();
         let Some(record) = self.redo_log.pop() else {
@@ -622,7 +602,6 @@ impl Session {
         Ok(Some((first, restored)))
     }
 
-    /// How many `redo` commands would find something to re-apply.
     pub fn redo_depth(&self) -> usize {
         self.redo_log.len()
     }

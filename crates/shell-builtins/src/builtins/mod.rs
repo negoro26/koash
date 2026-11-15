@@ -51,7 +51,6 @@ mod which;
 
 use crate::builtin::{Builtin, Placement, Signature};
 
-/// Order is the listing order of `help`, `discover`, and the schemas endpoint.
 pub static REGISTRY: &[&dyn Builtin] = &[
     &cd::Cd,
     &pwd::Pwd,
@@ -108,8 +107,6 @@ pub fn lookup(name: &str) -> Option<&'static dyn Builtin> {
     })
 }
 
-/// Commands listed by help, discover, and the schemas endpoint.
-/// Shell-control commands (`Placement::SoleStage`) are not part of the catalog.
 pub fn catalog() -> impl Iterator<Item = &'static Signature> {
     REGISTRY
         .iter()

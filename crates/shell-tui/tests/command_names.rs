@@ -13,10 +13,7 @@ const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
 
-/// Completion and highlighting also accept executables found on `PATH`, so a
-/// host that ships `/usr/bin/jobs` would make these assertions pass without
-/// the builtin registry. The assertions therefore run in a child process whose
-/// `PATH` is an empty directory.
+/// A host that ships `/usr/bin/jobs` would pass without the builtin registry, so the assertions run with an empty `PATH`.
 #[test]
 fn builtin_commands_complete_and_highlight_as_commands() {
     if std::env::var_os(CHILD_MARKER).is_some() {

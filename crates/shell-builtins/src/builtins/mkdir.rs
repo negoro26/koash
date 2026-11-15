@@ -35,7 +35,6 @@ impl Builtin for Mkdir {
         &SIGNATURE
     }
 
-    /// Mirrors uutils `mkdir` (mkdir.rs): every operand is attempted and each failure reported.
     fn run(
         &self,
         session: &mut Session,
@@ -88,7 +87,6 @@ impl Builtin for Mkdir {
     }
 }
 
-/// One line per directory that was missing before, outermost first, named as the operand is.
 fn announce(out: &mut Vec<u8>, operand: &str, path: &Path, missing: &[&Path]) {
     for created in missing.iter().rev() {
         let depth = path.components().count() - created.components().count();

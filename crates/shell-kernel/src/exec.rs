@@ -158,8 +158,6 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
     Ok(child)
 }
 
-/// The first executable file called `name` on the session's `PATH`, which is where
-/// `spawn_external` would find it.
 pub fn find_executable(session: &Session, name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 

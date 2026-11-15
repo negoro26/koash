@@ -1,14 +1,3 @@
-//! The one argument parser. Every builtin that takes options declares them as
-//! `Flag`s in its `Signature` and reads the result from `Args`.
-//!
-//! Syntax follows the POSIX utility guidelines plus GNU long options, as clap does
-//! for uutils: short clusters (`-rf`), `-n5` and `-n 5`, exact long names
-//! (`--force`, never a prefix of one), `--long=value`, `--` ends options, and a lone
-//! `-` is an operand. Options and operands may be interleaved. An unknown option or
-//! a missing value is an `E_ARGS` error, so nothing runs on a mistyped flag.
-//! `Args::unknown_option` tells the two apart for the executor: an unknown option is
-//! handed to the real program of the same name, a bad value stays an error.
-
 use std::str::FromStr;
 
 use shell_value::StructuredDiagnostic;
@@ -22,10 +11,7 @@ pub struct Args<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// Options anywhere, `--` terminates them.
     Gnu,
-    /// POSIX `echo`: options only before the first operand, and a dash word that is not
-    /// entirely made of known flags is an operand, `--` included.
     Leading,
 }
 
@@ -54,7 +40,6 @@ enum Parsed<'a> {
 }
 
 enum Rejected {
-    /// As the user typed it: `-h` or `--author`.
     UnknownOption(String),
     Invalid(StructuredDiagnostic),
 }
@@ -84,8 +69,6 @@ impl<'a> Args<'a> {
         Self::parse_with(sig, args, Mode::Gnu).map_err(|rejected| rejected.into_diagnostic(sig))
     }
 
-    /// The first option in `args` that `sig` does not declare. A declared option with a
-    /// missing or invalid value is not unknown.
     pub fn unknown_option(sig: &'static Signature, args: &'a [String]) -> Option<String> {
         if !args.iter().any(|a| a.len() > 1 && a.starts_with('-')) {
             return None;
@@ -96,7 +79,6 @@ impl<'a> Args<'a> {
         }
     }
 
-    /// `echo`-style parsing: see `Mode::Leading`.
     pub fn parse_leading(
         sig: &'static Signature,
         args: &'a [String],
@@ -144,12 +126,10 @@ impl<'a> Args<'a> {
         self.given.iter().any(|(flag, _)| flag.is(key))
     }
 
-    /// The value of the last occurrence of a valued flag.
     pub fn value(&self, key: &str) -> Option<&'a str> {
         self.values(key).last()
     }
 
-    /// Every value of a repeatable valued flag, in command-line order.
     pub fn values(&self, key: &str) -> impl Iterator<Item = &'a str> {
         self.given
             .iter()
@@ -157,7 +137,6 @@ impl<'a> Args<'a> {
             .filter_map(|(_, value)| *value)
     }
 
-    /// Which of `keys` was given last. Models flags that override each other (`-L`/`-P`, `-n`/`-f`).
     pub fn last_of<'k>(&self, keys: &[&'k str]) -> Option<&'k str> {
         self.given
             .iter()
@@ -165,7 +144,6 @@ impl<'a> Args<'a> {
             .find_map(|(flag, _)| keys.iter().copied().find(|k| flag.is(k)))
     }
 
-    /// The last value of `key` parsed as `T`; an unparsable value is a usage error.
     pub fn number<T: FromStr>(
         &self,
         sig: &Signature,

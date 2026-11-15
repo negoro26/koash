@@ -1,10 +1,3 @@
-//! Filesystem operations shared by `rm`, `cp`, and `mv`.
-//!
-//! Each function does the work for one operand, never follows a symlink unless the
-//! caller asked for it, and reports every failure through `Session::report` before
-//! carrying on with the next entry. The return value says whether everything worked.
-//! Undo capture (`record_preimage`, `record_tree`) runs before each mutation.
-
 use std::fs::{self, FileTimes, Metadata};
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, symlink};
@@ -15,7 +8,6 @@ use shell_value::StructuredDiagnostic;
 
 use super::common::resolve_path;
 
-/// An OS error as the coreutils print it, without Rust's ` (os error N)` suffix.
 pub(super) fn describe(err: &io::Error) -> String {
     let text = err.to_string();
     match text.find(" (os error ") {
@@ -33,7 +25,6 @@ pub(super) fn is_dir(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_dir())
 }
 
-/// Whether both paths name the same inode, resolving symlinks only when `follow` is set.
 pub(super) fn same_file(a: &Path, b: &Path, follow: bool) -> bool {
     let stat = |p: &Path| {
         if follow {
@@ -48,8 +39,6 @@ pub(super) fn same_file(a: &Path, b: &Path, follow: bool) -> bool {
     }
 }
 
-/// Resolves a path that may not exist yet: the deepest existing ancestor is
-/// canonicalized and the missing tail is appended.
 fn resolve_future(path: &Path) -> PathBuf {
     let mut missing = Vec::new();
     let mut base = path;
@@ -68,7 +57,6 @@ fn resolve_future(path: &Path) -> PathBuf {
     }
 }
 
-/// Whether `dest` lies inside the directory `src` (or is it).
 pub(super) fn is_inside(src: &Path, dest: &Path) -> bool {
     match src.canonicalize() {
         Ok(real_src) => resolve_future(dest).starts_with(real_src),
@@ -76,8 +64,6 @@ pub(super) fn is_inside(src: &Path, dest: &Path) -> bool {
     }
 }
 
-/// Names the root `path` is when it is one koa never removes: the filesystem root, or the
-/// session's workspace root.
 pub(super) fn protected_root(session: &Session, path: &Path) -> Option<&'static str> {
     let real = path.canonicalize().ok()?;
     if real.parent().is_none() {
@@ -88,8 +74,6 @@ pub(super) fn protected_root(session: &Session, path: &Path) -> Option<&'static 
         None
     }
 }
-
-// ---------------------------------------------------------------- removal
 
 pub(super) fn remove_leaf(
     session: &mut Session,
@@ -139,8 +123,6 @@ pub(super) fn remove_empty_dir(
     }
 }
 
-/// Removes a directory and everything below it. Symlinks are unlinked, never entered.
-/// A failing entry is reported and the walk goes on; a directory that kept an entry stays.
 pub(super) fn remove_tree(
     session: &mut Session,
     code: &'static str,
@@ -188,17 +170,13 @@ pub(super) fn remove_tree(
     ok && remove_empty_dir(session, code, path, label, verbose, out)
 }
 
-// ---------------------------------------------------------------- copying
-
 #[derive(Clone, Copy)]
 pub(super) struct CopyOpts {
     pub recursive: bool,
     pub no_clobber: bool,
     pub force: bool,
     pub preserve: bool,
-    /// Follow every symlink (`-L`).
     pub dereference: bool,
-    /// Follow only symlinks named on the command line (cp without `-r`).
     pub follow_operands: bool,
     pub verbose: bool,
 }
@@ -207,11 +185,9 @@ struct CopyCtx<'a> {
     code: &'static str,
     opts: CopyOpts,
     out: &'a mut Vec<u8>,
-    /// (dev, ino) of the directories being copied, to stop a symlink cycle under `-L`.
     walking: Vec<(u64, u64)>,
 }
 
-/// Copies one operand. `src_label` and `dest_label` are how the user wrote them.
 pub(super) fn copy_operand(
     session: &mut Session,
     code: &'static str,
@@ -427,10 +403,6 @@ fn copy_symlink(src: &Path, dest: &Path, replace: bool) -> io::Result<()> {
     symlink(target, dest)
 }
 
-/// Copies the contents the way coreutils `cp` does without `-p`: a new file gets the source's
-/// permission bits minus setuid, setgid and sticky, filtered by the umask, and an existing
-/// destination keeps its own mode. With `force`, a destination that cannot be opened is removed
-/// and the copy retried, as `cp -f` does.
 fn copy_regular(src: &Path, dest: &Path, force: bool) -> io::Result<()> {
     match copy_contents(src, dest) {
         Err(e) if force && e.kind() == io::ErrorKind::PermissionDenied => {
@@ -484,9 +456,6 @@ fn preserve_attributes(
     }
 }
 
-// ---------------------------------------------------------------- copy and move operands
-
-/// One source and the path it lands on, with both as the user wrote them.
 pub(super) struct Transfer {
     pub src: PathBuf,
     pub dest: PathBuf,
@@ -494,8 +463,6 @@ pub(super) struct Transfer {
     pub dest_label: String,
 }
 
-/// Resolves `SRC... DST` operands the way `cp` and `mv` do: with one source `DST` is the
-/// new name, unless it is a directory, and with several sources it must be a directory.
 pub(super) fn plan_transfers(
     session: &Session,
     cmd: &str,
@@ -560,7 +527,6 @@ pub(super) struct MoveOpts {
     pub verbose: bool,
 }
 
-/// Renames `src` onto `dest`; across filesystems it copies, then removes the source.
 pub(super) fn move_operand(
     session: &mut Session,
     code: &'static str,

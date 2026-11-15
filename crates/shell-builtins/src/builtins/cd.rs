@@ -32,7 +32,6 @@ static SIGNATURE: Signature = Signature {
 
 const ENOTDIR: i32 = 20;
 
-/// A directory to try, and whether a `CDPATH` entry other than the current directory produced it.
 struct Candidate {
     path: PathBuf,
     from_cdpath: bool,
@@ -43,10 +42,6 @@ impl Builtin for Cd {
         &SIGNATURE
     }
 
-    /// The new directory is the logical path, `..` folded away lexically (fish cd.rs:85,
-    /// `normalize_path`), unless `-P` resolves it. `CDPATH` entries become a candidate list that is
-    /// tried in order (fish path.rs:334-373, `path_apply_cdpath`). `cd -` and a `CDPATH` hit print
-    /// the directory they chose.
     fn run(
         &self,
         session: &mut Session,
@@ -161,7 +156,6 @@ fn candidates(session: &Session, dir: &str, search_cdpath: bool) -> Vec<Candidat
         .collect()
 }
 
-/// Folds `.` and `..` away without touching the filesystem.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {

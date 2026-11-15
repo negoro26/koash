@@ -22,7 +22,6 @@ use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 record! { struct FileRow<'a> { file: &'a str } }
 record! { struct CountRow<'a> { file: &'a str, count: u64 } }
 
-/// What a search collects: matching lines, the files that match, or a count per file.
 enum Found {
     Lines(HashlineRows),
     Files(Rows<FileRow<'static>>),

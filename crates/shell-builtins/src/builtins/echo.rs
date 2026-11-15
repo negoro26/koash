@@ -23,8 +23,6 @@ impl Builtin for Echo {
         &SIGNATURE
     }
 
-    /// POSIX `echo`: `-n` counts only before the first word, and any other dash word,
-    /// `--` included, is printed as text.
     fn run(
         &self,
         _session: &mut Session,

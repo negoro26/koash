@@ -11,8 +11,7 @@ struct KillState {
     groups: Mutex<Vec<Pid>>,
 }
 
-/// Groups stay tracked until the output readers finish, not just the direct children: surviving members hold
-/// the readers open. Linux never reuses a pid while it is a live pgid, so `killpg` cannot hit a stranger.
+/// Linux never reuses a pid while it is a live pgid, so `killpg` on a tracked group cannot hit a stranger.
 #[derive(Debug, Clone, Default)]
 pub struct KillSwitch(Arc<KillState>);
 

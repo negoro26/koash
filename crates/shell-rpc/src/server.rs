@@ -439,7 +439,6 @@ impl RpcServer {
                 return respond(writer, id, Err(diag)).await;
             }
             None => {
-                // The executor still holds the session and returns it to its slot when it finishes.
                 let completed = RpcEvent::Completed {
                     id,
                     exit_code: TIMEOUT_EXIT_CODE,
@@ -873,8 +872,7 @@ async fn send_output<W: AsyncWrite + Unpin>(
         }
     }
 
-    // Chunks are merged per kind, so the interleaving is lost. Notices such as "running the
-    // real ls" must precede the output they announce.
+    // Chunks are merged per kind, so notices like "running the real ls" must be sent before the output they announce.
     if !out.stderr.is_empty() {
         let text = match redact_env {
             Some(env) => redact_secrets(&out.stderr, env),

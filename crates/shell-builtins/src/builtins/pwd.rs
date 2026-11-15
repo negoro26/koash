@@ -30,7 +30,6 @@ impl Builtin for Pwd {
         &SIGNATURE
     }
 
-    /// `session.cwd` is the logical directory: `cd` stores it as typed and never resolves symlinks.
     fn run(
         &self,
         session: &mut Session,

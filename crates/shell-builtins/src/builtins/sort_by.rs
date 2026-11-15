@@ -59,9 +59,6 @@ impl Builtin for SortBy {
     }
 }
 
-/// Numbers compare as numbers, everything else as text, with non-strings as the empty string.
-/// A time or a mode compares as the text it prints. Mixed columns therefore have no total order;
-/// the sort is stable over whatever it yields.
 struct SortKey<'a> {
     num: Option<f64>,
     text: &'a str,

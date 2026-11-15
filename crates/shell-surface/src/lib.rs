@@ -81,9 +81,6 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
     }
 }
 
-/// The cell as the preview prints it: JSON text for everything but strings, so a float shows as `2.0`.
-/// A non-finite float was `null` in the old record map and printed as nothing.
-/// A repeated column is read by position; its copies hold the same value, since only `select` repeats one.
 fn preview_text(cell: Datum<'_>) -> String {
     match cell {
         Datum::Null => String::new(),

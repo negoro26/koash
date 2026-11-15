@@ -32,8 +32,6 @@ impl Builtin for Mv {
         &SIGNATURE
     }
 
-    /// Mirrors uutils `mv` (mv.rs): `mv SRC... DIR` and `mv SRC DST`, a cross-device rename
-    /// falls back to copy and remove, and a directory never moves into itself.
     fn run(
         &self,
         session: &mut Session,

@@ -3,7 +3,6 @@ use std::io::Write;
 
 use crate::typed::{FileMode, ShortText, UnixTime};
 
-/// One cell as callers read it. Storage may change; this view does not.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum Datum<'a> {
@@ -13,11 +12,8 @@ pub enum Datum<'a> {
     UInt(u64),
     Float(f64),
     Str(&'a str),
-    /// The compact text of a JSON array or object.
     Json(&'a str),
-    /// A moment, which reads as an ISO 8601 UTC string wherever a string is expected.
     Time(UnixTime),
-    /// Permission bits, which read as an octal string wherever a string is expected.
     Mode(FileMode),
 }
 
@@ -26,8 +22,6 @@ impl<'a> Datum<'a> {
         matches!(self, Datum::Null)
     }
 
-    /// The text of a string cell. Numbers, booleans and nested JSON are not strings, and a time
-    /// or a mode has no stored text to borrow: read it through [`Datum::short_text`].
     pub fn as_str(&self) -> Option<&'a str> {
         match *self {
             Datum::Str(s) => Some(s),
@@ -35,7 +29,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// The text of a time or a mode, held inline.
     pub fn short_text(&self) -> Option<ShortText> {
         match *self {
             Datum::Time(time) => Some(time.text()),
@@ -53,7 +46,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// What the table and the compact format print for this cell. Null is empty.
     pub fn text<'s>(&self, scratch: &'s mut String) -> &'s str
     where
         'a: 's,
@@ -71,7 +63,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Byte length of [`Datum::text`], without formatting integers.
     pub fn text_len(&self, scratch: &mut String) -> usize {
         match *self {
             Datum::Null => 0,
@@ -87,7 +78,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Writes [`Datum::text`] and returns its byte length.
     pub fn write_text<W: Write>(&self, w: &mut W, scratch: &mut String) -> usize {
         match *self {
             Datum::UInt(u) => write_uint_stack(w, u),

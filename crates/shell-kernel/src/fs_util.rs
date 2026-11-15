@@ -1,6 +1,3 @@
-//! Filesystem primitives shared by the CoW workspace and the undo store: block-sharing
-//! file clones and the `flock` lease that marks a state directory as owned by a live process.
-
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
@@ -12,8 +9,6 @@ const FICLONE: nix::libc::c_ulong = 0x4004_9409;
 /// A directory with no lease file this young may still be under construction by its owner.
 const LEASE_GRACE: Duration = Duration::from_secs(60);
 
-/// Shares `src`'s blocks with `dst` instead of copying them. Fails where the filesystem
-/// cannot clone, such as tmpfs or across mount points. `dst` is created or truncated first.
 pub(crate) fn reflink(src: &Path, dst: &Path) -> io::Result<()> {
     let s = File::open(src)?;
     let d = OpenOptions::new()
@@ -42,8 +37,7 @@ pub(crate) enum LeaseError {
     Held,
 }
 
-/// An exclusive `flock` on `<dir>/lease.lock`. The kernel drops it when the process dies,
-/// which is how [`sweep_unleased_dirs`] tells a crashed owner from a live one.
+/// The kernel drops the lock when the process dies, which is how the sweep tells a crashed owner from a live one.
 pub(crate) struct Lease {
     _file: File,
 }
@@ -70,11 +64,7 @@ fn try_lock_exclusive(file: &File) -> bool {
     rc == 0
 }
 
-/// Removes every child directory of `parent` whose owner is gone and returns how many it
-/// removed. A child without a lease file is left alone while it is younger than
-/// [`LEASE_GRACE`], because its owner creates the directory before it takes the lease.
-/// Symlinks are never followed, so a checkout that ships `.koa/undo` as a link cannot
-/// turn the sweep into a delete of the link's target.
+/// Never follows symlinks: a checkout that ships `.koa/undo` as a link must not turn the sweep into a delete of its target.
 pub(crate) fn sweep_unleased_dirs(parent: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return 0;
@@ -100,20 +90,17 @@ pub(crate) fn sweep_unleased_dirs(parent: &Path) -> usize {
     reaped
 }
 
-/// A directory that is itself not a symlink.
 fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
 }
 
-/// `root/.koa/<child>` when neither `.koa` nor `<child>` is a symlink.
 pub(crate) fn state_subdir(root: &Path, child: &str) -> Option<PathBuf> {
     let state = root.join(".koa");
     let dir = state.join(child);
     (is_real_dir(&state) && is_real_dir(&dir)).then_some(dir)
 }
 
-/// Creates `root/.koa` with a `.gitignore` that ignores everything in it, so undo
-/// snapshots and session copies of user files never get committed by `git add -A`.
+/// The `.gitignore` keeps undo snapshots and session copies out of `git add -A`.
 pub(crate) fn state_dir(root: &Path) -> io::Result<PathBuf> {
     let dir = root.join(".koa");
     std::fs::create_dir_all(&dir)?;

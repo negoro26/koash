@@ -1,12 +1,10 @@
 use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Seconds since the Unix epoch. A column of these prints as an ISO 8601 UTC string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnixTime(pub u64);
 
 impl UnixTime {
-    /// `None` for a time before 1970 and for one the filesystem cannot report.
     pub fn from_system(time: io::Result<SystemTime>) -> Option<Self> {
         let since = time.ok()?.duration_since(UNIX_EPOCH).ok()?;
         Some(UnixTime(since.as_secs()))
@@ -32,7 +30,6 @@ impl UnixTime {
     }
 }
 
-/// Unix permission bits. A column of these prints as an octal string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMode(pub u32);
 
@@ -55,11 +52,9 @@ impl FileMode {
     }
 }
 
-/// A value that is the empty string when it is missing, instead of null.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrBlank<T>(pub Option<T>);
 
-/// Up to 31 bytes of ASCII text held inline, so formatting a time or a mode never allocates.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ShortText {
     len: u8,

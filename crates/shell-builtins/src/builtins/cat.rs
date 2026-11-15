@@ -43,9 +43,6 @@ impl Builtin for Cat {
         operands_read_stdin(&SIGNATURE, args)
     }
 
-    /// Operands are files, or `-` for standard input, which is read once at its position.
-    /// Nothing requires UTF-8: raw output is byte-exact and Hashline text is lossy only where
-    /// the bytes are not valid. A file that cannot be read is reported and the rest still print.
     fn run(
         &self,
         session: &mut Session,

@@ -27,7 +27,6 @@ pub(crate) fn batch_from_raw_bytes(bytes: &[u8]) -> Result<RecordBatch, Structur
     RecordBatch::from_maps(records)
 }
 
-/// Writes one parsed JSON value as a cell. Arrays and objects are kept as compact text.
 pub(crate) fn put_value(out: &mut RowSink<'_>, value: serde_json::Value) {
     match value {
         serde_json::Value::Null => out.put(Datum::Null),
@@ -64,7 +63,6 @@ impl Serialize for Datum<'_> {
     }
 }
 
-/// Column indices ordered by name, equal names in column order.
 pub(crate) fn name_order(batch: &RecordBatch) -> Vec<usize> {
     let columns = batch.schema().columns();
     let mut order: Vec<usize> = (0..columns.len()).collect();
@@ -72,8 +70,6 @@ pub(crate) fn name_order(batch: &RecordBatch) -> Vec<usize> {
     order
 }
 
-/// The column that supplies each JSON key of a row, in key order: one per distinct name, the last
-/// non-null cell among columns of that name, and none for a name whose cells are all null.
 pub(crate) fn visible_columns<'a>(
     columns: &'a [Column],
     order: &'a [usize],
@@ -110,8 +106,6 @@ impl Serialize for JsonRow<'_> {
     }
 }
 
-/// The rows of one or more batches as JSON objects with sorted keys and no null cells.
-/// Serializes as an array.
 #[derive(Debug, Clone, Copy)]
 pub struct Records<'a> {
     batches: &'a [RecordBatch],
@@ -126,7 +120,6 @@ impl<'a> Records<'a> {
         }
     }
 
-    /// Only the first `rows` records.
     pub fn take(self, rows: usize) -> Self {
         Self {
             limit: self.limit.min(rows),
@@ -146,7 +139,6 @@ impl<'a> Records<'a> {
         self.len() == 0
     }
 
-    /// Each record as compact JSON text.
     pub fn json_lines(&self) -> impl Iterator<Item = String> + 'a {
         self.batches
             .iter()
@@ -189,7 +181,6 @@ impl RecordBatch {
         Records::of(slice::from_ref(self))
     }
 
-    /// One compact JSON object per line.
     pub fn write_ndjson(&self, out: &mut Vec<u8>) {
         let order = name_order(self);
         for row in self.rows() {
@@ -299,7 +290,6 @@ mod tests {
         );
     }
 
-    // The deleted `to_maps`, kept as the oracle the encoder must agree with.
     fn reference(batch: &RecordBatch) -> Vec<StructuredRecord> {
         if batch.ncols() == 0 {
             return Vec::new();

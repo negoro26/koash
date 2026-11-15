@@ -1,15 +1,9 @@
-//! On-disk home of undo snapshots: `<root>/.koa/undo/<session id>/`. The directory sits in
-//! the session's start directory so that, in the common case, a reflink can share blocks with
-//! the file it protects instead of copying them.
-
 use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use crate::fs_util::{Lease, LeaseError, reflink, state_dir};
 
-/// A saved copy of one file. Dropping it deletes the copy, so a record that is evicted,
-/// replaced, or left over when the session ends cleans up after itself.
 #[derive(Debug)]
 pub struct Snapshot {
     path: PathBuf,
@@ -21,7 +15,6 @@ impl Snapshot {
         &self.path
     }
 
-    /// Bytes that had to be written because the filesystem could not share blocks.
     pub(crate) fn copied_bytes(&self) -> u64 {
         self.copied
     }
@@ -34,13 +27,10 @@ impl Drop for Snapshot {
 }
 
 pub(crate) enum SnapshotError {
-    /// The file could only be copied and the copy would exceed the byte budget.
     OverBudget,
     Io(io::Error),
 }
 
-/// Creates its directory on the first snapshot, so a session that never mutates a file
-/// leaves nothing on disk.
 pub(crate) struct UndoStore {
     root: PathBuf,
     session_id: String,
@@ -63,8 +53,6 @@ impl UndoStore {
         }
     }
 
-    /// Saves `src`, whose length is `len`. Block sharing is free; a plain copy is refused when
-    /// `len` exceeds `copy_budget`.
     pub(crate) fn snapshot(
         &mut self,
         src: &Path,

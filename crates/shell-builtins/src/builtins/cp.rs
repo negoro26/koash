@@ -33,8 +33,6 @@ impl Builtin for Cp {
         &SIGNATURE
     }
 
-    /// Mirrors uutils `cp` (cp.rs): `cp SRC... DIR` and `cp SRC DST`, symlinks copied as symlinks
-    /// under `-r` unless `-L`, and an existing target replaced unless `-n`.
     fn run(
         &self,
         session: &mut Session,

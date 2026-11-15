@@ -54,8 +54,6 @@ impl Builtin for Ls {
         &SIGNATURE
     }
 
-    /// A directory operand is listed, and so is a symlink that points at one (uutils ls.rs:848-851,
-    /// `DirArgs`). Every operand is attempted; an unreadable one is reported, not dropped.
     fn run(
         &self,
         session: &mut Session,
@@ -144,7 +142,6 @@ fn list_dir(
     }
 }
 
-/// `path` supplies the extension; `name` is what the row calls the entry.
 fn push_ls_row(rows: &mut Rows<LsRow<'static>>, name: &str, path: &Path, meta: &std::fs::Metadata) {
     rows.push(&LsRow {
         ext: path.extension().and_then(|e| e.to_str()).unwrap_or(""),

@@ -1,9 +1,5 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-//! A builtin owns the options in its signature. An option outside it runs the real
-//! program of the same name when the session's PATH has one. Every case runs `koa`
-//! in its own scratch directory and names every path absolutely.
-
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

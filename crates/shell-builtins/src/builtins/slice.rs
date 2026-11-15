@@ -1,11 +1,3 @@
-//! The engine behind `head` and `tail`: select the first or last N lines or bytes of
-//! files, of standard input, or of an upstream table.
-//!
-//! Raw output is byte-exact. A regular file is never read past what the selection needs:
-//! `head` stops after N lines, `tail` scans backwards from the end in chunks, as uutils
-//! `tail/src/chunks.rs` (`ReverseChunks`) does. Hashline output also needs the line
-//! numbers of a tail, so it counts the newlines before the window without keeping them.
-
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 
@@ -20,7 +12,6 @@ use crate::builtin::{Flag, Signature};
 const CHUNK: usize = 64 * 1024;
 const DEFAULT_LINES: u64 = 10;
 
-/// Flags shared by `head` and `tail`.
 pub(super) const FLAGS: [Flag; 5] = [
     Flag::valued('n', "lines", "number of lines").numeric(),
     Flag::valued('c', "bytes", "number of bytes; the output is raw"),
@@ -45,7 +36,6 @@ enum Unit {
 enum Window {
     First(u64),
     Last(u64),
-    /// `tail -n +N`: everything from the 1-based position N on.
     From(u64),
 }
 
@@ -155,7 +145,6 @@ pub(super) fn run(
     })
 }
 
-/// No operands: the upstream table keeps its rows, anything else is treated as bytes.
 fn from_input(input: Value, unit: Unit, window: Window) -> Result<Value, StructuredDiagnostic> {
     match input {
         Value::Empty => Ok(Value::Empty),
@@ -259,7 +248,6 @@ impl Source {
         }
     }
 
-    /// The selected bytes and the offset they start at.
     fn select(&mut self, unit: Unit, window: Window) -> io::Result<(u64, Vec<u8>)> {
         self.with(|s, len| select(s, len, unit, window))
     }
@@ -306,7 +294,6 @@ fn select(
     Ok((start, bytes))
 }
 
-/// Offset of the first byte of the last `n` lines, found by reading chunks from the end.
 fn last_lines_start(s: &mut dyn ReadSeek, len: u64, n: u64) -> io::Result<u64> {
     if n == 0 {
         return Ok(len);
@@ -340,7 +327,6 @@ fn last_lines_start(s: &mut dyn ReadSeek, len: u64, n: u64) -> io::Result<u64> {
     Ok(0)
 }
 
-/// Offset just past the first `lines` lines.
 fn skip_lines(s: &mut dyn ReadSeek, lines: u64) -> io::Result<u64> {
     let mut reader = BufReader::new(s);
     let mut offset = 0u64;

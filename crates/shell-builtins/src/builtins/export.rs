@@ -24,8 +24,6 @@ impl Builtin for Export {
         &SIGNATURE
     }
 
-    /// `NAME=VALUE` sets the variable; a bare `NAME` exports one that exists. The session keeps
-    /// no unexported variables, so a bare name needs no work, only a valid identifier.
     fn run(
         &self,
         session: &mut Session,

@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-//! A typed column must behave exactly like a string column that holds the same text.
-
 use shell_value::{
     Datum, DynRows, FileMode, OrBlank, RecordBatch, Rows, Schema, UnixTime, batch_to_compact_sigil,
     record, render_batch_table,

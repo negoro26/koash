@@ -4,9 +4,7 @@ use crate::cell::{Cell, span};
 use crate::typed::{FileMode, OrBlank, UnixTime};
 use crate::{ColType, Column, Datum, RecordBatch, Schema, StructuredDiagnostic};
 
-/// A value that knows how to write itself as one cell.
 pub trait CellValue {
-    /// How a column of these values reads. [`RowSink::put`] stores the value so that it does.
     const TYPE: ColType = ColType::Any;
 
     fn put(&self, row: &mut RowSink<'_>);
@@ -63,20 +61,12 @@ impl<T: CellValue> CellValue for OrBlank<T> {
     }
 }
 
-/// A row shape fixed at compile time. Only [`record!`] implements it, so the columns and the
-/// order cells are written in come from one list.
 pub trait Record {
-    /// The same row with every borrow `'static`, so a [`Rows`] can outlive the data each row borrows.
     type Table: Record + 'static;
     const COLUMNS: &'static [Column];
     fn write(&self, row: &mut RowSink<'_>);
 }
 
-/// Declares a [`Record`]: a struct whose field order is the column order.
-///
-/// ```ignore
-/// record! { pub struct CountRow<'a> { file: &'a str, count: u64 } }
-/// ```
 #[macro_export]
 macro_rules! record {
     ($vis:vis struct $name:ident<$life:lifetime> { $($field:ident: $ty:ty),+ $(,)? }) => {
@@ -165,8 +155,6 @@ impl Builder {
     }
 }
 
-/// Where one row's cells go. A row shorter than the schema is padded with nulls and cells past
-/// the end are dropped, so a batch is always rectangular.
 pub struct RowSink<'b> {
     builder: &'b mut Builder,
     start: usize,
@@ -203,7 +191,6 @@ impl RowSink<'_> {
         }
     }
 
-    /// A string cell. When it equals the cell above it, both share one span of the arena.
     pub fn put_str(&mut self, s: &str) {
         let above = self.above();
         let builder = &mut *self.builder;
@@ -219,8 +206,6 @@ impl RowSink<'_> {
         self.push(cell);
     }
 
-    /// The type of the column this cell goes into. A `UInt` is only a number in an untyped column,
-    /// because a typed column reads every `UInt` as a time or a mode.
     fn ty(&self) -> ColType {
         if !self.builder.typed {
             return ColType::Any;
@@ -246,7 +231,6 @@ impl RowSink<'_> {
     }
 }
 
-/// Writes rows of one [`Record`] type into a batch.
 pub struct Rows<T> {
     builder: Builder,
     table: PhantomData<fn() -> T>,
@@ -268,14 +252,10 @@ impl<T: Record> Rows<T> {
         self.builder.push_row(|sink| row.write(sink));
     }
 
-    /// The batch, which keeps its schema when it has no rows.
     pub fn finish(self) -> Result<RecordBatch, StructuredDiagnostic> {
         self.builder.finish()
     }
 
-    /// Like [`Rows::finish`], except that a batch with no rows has no columns either. That is how
-    /// every builtin that built its table from maps reported an empty result, and what `grep`
-    /// downstream of it relies on.
     pub fn finish_or_empty(self) -> Result<RecordBatch, StructuredDiagnostic> {
         self.builder.finish_or_empty()
     }
@@ -287,7 +267,6 @@ impl<T: Record> Default for Rows<T> {
     }
 }
 
-/// Writes rows into a batch whose columns are only known at run time.
 pub struct DynRows {
     builder: Builder,
 }
@@ -303,7 +282,6 @@ impl DynRows {
         self.builder.push_row(fill);
     }
 
-    /// The batch, which keeps its schema when it has no rows.
     pub fn finish(self) -> Result<RecordBatch, StructuredDiagnostic> {
         self.builder.finish()
     }

@@ -1,8 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-//! `where` and `sort-by` treat a typed column exactly like a string column holding its text,
-//! and `ls` lists a modification time before 1970 as an empty string.
-
 use std::fs::File;
 use std::time::{Duration, SystemTime};
 

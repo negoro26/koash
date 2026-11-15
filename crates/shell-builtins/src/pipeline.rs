@@ -118,7 +118,6 @@ fn command_name(session: &Session, cmd: &Command) -> Option<String> {
 }
 
 fn skips_tx(name: &str) -> bool {
-    // `tx_log`, the alias of `tx-log`, has always opened its own ledger entry.
     lookup(name).is_some_and(|b| {
         let sig = b.signature();
         sig.tx == TxPolicy::Skip && sig.name == name
@@ -129,9 +128,6 @@ fn stage_builtin(name: &str) -> Option<&'static dyn Builtin> {
     lookup(name).filter(|b| b.signature().placement == Placement::Any)
 }
 
-/// A builtin owns exactly the options its signature declares. When the command line uses
-/// another one and the session's `PATH` has a program of that name, the real program runs
-/// the stage instead. The first time per session the user is told, once per command.
 fn defers_to_executable(
     session: &mut Session,
     builtin: &dyn Builtin,

@@ -1,14 +1,11 @@
 use std::fmt;
 use std::sync::Arc;
 
-/// What a column's cells mean. A cell stores a number, and the column says how it reads as text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColType {
     Any,
-    /// Seconds since the Unix epoch, read as an ISO 8601 UTC string.
     Timestamp,
-    /// Unix permission bits, read as an octal string.
     Mode,
 }
 
@@ -18,7 +15,6 @@ enum Name {
     Shared(Arc<str>),
 }
 
-/// One column of a [`Schema`]. Cloning never copies the name.
 #[derive(Debug, Clone)]
 pub struct Column {
     name: Name,
@@ -49,8 +45,6 @@ impl Column {
     }
 }
 
-/// The index of the column called `name` in a static column list. A name that is not there fails
-/// const evaluation, so a misspelled sort key stops the build.
 #[allow(clippy::panic)]
 pub const fn column_index(columns: &[Column], name: &str) -> usize {
     let mut at = 0;
@@ -99,8 +93,6 @@ enum Columns {
     Shared(Arc<[Column]>),
 }
 
-/// The ordered columns of a batch. A builtin with a fixed row declares them once as a `static`
-/// and every batch it makes shares that slice; names only known at run time share one `Arc`.
 #[derive(Debug, Clone)]
 pub struct Schema(Columns);
 
@@ -147,7 +139,6 @@ impl Schema {
         self.columns().iter().position(|c| c.name() == name)
     }
 
-    /// The listed columns in the listed order. A column listed twice appears twice.
     pub fn project(&self, cols: &[usize]) -> Self {
         let columns = self.columns();
         Schema(Columns::Shared(

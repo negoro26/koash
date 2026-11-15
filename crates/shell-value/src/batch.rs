@@ -9,7 +9,6 @@ pub struct RecordBatch {
     text: String,
 }
 
-/// One row of a batch, read through [`Datum`].
 #[derive(Debug, Clone, Copy)]
 pub struct Row<'a> {
     cells: &'a [Cell],
@@ -31,7 +30,6 @@ impl<'a> Row<'a> {
     }
 }
 
-/// A permutation of a batch's rows, made by [`RecordBatch::order_by`].
 #[derive(Debug)]
 pub struct RowOrder(Vec<usize>);
 
@@ -102,7 +100,6 @@ impl RecordBatch {
             })
     }
 
-    /// Keeps the rows `keep` accepts, in order. Cells move inside the batch and no text is copied.
     pub fn retain_rows(&mut self, mut keep: impl FnMut(Row<'_>) -> bool) {
         let ncols = self.schema.len();
         let mut write = 0;
@@ -124,7 +121,6 @@ impl RecordBatch {
         self.cells.truncate(write * ncols);
     }
 
-    /// The row order that sorts by `key`, stable. `key` runs once per row.
     pub fn order_by<'s, K: Ord>(&'s self, mut key: impl FnMut(Row<'s>) -> K) -> RowOrder {
         let mut keyed: Vec<(K, usize)> = self
             .rows()
@@ -135,8 +131,6 @@ impl RecordBatch {
         RowOrder(keyed.into_iter().map(|(_, idx)| idx).collect())
     }
 
-    /// Reorders the rows. An order made for a batch of another height is ignored, because an
-    /// out-of-range row would abort the shell.
     pub fn take_rows(&mut self, order: RowOrder) {
         let ncols = self.schema.len();
         if order.0.len() != self.nrows() {
@@ -149,7 +143,6 @@ impl RecordBatch {
         self.cells = cells;
     }
 
-    /// Keeps the listed columns in the listed order. A column listed twice appears twice.
     pub fn select_columns(&mut self, cols: &[usize]) {
         let ncols = self.schema.len();
         let nrows = self.nrows();
@@ -188,12 +181,6 @@ impl RecordBatch {
         rows.finish()
     }
 
-    /// The first `rows` rows of `batches` as one batch.
-    ///
-    /// The columns are the names that have a non-null cell in those rows, in the order a walk over
-    /// the rows meets them, each row visited in name order. Cells follow the JSON rule: a name
-    /// repeated in a batch keeps its last non-null cell. A row with no non-null cell stays as a row
-    /// of nulls while any column survives, and vanishes with the columns when none does.
     pub fn merged(batches: &[RecordBatch], rows: usize) -> Self {
         let mut names: Vec<Column> = Vec::new();
         let mut left = rows;
@@ -229,7 +216,6 @@ impl RecordBatch {
                 for col in json::visible_columns(batch.schema.columns(), &order, row) {
                     if let Some(at) = slot[col] {
                         cells[at] = match row.get(col) {
-                            // The RPC compact path used to round-trip through JSON, which has no NaN.
                             Datum::Float(f) if !f.is_finite() => Datum::Null,
                             other => other,
                         };

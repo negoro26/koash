@@ -819,7 +819,6 @@ fn rpc_timeout_kills_group_members_that_outlive_the_direct_child() {
     let mut rpc = RpcClient::start(&dir);
     let sid = rpc.create_session();
     let start = Instant::now();
-    // The pid in the marker keeps concurrent test runs from seeing each other's sleepers.
     let marker = format!("30.{}", std::process::id());
     let lines = exec_lines(
         &mut rpc,
@@ -1296,8 +1295,6 @@ fn a_file_over_the_copy_budget_is_undoable_exactly_when_the_filesystem_can_refli
     }
 }
 
-/// An isolated fork's workspace root is the one directory `rm -r` must never take, however it is
-/// spelled. The session runs inside a scratch directory, so a regression only empties that.
 #[test]
 fn rm_recursive_refuses_the_workspace_root_of_an_isolated_fork() {
     let scratch = scratch_dir("rm-workspace-root");

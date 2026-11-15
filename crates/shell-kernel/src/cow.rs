@@ -140,7 +140,6 @@ impl CowWorkspace {
         Ok(merged)
     }
 
-    /// Removes the session directories and undo stores that a crashed koa left under `root`.
     pub fn sweep_orphans(root: &Path) -> usize {
         ["sessions", "undo"]
             .into_iter()

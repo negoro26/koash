@@ -1,11 +1,5 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-//! Black-box checks that the file builtins behave like the tools they replace.
-//! Every case runs the `koa` binary inside its own scratch directory and names
-//! every path absolutely, so a regression can only touch that directory.
-//! Reference sources are uutils coreutils (`src/uu/<tool>/src`), fish-shell
-//! `src/builtins/cd.rs` and `src/path.rs`.
-
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
@@ -154,16 +148,11 @@ fn run(cwd: &Path, script: &str) -> Run {
     koa(cwd, script).run()
 }
 
-/// Runs with no program on PATH, so an option a builtin lacks is the builtin's own usage error
-/// and not a hand-off to the real tool.
 fn run_builtins_only(s: &Scratch, script: &str) -> Run {
     let empty = s.mkdir("no-programs");
     koa(&s.0, script).env("PATH", empty.to_string_lossy()).run()
 }
 
-// ---------------------------------------------------------------- rm
-
-/// uutils rm.rs:826-840 (`handle_dir`): a directory without -r or -d is "Is a directory".
 #[test]
 fn rm_force_long_option_keeps_a_directory_without_recursive() {
     let s = Scratch::new("rm-force-dir");
@@ -209,7 +198,6 @@ fn rm_recursive_removes_the_tree_and_dir_flag_only_empty_directories() {
     assert!(s.exists("full/f"));
 }
 
-/// uutils rm.rs:581-591: `symlink_metadata` decides, so a symlink is unlinked, never followed.
 #[test]
 fn rm_unlinks_symlinks_without_touching_their_targets() {
     let s = Scratch::new("rm-symlinks");
@@ -234,7 +222,6 @@ fn rm_recursive_does_not_follow_symlinks_out_of_the_tree() {
     assert_eq!(s.read("outside/f"), "keep");
 }
 
-/// uutils rm.rs:581-615: `--` ends options, so `-f` after it is a file name.
 #[test]
 fn rm_double_dash_makes_dash_names_operands() {
     let s = Scratch::new("rm-dashdash");
@@ -244,7 +231,6 @@ fn rm_double_dash_makes_dash_names_operands() {
     assert!(!s.exists("-f"));
 }
 
-/// uutils rm.rs:562-610: every operand is attempted and one diagnostic is shown per failure.
 #[test]
 fn rm_attempts_every_operand_and_exits_1_when_one_fails() {
     let s = Scratch::new("rm-accumulate");
@@ -260,7 +246,6 @@ fn rm_attempts_every_operand_and_exits_1_when_one_fails() {
     assert!(r.stderr.contains("missing"), "{}", r.stderr);
 }
 
-/// uutils rm.rs:595-605: `-f` ignores operands that do not exist, silently.
 #[test]
 fn rm_force_ignores_missing_operands_silently() {
     let s = Scratch::new("rm-force-missing");
@@ -291,9 +276,6 @@ fn rm_without_operands_is_a_usage_error() {
     assert_eq!(r.code, 2, "{}", r.stderr);
 }
 
-/// uutils rm.rs:813-824: `.` and `..` are refused, with or without a trailing slash or a
-/// leading directory. The cwd is a directory inside the scratch dir, so a regression only
-/// removes scratch files.
 #[test]
 fn rm_recursive_refuses_dot_and_dotdot() {
     let s = Scratch::new("rm-dot");
@@ -308,7 +290,6 @@ fn rm_recursive_refuses_dot_and_dotdot() {
     }
 }
 
-/// Names that merely start with dots are ordinary directories.
 #[test]
 fn rm_recursive_removes_directories_whose_names_start_with_dots() {
     let s = Scratch::new("rm-dotnames");
@@ -342,9 +323,6 @@ fn rm_verbose_names_each_removed_path() {
     );
 }
 
-// ---------------------------------------------------------------- cp
-
-/// uutils cp.rs target resolution: `cp SRC... DIR` copies every source into DIR.
 #[test]
 fn cp_copies_every_source_into_the_target_directory() {
     let s = Scratch::new("cp-many");
@@ -362,7 +340,6 @@ fn cp_copies_every_source_into_the_target_directory() {
     assert_eq!(s.read("b"), "B");
 }
 
-/// uutils cp-error-target-not-directory (locales/en-US.ftl:71).
 #[test]
 fn cp_with_many_sources_needs_a_directory_target() {
     let s = Scratch::new("cp-many-file");
@@ -402,7 +379,6 @@ fn cp_recursive_to_a_new_name_copies_the_tree() {
     assert_eq!(s.read("copy2/a/f"), "F");
 }
 
-/// uutils cp-error-omitting-directory (locales/en-US.ftl:67).
 #[test]
 fn cp_directory_without_recursive_is_omitted_with_status_1() {
     let s = Scratch::new("cp-omit");
@@ -413,7 +389,6 @@ fn cp_directory_without_recursive_is_omitted_with_status_1() {
     assert!(!s.exists("copy"));
 }
 
-/// uutils cp.rs:880 and `OverwriteMode::NoClobber` (cp.rs:2363): an existing target is left alone.
 #[test]
 fn cp_no_clobber_keeps_the_existing_target() {
     let s = Scratch::new("cp-noclobber");
@@ -437,7 +412,6 @@ fn cp_replaces_an_existing_target_by_default() {
     assert_eq!(s.read("b"), "new");
 }
 
-/// uutils cp.rs:1339 and :2625: `-f` removes a target that cannot be opened and retries.
 #[test]
 fn cp_force_replaces_a_read_only_target() {
     let s = Scratch::new("cp-force");
@@ -453,7 +427,6 @@ fn nix_is_root() -> bool {
     fs::metadata("/proc/self").is_ok_and(|m| m.uid() == 0)
 }
 
-/// uutils cp.rs `Preserve` attributes: `-p` keeps mode and mtime.
 #[test]
 fn cp_preserve_keeps_mode_and_mtime() {
     let s = Scratch::new("cp-preserve");
@@ -475,8 +448,7 @@ fn cp_preserve_keeps_mode_and_mtime() {
     assert_eq!(meta.modified().unwrap(), stamp);
 }
 
-/// coreutils cp: a new file gets the source mode filtered by the umask, and setuid bits are
-/// dropped. The sources are empty, since the kernel clears setuid on any write.
+/// The sources are empty because the kernel clears setuid on any write.
 #[test]
 fn cp_without_preserve_applies_the_umask_to_a_new_file() {
     let s = Scratch::new("cp-umask");
@@ -507,7 +479,6 @@ fn cp_without_preserve_applies_the_umask_to_a_new_file() {
     );
 }
 
-/// coreutils cp: an existing destination keeps its own mode and gets the new content.
 #[test]
 fn cp_onto_an_existing_file_keeps_its_mode() {
     let s = Scratch::new("cp-existing-mode");
@@ -545,7 +516,6 @@ fn cp_without_preserve_stamps_the_copy_with_the_current_time() {
     );
 }
 
-/// uutils cp.rs `copy_dir` copies symlinks as symlinks unless `-L` dereferences them.
 #[test]
 fn cp_recursive_copies_symlinks_as_symlinks() {
     let s = Scratch::new("cp-symlink");
@@ -571,7 +541,6 @@ fn cp_dereference_follows_symlinks() {
     assert_eq!(s.read("copy/link"), "R");
 }
 
-/// uutils cp-error-cannot-copy-directory-into-itself (locales/en-US.ftl:68).
 #[test]
 fn cp_refuses_to_copy_a_directory_into_itself() {
     let s = Scratch::new("cp-itself");
@@ -582,7 +551,6 @@ fn cp_refuses_to_copy_a_directory_into_itself() {
     assert!(!s.exists("d/sub"));
 }
 
-/// uutils cp-error-same-file (locales/en-US.ftl:57): copying a file onto itself must not truncate it.
 #[test]
 fn cp_file_onto_itself_keeps_its_content() {
     let s = Scratch::new("cp-same");
@@ -593,7 +561,6 @@ fn cp_file_onto_itself_keeps_its_content() {
     assert_eq!(s.read("a"), "precious");
 }
 
-/// A destination symlink that points at the source is the same file: writing through it would truncate the source.
 #[test]
 fn cp_onto_a_symlink_to_the_source_keeps_its_content() {
     let s = Scratch::new("cp-same-link");
@@ -640,7 +607,6 @@ fn cp_unknown_option_is_a_usage_error_not_an_operand() {
     assert_eq!(s.read("b"), "B");
 }
 
-/// Undo must still restore every target `cp` replaced.
 #[test]
 fn undo_restores_every_target_a_multi_source_cp_replaced() {
     let s = Scratch::new("cp-undo");
@@ -656,8 +622,6 @@ fn undo_restores_every_target_a_multi_source_cp_replaced() {
     assert_eq!(s.read("dst/a"), "old-a");
     assert_eq!(s.read("dst/b"), "old-b");
 }
-
-// ---------------------------------------------------------------- mv
 
 #[test]
 fn mv_moves_every_source_into_the_target_directory() {
@@ -731,7 +695,6 @@ fn mv_dash_n_and_dash_f_override_each_other_by_position() {
     assert!(!s.exists("a"));
 }
 
-/// coreutils cp: of `-n` and `-f` the last one given wins.
 #[test]
 fn cp_dash_n_and_dash_f_override_each_other_by_position() {
     let s = Scratch::new("cp-override");
@@ -745,8 +708,6 @@ fn cp_dash_n_and_dash_f_override_each_other_by_position() {
     assert_eq!(s.read("b"), "new");
 }
 
-/// uutils mv.rs refuses `mv d d/sub` ("cannot move 'd' to a subdirectory of itself"). On one
-/// filesystem the kernel also fails the rename, so the diagnostic is the only observable.
 #[test]
 fn mv_refuses_to_move_a_directory_into_itself() {
     let s = Scratch::new("mv-nested");
@@ -758,7 +719,6 @@ fn mv_refuses_to_move_a_directory_into_itself() {
     assert_eq!(s.read("d/f"), "F");
 }
 
-/// uutils mv.rs: moving a file onto itself is the same-file error and leaves it alone.
 #[test]
 fn mv_file_onto_itself_keeps_its_content() {
     let s = Scratch::new("mv-same");
@@ -793,7 +753,6 @@ fn mv_into_a_directory_replaces_an_existing_entry_of_the_same_name() {
     assert_eq!(s.read("dst/a"), "new");
 }
 
-/// uutils mv.rs `rename_with_fallback`: EXDEV falls back to copy and remove.
 #[test]
 fn mv_across_filesystems_falls_back_to_copy_and_remove() {
     let s = Scratch::new("mv-xdev");
@@ -845,9 +804,6 @@ fn undo_restores_every_source_and_target_of_a_multi_source_mv() {
     assert!(!s.exists("dst/b"));
 }
 
-// ---------------------------------------------------------------- mkdir
-
-/// uutils mkdir.rs: every operand is attempted, one diagnostic per failure.
 #[test]
 fn mkdir_creates_the_other_operands_when_one_fails() {
     let s = Scratch::new("mkdir-accumulate");
@@ -905,9 +861,6 @@ fn mkdir_without_operands_is_a_usage_error() {
     assert_eq!(run(&s.0, "mkdir").code, 2);
 }
 
-// ---------------------------------------------------------------- cat
-
-/// A lone `-` is the standard input operand, read once in its position.
 #[test]
 fn cat_dash_operand_reads_stdin_between_files() {
     let s = Scratch::new("cat-dash");
@@ -989,7 +942,6 @@ fn cat_directory_operand_is_an_error() {
     assert!(r.stderr.contains("Is a directory"), "{}", r.stderr);
 }
 
-/// uutils cat.rs `-n`: number all output lines.
 #[test]
 fn cat_raw_number_flag_numbers_the_lines() {
     let s = Scratch::new("cat-n");
@@ -1008,9 +960,6 @@ fn cat_unknown_option_is_a_usage_error() {
     assert!(r.stderr.contains("-Z"), "{}", r.stderr);
 }
 
-// ---------------------------------------------------------------- head / tail
-
-/// uutils head.rs raw copy: bytes are written untouched, CRLF and a missing final newline included.
 #[test]
 fn head_raw_is_byte_exact() {
     let s = Scratch::new("head-bytes");
@@ -1080,7 +1029,6 @@ fn head_and_tail_byte_counts_are_raw() {
     assert_eq!(run(&s.0, &format!("tail -c 2 {}", s.q("f"))).stdout, "ef");
 }
 
-/// uutils tail.rs `+N`: start output at line N.
 #[test]
 fn tail_plus_count_starts_at_that_line() {
     let s = Scratch::new("tail-plus");
@@ -1091,7 +1039,6 @@ fn tail_plus_count_starts_at_that_line() {
     );
 }
 
-/// A 200 KB file with a first line that is not UTF-8: the answer spans several read chunks.
 #[test]
 fn tail_raw_returns_the_last_lines_of_a_large_file_with_invalid_utf8() {
     let s = Scratch::new("tail-big");
@@ -1107,7 +1054,6 @@ fn tail_raw_returns_the_last_lines_of_a_large_file_with_invalid_utf8() {
     assert_eq!(r.stdout, expected);
 }
 
-/// Hashline rows of a tail carry the real line numbers, not 1..N of the window.
 #[test]
 fn tail_hashline_rows_carry_the_line_numbers_of_the_file() {
     let s = Scratch::new("tail-lines");
@@ -1122,7 +1068,6 @@ fn tail_hashline_rows_carry_the_line_numbers_of_the_file() {
     assert_eq!(numbers, [3, 4], "{}", r.stdout);
 }
 
-/// POSIX tail: the final newline ends the last line, it does not start another one.
 #[test]
 fn tail_raw_counts_lines_by_their_terminators() {
     let s = Scratch::new("tail-edges");
@@ -1147,7 +1092,6 @@ fn tail_raw_counts_lines_by_their_terminators() {
     assert_eq!(r.stdout, "b\nc\n");
 }
 
-/// When `-n` and `-c` are both given, the last one decides the unit.
 #[test]
 fn head_and_tail_let_the_last_of_dash_n_and_dash_c_decide() {
     let s = Scratch::new("headtail-unit");
@@ -1190,7 +1134,6 @@ fn head_and_tail_continue_after_a_missing_file() {
     }
 }
 
-/// uutils head.rs and tail.rs print `==> name <==` between several files in raw mode.
 #[test]
 fn head_and_tail_raw_label_several_files() {
     let s = Scratch::new("headtail-headers");
@@ -1218,8 +1161,6 @@ fn head_keeps_working_on_a_pipe_and_on_stdin() {
     assert_eq!(r.stdout, "b\nc");
 }
 
-// ---------------------------------------------------------------- ls / stat
-
 fn names(stdout: &str) -> Vec<String> {
     stdout
         .lines()
@@ -1246,7 +1187,6 @@ fn ls_hides_dotfiles_unless_all_is_given() {
     }
 }
 
-/// `--author` contains the letter `a` but is not `-a`.
 #[test]
 fn ls_long_option_with_an_a_in_it_does_not_show_hidden_files() {
     let s = Scratch::new("ls-substring");
@@ -1258,7 +1198,6 @@ fn ls_long_option_with_an_a_in_it_does_not_show_hidden_files() {
     assert!(!r.stdout.contains(".hidden"), "{}", r.stdout);
 }
 
-/// uutils ls.rs:848-851 (`DirArgs`): a symlink operand that points at a directory lists the directory.
 #[test]
 fn ls_lists_the_directory_a_symlink_operand_points_to() {
     let s = Scratch::new("ls-symlink");
@@ -1320,9 +1259,6 @@ fn stat_reports_each_missing_operand_and_keeps_going() {
     assert!(r.stderr.contains("missing"), "{}", r.stderr);
 }
 
-// ---------------------------------------------------------------- cd / pwd
-
-/// fish cd.rs:30-52 (`try_chdir`): PWD is the logical path unless `-P` dereferences it.
 #[test]
 fn cd_into_a_symlink_keeps_the_logical_directory() {
     let s = Scratch::new("cd-logical");
@@ -1377,7 +1313,6 @@ fn pwd_dash_p_resolves_and_dash_l_keeps_the_logical_path() {
     );
 }
 
-/// fish cd.rs:85 (`normalize_path`): `..` is removed lexically, so it leaves the symlink, not its target.
 #[test]
 fn cd_dotdot_after_entering_a_symlink_returns_to_the_logical_parent() {
     let s = Scratch::new("cd-dotdot");
@@ -1393,7 +1328,6 @@ fn cd_dotdot_after_entering_a_symlink_returns_to_the_logical_parent() {
     );
 }
 
-/// POSIX cd: `cd -` goes to $OLDPWD and prints the directory.
 #[test]
 fn cd_dash_returns_to_the_previous_directory_and_prints_it() {
     let s = Scratch::new("cd-dash");
@@ -1419,7 +1353,6 @@ fn cd_keeps_oldpwd_and_pwd_in_the_environment() {
     assert_eq!(r.stdout.trim(), want);
 }
 
-/// fish cd.rs:178-188: no HOME means `cd` fails instead of going to `/`.
 #[test]
 fn cd_without_home_is_an_error_and_stays_put() {
     let s = Scratch::new("cd-nohome");
@@ -1450,7 +1383,6 @@ fn cd_without_arguments_goes_home() {
     );
 }
 
-/// fish path.rs:334-373 (`path_apply_cdpath`): candidates from CDPATH, then the first existing directory wins.
 #[test]
 fn cd_searches_cdpath_and_prints_the_directory_it_chose() {
     let s = Scratch::new("cd-cdpath");
@@ -1532,7 +1464,6 @@ fn cd_to_a_missing_directory_or_a_file_fails_and_stays_put() {
     );
 }
 
-/// POSIX: when several options of one family are given, the last one wins.
 #[test]
 fn cd_dash_p_and_dash_l_override_each_other_by_position() {
     let s = Scratch::new("cd-override");
@@ -1546,7 +1477,6 @@ fn cd_dash_p_and_dash_l_override_each_other_by_position() {
     assert!(r.stdout.lines().any(|l| l.trim() == real), "{}", r.stdout);
 }
 
-/// The logical `..` of the root is the root.
 #[test]
 fn cd_dotdot_past_the_root_stays_at_the_root() {
     let s = Scratch::new("cd-root");
@@ -1563,8 +1493,6 @@ fn cd_with_two_operands_or_an_unknown_option_is_a_usage_error() {
     assert_eq!(run(&s.0, &format!("cd {} {}", s.q("a"), s.q("b"))).code, 2);
     assert_eq!(run(&s.0, &format!("cd -Z {}", s.q("a"))).code, 2);
 }
-
-// ---------------------------------------------------------------- export / grep
 
 #[test]
 fn export_name_without_a_value_keeps_the_existing_variable() {
@@ -1603,7 +1531,6 @@ fn export_accepts_an_unset_name_and_rejects_an_invalid_one() {
     assert!(r.stderr.contains("1bad"), "{}", r.stderr);
 }
 
-/// GNU grep: a directory operand without -r is "Is a directory", it is not searched.
 #[test]
 fn grep_does_not_recurse_into_a_directory_without_dash_r() {
     let s = Scratch::new("grep-dir");
@@ -1642,8 +1569,6 @@ fn grep_reads_a_named_file_and_options_after_the_pattern() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.contains("Needle"), "{}", r.stdout);
 }
-
-// ---------------------------------------------------------------- shared parser surface
 
 #[test]
 fn find_keeps_its_single_dash_predicates() {

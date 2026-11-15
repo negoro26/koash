@@ -70,8 +70,6 @@ struct Opts {
     verbose: bool,
 }
 
-/// Mirrors uutils `rm` (`remove` and `handle_dir` in rm.rs): `symlink_metadata` decides what an
-/// operand is, so a symlink is unlinked and never followed, and a directory needs -r or -d.
 fn remove_operand(session: &mut Session, operand: &str, opts: Opts, out: &mut Vec<u8>) {
     let path = resolve_path(session, operand);
     let meta = match fs::symlink_metadata(&path) {

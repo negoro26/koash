@@ -180,11 +180,7 @@ impl<'a> Parser<'a> {
         matches!(words.first().map(|w| w.parts.as_slice()), Some([WordPart::Literal { text, .. }]) if text == "@py")
     }
 
-    /// The source of a sigil command (`@sql`, `@py`, `@js`) is code in another language, so its
-    /// arguments are taken verbatim from `src` up to the end of the command. `||` belongs to the
-    /// source when the language has that operator (SQL concatenation, JS logical or); Python has
-    /// none, so after `@py` it still chains shell commands. A lone word keeps its shell meaning:
-    /// it is the quoted program and may be followed by redirections.
+    /// `||` belongs to a sigil command's source unless the language lacks it: after `@py` it still chains shell commands.
     fn take_sigil_source(&mut self, or_is_source: bool) -> Option<Word> {
         let is_end = |kind: &TokenKind| match kind {
             TokenKind::OrIf => !or_is_source,
@@ -219,8 +215,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// The lexer reads `>=` as the redirect `>` followed by the word `=`. After `where <field>`
-    /// that pair is a comparison operator, so glue it back together from the source text.
+    /// The lexer reads `>=` as the redirect `>` plus the word `=`; after `where <field>` glue it back from the source.
     fn comparison_operator(&mut self, op_span: Span) -> Word {
         let mut span = op_span;
         if let Some(Token {
