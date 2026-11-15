@@ -15,6 +15,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,
+    strict_options: false,
 };
 
 impl Builtin for Undo {
