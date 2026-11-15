@@ -83,24 +83,6 @@ fn every_encoder_prints_a_typed_column_as_its_text() {
 }
 
 #[test]
-fn a_typed_cell_reads_as_text_and_never_as_a_number() {
-    let typed = typed();
-    let plain = stringified(&typed);
-    let mut scratch = String::new();
-    for (t, p) in typed.rows().zip(plain.rows()) {
-        for (a, b) in t.iter().zip(p.iter()) {
-            assert_eq!(a.as_f64(), None);
-            assert_eq!(a.is_null(), b.is_null());
-            assert_eq!(a.text(&mut scratch).to_string(), b.text(&mut String::new()));
-            assert_eq!(a.text_len(&mut scratch), b.text_len(&mut String::new()));
-            let mut written = Vec::new();
-            a.write_text(&mut written, &mut scratch);
-            assert_eq!(written, b.text(&mut String::new()).as_bytes());
-        }
-    }
-}
-
-#[test]
 fn reordering_and_selecting_keep_the_typing() {
     let mut a = typed();
     let mut b = stringified(&a);

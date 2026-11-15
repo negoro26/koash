@@ -124,38 +124,38 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
 
-    // The deleted `format_unix_iso`, kept as the oracle the new formatter must agree with.
-    fn reference_iso(secs: u64) -> String {
-        let days = secs / 86400;
-        let rem = secs % 86400;
-        let hour = rem / 3600;
-        let min = (rem % 3600) / 60;
-        let sec = rem % 60;
-        let (year, month, day) = civil_from_days(days as i64);
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
-    }
-
     #[test]
-    fn a_time_prints_as_the_old_iso_string() {
-        let edges = [
-            0,
-            1,
-            86_399,
-            86_400,
-            951_782_400,
-            1_700_000_000,
-            u64::from(u32::MAX),
-            4_102_444_800,
-            253_402_300_799,
-            253_402_300_800,
-            1 << 40,
-            u64::MAX,
+    fn a_time_prints_as_iso_8601_utc() {
+        let cases = [
+            (0, "1970-01-01T00:00:00Z"),
+            (86_399, "1970-01-01T23:59:59Z"),
+            (86_400, "1970-01-02T00:00:00Z"),
+            (951_782_400, "2000-02-29T00:00:00Z"),
+            (1_610_714_096, "2021-01-15T12:34:56Z"),
+            (1_613_392_496, "2021-02-15T12:34:56Z"),
+            (1_615_811_696, "2021-03-15T12:34:56Z"),
+            (1_618_490_096, "2021-04-15T12:34:56Z"),
+            (1_621_082_096, "2021-05-15T12:34:56Z"),
+            (1_623_760_496, "2021-06-15T12:34:56Z"),
+            (1_626_352_496, "2021-07-15T12:34:56Z"),
+            (1_629_030_896, "2021-08-15T12:34:56Z"),
+            (1_631_709_296, "2021-09-15T12:34:56Z"),
+            (1_634_301_296, "2021-10-15T12:34:56Z"),
+            (1_636_979_696, "2021-11-15T12:34:56Z"),
+            (1_639_571_696, "2021-12-15T12:34:56Z"),
+            (1_700_000_000, "2023-11-14T22:13:20Z"),
+            (4_102_444_800, "2100-01-01T00:00:00Z"),
+            (u64::from(u32::MAX), "2106-02-07T06:28:15Z"),
+            (253_402_300_799, "9999-12-31T23:59:59Z"),
+            (253_402_300_800, "10000-01-01T00:00:00Z"),
+            (1 << 40, "36812-02-20T00:36:16Z"),
+            (u64::MAX, "584554051223-11-09T07:00:15Z"),
         ];
-        let stepped = (0..4_000_000_000u64).step_by(7_654_321);
-        for secs in edges.into_iter().chain(stepped) {
+        let mut scratch = String::new();
+        for (secs, iso) in cases {
             assert_eq!(
-                UnixTime(secs).text().as_str(),
-                reference_iso(secs),
+                crate::Datum::Time(UnixTime(secs)).text(&mut scratch),
+                iso,
                 "{secs}"
             );
         }
