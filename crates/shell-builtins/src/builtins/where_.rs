@@ -1,5 +1,5 @@
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value};
+use shell_value::{Datum, StructuredDiagnostic, Value};
 
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
@@ -82,43 +82,47 @@ impl Builtin for Where {
                 Some("operators: == != < <= > >= =~".to_string()),
             ));
         };
-        let batch = input.into_batch();
+        let mut batch = input.into_batch();
         let Some(col_idx) = batch.col_index(field) else {
-            return Ok(Value::from_batch(RecordBatch::new(batch.columns)));
+            batch.truncate_rows(0);
+            return Ok(Value::from_batch(batch));
         };
 
-        let mut out_cells = Vec::new();
-        for r in 0..batch.nrows() {
-            let row = batch.row(r);
-            if eval_cell_predicate(&row[col_idx], cmp, rhs_raw) {
-                out_cells.extend_from_slice(row);
-            }
-        }
-        Ok(Value::from_batch(RecordBatch {
-            columns: batch.columns,
-            cells: out_cells,
-        }))
+        let predicate = Predicate::new(cmp, rhs_raw);
+        let mut scratch = String::new();
+        batch.retain_rows(|row| predicate.matches(row.get(col_idx), &mut scratch));
+        Ok(Value::from_batch(batch))
     }
 }
 
-fn eval_cell_predicate(lhs: &CellVal, cmp: Cmp, rhs_raw: &str) -> bool {
-    if !matches!(cmp, Cmp::Contains)
-        && let Some(lhs_num) = lhs.as_f64()
-        && let Some(rhs_num) = parse_size_or_number(rhs_raw)
-    {
-        return cmp.holds(lhs_num, rhs_num);
+struct Predicate<'a> {
+    cmp: Cmp,
+    rhs_raw: &'a str,
+    rhs_num: Option<f64>,
+}
+
+impl<'a> Predicate<'a> {
+    fn new(cmp: Cmp, rhs_raw: &'a str) -> Self {
+        Self {
+            cmp,
+            rhs_raw,
+            rhs_num: parse_size_or_number(rhs_raw),
+        }
     }
 
-    let owned;
-    let lhs_str = if let Some(s) = lhs.as_str() {
-        s
-    } else {
-        owned = lhs.format_to_string();
-        &owned
-    };
-    match cmp {
-        Cmp::Contains => lhs_str.contains(rhs_raw),
-        _ => cmp.holds(lhs_str, rhs_raw),
+    fn matches(&self, lhs: Datum<'_>, scratch: &mut String) -> bool {
+        if !matches!(self.cmp, Cmp::Contains)
+            && let Some(lhs_num) = lhs.as_f64()
+            && let Some(rhs_num) = self.rhs_num
+        {
+            return self.cmp.holds(lhs_num, rhs_num);
+        }
+
+        let lhs_str = lhs.text(scratch);
+        match self.cmp {
+            Cmp::Contains => lhs_str.contains(self.rhs_raw),
+            _ => self.cmp.holds(lhs_str, self.rhs_raw),
+        }
     }
 }
 

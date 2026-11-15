@@ -1,6 +1,6 @@
 use std::io::{BufWriter, Write};
 
-use crate::{CellVal, RecordBatch, StructuredRecord};
+use crate::{RecordBatch, StructuredRecord};
 
 pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bool) {
     let ncols = batch.ncols();
@@ -11,10 +11,9 @@ pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bo
 
     let mut widths: Vec<usize> = batch.columns.iter().map(|c| c.len()).collect();
     let mut scratch = String::new();
-    for r in 0..nrows {
-        let row = batch.row(r);
-        for c in 0..ncols {
-            let len = row[c].display_len(&mut scratch);
+    for row in batch.rows() {
+        for (c, cell) in row.iter().enumerate() {
+            let len = cell.text_len(&mut scratch);
             if len > widths[c] {
                 widths[c] = len;
             }
@@ -46,13 +45,12 @@ pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bo
     }
     let _ = bw.write_all(b"\n");
 
-    for r in 0..nrows {
-        let row = batch.row(r);
+    for row in batch.rows() {
         for (c, cell) in row.iter().enumerate() {
             if c > 0 {
                 let _ = bw.write_all(b"  ");
             }
-            let written = cell.write_to(&mut bw, &mut scratch);
+            let written = cell.write_text(&mut bw, &mut scratch);
             let pad = widths[c].saturating_sub(written);
             write_spaces(&mut bw, pad);
         }
@@ -91,15 +89,19 @@ pub fn batch_to_compact_sigil(batch: &RecordBatch) -> String {
         out.push_str(col.as_ref());
     }
     out.push('\n');
-    for r in 0..batch.nrows() {
-        let row = batch.row(r);
+    let mut scratch = String::new();
+    for row in batch.rows() {
         for (c, cell) in row.iter().enumerate() {
             if c > 0 {
                 out.push('¦');
             }
-            if !matches!(cell, CellVal::Null) {
-                let s = cell.format_to_string().replace('\n', "\\n");
-                out.push_str(&s);
+            if !cell.is_null() {
+                let text = cell.text(&mut scratch);
+                if text.contains('\n') {
+                    out.push_str(&text.replace('\n', "\\n"));
+                } else {
+                    out.push_str(text);
+                }
             }
         }
         out.push('\n');
