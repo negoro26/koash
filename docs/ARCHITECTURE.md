@@ -46,12 +46,12 @@ A builtin can also report failures that did not stop it; see Operand failures.
 ## Registry
 
 Every builtin is a unit struct that implements `Builtin`.
-Its `Signature` is the single description of the command: name, aliases, description, flags, output columns, `InputMode`, `Placement`, and `TxPolicy`.
+Its `Signature` is the single description of the command: name, aliases, description, flags, output columns, `InputMode`, `Placement`, `TxPolicy`, and `strict_options`.
 `REGISTRY` in `builtins/mod.rs` lists all commands. `lookup` finds one by name or alias.
 
 Everything else is derived from the signature.
 
-- The executor classifies stages with `lookup` and reads `placement`, `tx`, and `reads_input`.
+- The executor classifies stages with `lookup` and reads `placement`, `tx`, `strict_options`, and `reads_input`.
 - `help`, `discover`, and the RPC `session.schemas` method iterate `catalog()`.
   The catalog is the registry without `SoleStage` commands, which are shell control rather than tools.
 - Completion and highlighting use `lookup` and the signature's flag spellings and columns.
@@ -62,6 +62,7 @@ Invariants:
 - `catalog()` order is the order of `REGISTRY`. `discover` breaks score ties by that order.
 - A `SoleStage` command implements `run_alone` and never runs as a pipeline stage.
 - Builtins take `&mut Session`. They do no terminal I/O except through the `Value` they return, apart from `SoleStage` commands, which get the `Sink`.
+- A builtin with `strict_options` owns exactly the options in its `flags`. When a stage uses another option and the session's `PATH` has an executable of that name, `build_stages` makes it an ordinary external stage with the original argv: text output, an opaque tx, policy and job control as for any external command. The first fallback of each command in a session prints one `koa: <cmd>: '<option>' is not built in, running <path>` line to stderr. A known option with a bad value stays `E_ARGS`, and a `SoleStage` command never falls back.
 
 ## Arguments
 
@@ -69,6 +70,7 @@ Invariants:
 `args::Args::parse` is the only parser. It follows POSIX utility syntax plus GNU long options:
 short clusters (`-rf`), `-n5` and `-n 5`, exact long names (`--force`, never a prefix or a substring), `--long=value`, `--` to end options, and a lone `-` as an operand.
 An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to exit status 2, before the command touches anything.
+`Args::unknown_option` runs the same parser and reports the first undeclared option, so the executor can tell it from a bad value and hand the stage to the real program (see Registry).
 `Flag::predicate` declares a single-dash long option (`find -name`) and `Flag::numeric` lets `-5` stand for the flag's value (`head -5`, `kill -9`).
 `Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
 `help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
@@ -87,9 +89,31 @@ A usage error is different: it is returned as `Err`, so it is fatal and exits 2 
 A command that changes files calls `record_preimage` or `record_tree` before touching a path and `record_mutation` after.
 `finish_tx` drops entries that captured nothing.
 `undo` and `rollback <id>` restore preimages newest first.
-Commands with `TxPolicy::Skip` (`undo`, `rollback`, `tx-log`) do not open an entry, so they do not appear in the ledger they read.
+Commands with `TxPolicy::Skip` (`undo`, `redo`, `rollback`, `tx-log`) do not open an entry, so they do not appear in the ledger they read.
 An external process or a sub-kernel command (`@py`, `@js`) can change files the ledger cannot see.
 It marks the newest entry `opaque_after`. `undo` then refuses, and `rollback <id>` still works.
+With an empty ledger there is no entry to mark, so the session keeps the marker itself until the next transaction captures a path. `undo` refuses with `E_TX_OPAQUE` meanwhile.
+
+### Snapshots
+
+A preimage of a file is a snapshot file on disk, never bytes in memory.
+The store is `<start cwd>/.koa/undo/<pid>-<session uid>/`, created on the first snapshot, in the directory that the CoW workspaces already use.
+`undo_store::UndoStore` makes each snapshot with a reflink (`FICLONE`), which shares blocks and costs the same for a 1 MB file and a 10 GB file. Where the filesystem cannot clone (tmpfs, another mount), it copies instead.
+Only copied bytes count against the 64 MiB per-record limit, and a record holds at most 10,000 paths. Over either limit the record is marked `opaque_after`, so `undo` refuses instead of restoring less than it should.
+A `Snapshot` deletes its file when dropped, so evicting a record from the 50-entry ledger frees its snapshots.
+The store holds an exclusive `flock` for the life of the session and is removed when the `Session` drops.
+`CowWorkspace::sweep_orphans` removes the stores and CoW directories of dead processes. The CLI and the RPC servers call it at startup.
+If the store cannot be created, the record is marked `opaque_after`; capture is never skipped silently.
+
+### Redo
+
+`rollback_tx` (and so `undo`) first saves what it is about to overwrite, then restores the preimages.
+It keeps the removed records and that saved state as a `RedoRecord` on `Session`'s redo stack.
+`redo` restores the saved state and puts the records back on the ledger, oldest first.
+A new capture or `mark_opaque` clears the stack, because the saved state would no longer match the disk.
+If the saved state does not fit the capture limits, the rollback still happens and `redo` has nothing to re-apply.
+`tx-log` reports the number of pending redo records in its `redo` column.
+When the ledger is empty but a redo is pending, it prints one row with null `tx_id` and `command`, so the pending redo is still visible.
 
 ## Adding a command
 
