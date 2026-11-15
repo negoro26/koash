@@ -136,6 +136,10 @@ pub struct Signature {
     pub input: InputMode,
     pub placement: Placement,
     pub tx: TxPolicy,
+    /// An option outside `flags` is an `E_ARGS` error, and so runs the real program of
+    /// the same name instead when the session's PATH has one. Set only by commands whose
+    /// every dash word goes through `Args`; the others take dash words as operands.
+    pub strict_options: bool,
 }
 
 pub trait Builtin: Sync {

@@ -1,10 +1,11 @@
 use std::io::Write;
 
 use nix::unistd::Pid;
-use shell_kernel::{JobState, Session, expand_word, reap_background_jobs};
+use shell_kernel::{JobState, Session, expand_word, find_executable, reap_background_jobs};
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
+use crate::args::Args;
 use crate::builtin::{Builtin, Placement, TxPolicy};
 use crate::builtins::lookup;
 use crate::sink::{Sink, diag_status};
@@ -75,7 +76,7 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
     }
 
     begin_pipeline_tx(session, pipeline);
-    let stages = build_stages(session, pipeline);
+    let stages = build_stages(session, pipeline, sink);
     let status = if background
         && stages
             .iter()
@@ -128,6 +129,35 @@ fn stage_builtin(name: &str) -> Option<&'static dyn Builtin> {
     lookup(name).filter(|b| b.signature().placement == Placement::Any)
 }
 
+/// A builtin owns exactly the options its signature declares. When the command line uses
+/// another one and the session's `PATH` has a program of that name, the real program runs
+/// the stage instead. The first time per session the user is told, once per command.
+fn defers_to_executable(
+    session: &mut Session,
+    builtin: &dyn Builtin,
+    argv: &[String],
+    sink: &Sink,
+) -> bool {
+    let sig = builtin.signature();
+    if !sig.strict_options {
+        return false;
+    }
+    let Some(option) = Args::unknown_option(sig, &argv[1..]) else {
+        return false;
+    };
+    let Some(path) = find_executable(session, &argv[0]) else {
+        return false;
+    };
+    if session.first_fallback(&argv[0]) {
+        sink.stderr_line(&format!(
+            "koa: {}: '{option}' is not built in, running {}",
+            argv[0],
+            path.display()
+        ));
+    }
+    true
+}
+
 fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
     let args: Vec<String> = simple
         .words
@@ -150,7 +180,7 @@ fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
     }
 }
 
-fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<'a>> {
+fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline, sink: &Sink) -> Vec<Stage<'a>> {
     let mut stages = Vec::with_capacity(pipeline.commands.len());
     for cmd in &pipeline.commands {
         let stage = match cmd {
@@ -177,7 +207,10 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline) -> Vec<Stage<
                         )
                     })
                     .collect();
-                let builtin = argv.first().and_then(|name| stage_builtin(name));
+                let builtin = argv
+                    .first()
+                    .and_then(|name| stage_builtin(name))
+                    .filter(|b| !defers_to_executable(session, *b, &argv, sink));
                 match (argv.first(), builtin) {
                     (None, _) => {
                         for (name, value) in env {

@@ -875,6 +875,23 @@ async fn send_output<W: AsyncWrite + Unpin>(
         }
     }
 
+    // Chunks are merged per kind, so the interleaving is lost. Notices such as "running the
+    // real ls" must precede the output they announce.
+    if !out.stderr.is_empty() {
+        let text = match redact_env {
+            Some(env) => redact_secrets(&out.stderr, env),
+            None => out.stderr,
+        };
+        let chunk = RpcEvent::StreamChunk {
+            id: id.clone(),
+            records: None,
+            compact: None,
+            stdout: None,
+            stderr: Some(text),
+        };
+        send_json(writer, &chunk).await?;
+    }
+
     if !out.stdout.is_empty() {
         let bytes = out.stdout;
         let text_full = String::from_utf8_lossy(&bytes);
@@ -918,21 +935,6 @@ async fn send_output<W: AsyncWrite + Unpin>(
                 send_json(writer, &chunk).await?;
             }
         }
-    }
-
-    if !out.stderr.is_empty() {
-        let text = match redact_env {
-            Some(env) => redact_secrets(&out.stderr, env),
-            None => out.stderr,
-        };
-        let chunk = RpcEvent::StreamChunk {
-            id: id.clone(),
-            records: None,
-            compact: None,
-            stdout: None,
-            stderr: Some(text),
-        };
-        send_json(writer, &chunk).await?;
     }
 
     Ok(OutputSummary {
