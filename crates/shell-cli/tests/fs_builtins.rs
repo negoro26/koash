@@ -468,12 +468,13 @@ fn cp_preserve_keeps_mode_and_mtime() {
     assert_eq!(meta.modified().unwrap(), stamp);
 }
 
-/// coreutils cp: a new file gets the source mode filtered by the umask, and setuid bits are dropped.
+/// coreutils cp: a new file gets the source mode filtered by the umask, and setuid bits are
+/// dropped. The sources are empty, since the kernel clears setuid on any write.
 #[test]
 fn cp_without_preserve_applies_the_umask_to_a_new_file() {
     let s = Scratch::new("cp-umask");
     for (mode, expected) in [(0o666, 0o644), (0o755, 0o755), (0o4755, 0o755)] {
-        let a = s.write("a", b"A");
+        let a = s.write("a", b"");
         fs::set_permissions(&a, fs::Permissions::from_mode(mode)).unwrap();
         let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
             .umask("022")
