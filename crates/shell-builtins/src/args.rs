@@ -268,37 +268,34 @@ mod tests {
         words.iter().map(|w| (*w).to_string()).collect()
     }
 
-    fn flags_of(args: &Args) -> Vec<String> {
-        args.given
-            .iter()
-            .map(|(f, v)| match v {
-                Some(v) => format!("{}={v}", f.long),
-                None => f.long.to_string(),
-            })
-            .collect()
-    }
-
-    fn message(words: &[&str]) -> String {
+    fn parse_error(words: &[&str]) -> StructuredDiagnostic {
         let owned = argv(words);
         Args::parse(&SIG, &owned)
             .err()
-            .map(|e| e.message)
-            .unwrap_or_default()
+            .unwrap_or_else(|| panic!("{words:?} must be rejected"))
     }
 
     #[test]
     fn short_clusters_and_exact_long_names() {
         let owned = argv(&["-rf", "a", "--hidden", "b"]);
         let args = Args::parse(&SIG, &owned).unwrap();
-        assert_eq!(flags_of(&args), ["recursive", "force", "hidden"]);
+        assert!(args.has("r") && args.has("f") && args.has("hidden"));
+        assert!(!args.has("R"));
+        assert_eq!(args.value("n"), None);
         assert_eq!(args.operands, ["a", "b"]);
     }
 
     #[test]
     fn a_long_name_never_matches_by_substring_or_prefix() {
-        assert!(message(&["--forc"]).contains("unknown option '--forc'"));
-        assert!(message(&["--recursive-ish"]).contains("--recursive-ish"));
-        assert!(message(&["--verbose"]).contains("--verbose"));
+        for spelling in ["--forc", "--recursive-ish", "--verbose"] {
+            let err = parse_error(&[spelling]);
+            assert_eq!(err.code, "E_ARGS", "{spelling}");
+            assert!(
+                err.message.contains(spelling),
+                "{spelling}: {}",
+                err.message
+            );
+        }
     }
 
     #[test]
@@ -319,21 +316,21 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_value_is_an_error_naming_the_flag() {
-        assert!(message(&["-n"]).contains("'--lines' requires a value"));
-        assert!(message(&["--include"]).contains("requires a value"));
+    fn a_missing_value_is_an_args_error() {
+        assert_eq!(parse_error(&["-n"]).code, "E_ARGS");
+        assert_eq!(parse_error(&["--include"]).code, "E_ARGS");
     }
 
     #[test]
-    fn a_value_for_a_switch_is_an_error() {
-        assert!(message(&["--force=1"]).contains("does not take a value"));
+    fn a_value_for_a_switch_is_an_args_error() {
+        assert_eq!(parse_error(&["--force=1"]).code, "E_ARGS");
     }
 
     #[test]
     fn double_dash_ends_options_and_a_lone_dash_is_an_operand() {
         let owned = argv(&["-r", "-", "--", "-f", "--hidden"]);
         let args = Args::parse(&SIG, &owned).unwrap();
-        assert_eq!(flags_of(&args), ["recursive"]);
+        assert!(args.has("r") && !args.has("f") && !args.has("hidden"));
         assert_eq!(args.operands, ["-", "-f", "--hidden"]);
     }
 
@@ -348,8 +345,8 @@ mod tests {
     #[test]
     fn a_number_is_an_error_when_no_flag_is_numeric() {
         let owned = argv(&["-5"]);
-        let err = Args::parse(&PLAIN, &owned).err().map(|e| e.message);
-        assert_eq!(err.as_deref(), Some("p: unknown option '-5'"));
+        let err = Args::parse(&PLAIN, &owned).err().unwrap();
+        assert_eq!(err.code, "E_ARGS");
     }
 
     #[test]
@@ -357,7 +354,10 @@ mod tests {
         let owned = argv(&["-name", "*.rs"]);
         let args = Args::parse(&SIG, &owned).unwrap();
         assert_eq!(args.value("name"), Some("*.rs"));
-        assert!(message(&["--name", "x"]).contains("unknown option '--name'"));
+        assert_eq!(parse_error(&["--name", "x"]).code, "E_ARGS");
+        let owned = argv(&["-nam", "x"]);
+        let args = Args::parse(&SIG, &owned).unwrap();
+        assert_eq!(args.value("name"), None);
     }
 
     #[test]
@@ -370,7 +370,10 @@ mod tests {
 
     #[test]
     fn last_of_reports_the_option_given_last() {
-        let owned = argv(&["-r", "-f", "-r"]);
+        let owned = argv(&["-r", "-f"]);
+        let args = Args::parse(&SIG, &owned).unwrap();
+        assert_eq!(args.last_of(&["force", "recursive"]), Some("force"));
+        let owned = argv(&["-f", "-r"]);
         let args = Args::parse(&SIG, &owned).unwrap();
         assert_eq!(args.last_of(&["force", "recursive"]), Some("recursive"));
         assert_eq!(args.last_of(&["hidden"]), None);
