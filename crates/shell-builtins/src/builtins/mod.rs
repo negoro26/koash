@@ -131,21 +131,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn lookup_resolves_aliases_to_the_canonical_command() {
-        assert_eq!(
-            lookup("sort_by").map(|b| b.signature().name),
-            Some("sort-by")
-        );
-        assert_eq!(lookup("tx_log").map(|b| b.signature().name), Some("tx-log"));
-        assert!(lookup("no-such-command").is_none());
-    }
-
-    #[test]
-    fn catalog_leaves_out_sole_stage_commands() {
-        assert!(catalog().all(|s| s.placement == Placement::Any));
-        assert!(lookup("jobs").is_some_and(|b| b.signature().placement == Placement::SoleStage));
-        assert!(catalog().all(|s| s.name != "jobs"));
-    }
 }

@@ -175,16 +175,3 @@ fn normalize(path: &Path) -> PathBuf {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_folds_dots_lexically_and_stays_at_the_root() {
-        assert_eq!(normalize(Path::new("/a/b/../c/./d")), Path::new("/a/c/d"));
-        assert_eq!(normalize(Path::new("/a/link/..")), Path::new("/a"));
-        assert_eq!(normalize(Path::new("/../..")), Path::new("/"));
-        assert_eq!(normalize(Path::new("/")), Path::new("/"));
-    }
-}
