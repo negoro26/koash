@@ -2,6 +2,8 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
+use super::common::usage_error;
+use crate::args::Args;
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct TxLog;
@@ -11,10 +13,11 @@ static SIGNATURE: Signature = Signature {
     aliases: &["tx_log"],
     description: "List recorded transactional micro-commits",
     flags: &[],
-    columns: crate::builtin::columns!["tx_id", "command", "files"],
+    columns: crate::builtin::columns!["tx_id", "command", "files", "redo"],
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,
+    strict_options: false,
 };
 
 impl Builtin for TxLog {
@@ -25,9 +28,16 @@ impl Builtin for TxLog {
     fn run(
         &self,
         session: &mut Session,
-        _args: &[String],
+        args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
+        if let Some(extra) = Args::parse(&SIGNATURE, args)?.operands.first() {
+            return Err(usage_error(
+                format!("tx-log takes no arguments, got '{extra}'"),
+                "tx-log",
+            ));
+        }
+        let redo = session.redo_depth();
         let records = session
             .tx_log
             .iter()
@@ -36,6 +46,7 @@ impl Builtin for TxLog {
                 rec.insert("tx_id".to_string(), JsonVal::String(tx.id.clone()));
                 rec.insert("command".to_string(), JsonVal::String(tx.command.clone()));
                 rec.insert("files".to_string(), json!(tx.preimages.len()));
+                rec.insert("redo".to_string(), json!(redo));
                 rec.insert(
                     "opaque_after".to_string(),
                     tx.opaque_after
@@ -44,7 +55,16 @@ impl Builtin for TxLog {
                 );
                 rec
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if records.is_empty() && redo > 0 {
+            let mut rec = StructuredRecord::new();
+            rec.insert("tx_id".to_string(), JsonVal::Null);
+            rec.insert("command".to_string(), JsonVal::Null);
+            rec.insert("files".to_string(), json!(0));
+            rec.insert("redo".to_string(), json!(redo));
+            rec.insert("opaque_after".to_string(), JsonVal::Null);
+            return Value::from_records(vec![rec]);
+        }
         Value::from_records(records)
     }
 }

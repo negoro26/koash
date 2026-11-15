@@ -14,7 +14,46 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::Table,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: false,
 };
+
+#[derive(Clone, Copy)]
+enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Contains,
+}
+
+impl Cmp {
+    fn parse(op: &str) -> Option<Self> {
+        Some(match op {
+            "==" | "=" => Self::Eq,
+            "!=" => Self::Ne,
+            "<" => Self::Lt,
+            "<=" => Self::Le,
+            ">" => Self::Gt,
+            ">=" => Self::Ge,
+            "=~" | "contains" => Self::Contains,
+            _ => return None,
+        })
+    }
+
+    fn holds<T: PartialOrd>(self, lhs: T, rhs: T) -> bool {
+        match self {
+            Self::Eq => lhs == rhs,
+            Self::Ne => lhs != rhs,
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
+            Self::Contains => false,
+        }
+    }
+}
 
 impl Builtin for Where {
     fn signature(&self) -> &'static Signature {
@@ -27,24 +66,29 @@ impl Builtin for Where {
         args: &[String],
         input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        if args.len() < 3 {
+        let [field, op, rhs_raw] = args else {
             return Err(StructuredDiagnostic::new(
                 "E_ARGS",
                 "where requires `<field> <op> <value>`",
                 None,
                 Some("example: ls | where size > 10kb".to_string()),
             ));
-        }
-        let field = &args[0];
-        let op = &args[1];
-        let rhs_raw = &args[2];
+        };
+        let Some(cmp) = Cmp::parse(op) else {
+            return Err(StructuredDiagnostic::new(
+                "E_ARGS",
+                format!("where: unknown operator `{op}`"),
+                None,
+                Some("operators: == != < <= > >= =~".to_string()),
+            ));
+        };
         let mut batch = input.into_batch()?;
         let Some(col_idx) = batch.col_index(field) else {
             batch.truncate_rows(0);
             return Ok(Value::from_batch(batch));
         };
 
-        let predicate = Predicate::new(op, rhs_raw);
+        let predicate = Predicate::new(cmp, rhs_raw);
         let mut scratch = String::new();
         batch.retain_rows(|row| predicate.matches(row.get(col_idx), &mut scratch));
         Ok(Value::from_batch(batch))
@@ -52,43 +96,32 @@ impl Builtin for Where {
 }
 
 struct Predicate<'a> {
-    op: &'a str,
+    cmp: Cmp,
     rhs_raw: &'a str,
     rhs_num: Option<f64>,
 }
 
 impl<'a> Predicate<'a> {
-    fn new(op: &'a str, rhs_raw: &'a str) -> Self {
+    fn new(cmp: Cmp, rhs_raw: &'a str) -> Self {
         Self {
-            op,
+            cmp,
             rhs_raw,
             rhs_num: parse_size_or_number(rhs_raw),
         }
     }
 
     fn matches(&self, lhs: Datum<'_>, scratch: &mut String) -> bool {
-        if let Some(lhs_num) = lhs.as_f64()
+        if !matches!(self.cmp, Cmp::Contains)
+            && let Some(lhs_num) = lhs.as_f64()
             && let Some(rhs_num) = self.rhs_num
         {
-            return match self.op {
-                ">" => lhs_num > rhs_num,
-                ">=" => lhs_num >= rhs_num,
-                "<" => lhs_num < rhs_num,
-                "<=" => lhs_num <= rhs_num,
-                "==" | "=" => (lhs_num - rhs_num).abs() < f64::EPSILON,
-                "!=" => (lhs_num - rhs_num).abs() >= f64::EPSILON,
-                _ => false,
-            };
+            return self.cmp.holds(lhs_num, rhs_num);
         }
 
         let lhs_str = lhs.text(scratch);
-        match self.op {
-            "==" | "=" => lhs_str == self.rhs_raw,
-            "!=" => lhs_str != self.rhs_raw,
-            "contains" | "=~" => lhs_str.contains(self.rhs_raw),
-            ">" => lhs_str > self.rhs_raw,
-            "<" => lhs_str < self.rhs_raw,
-            _ => false,
+        match self.cmp {
+            Cmp::Contains => lhs_str.contains(self.rhs_raw),
+            _ => self.cmp.holds(lhs_str, self.rhs_raw),
         }
     }
 }

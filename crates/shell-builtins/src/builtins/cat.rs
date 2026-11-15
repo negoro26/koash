@@ -31,6 +31,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: true,
 };
 
 impl Builtin for Cat {
