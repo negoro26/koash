@@ -190,6 +190,7 @@ pub struct Session {
     pub kill: KillSwitch,
     pub uid: u64,
     reports: Vec<StructuredDiagnostic>,
+    fallback_noticed: HashSet<String>,
 }
 
 impl Session {
@@ -268,6 +269,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid,
             reports: Vec::new(),
+            fallback_noticed: HashSet::new(),
         })
     }
 
@@ -280,6 +282,12 @@ impl Session {
 
     pub fn take_reports(&mut self) -> Vec<StructuredDiagnostic> {
         std::mem::take(&mut self.reports)
+    }
+
+    /// Whether this is the first time `command` fell back to the real program in this
+    /// session, so the user is told once and not on every later call.
+    pub fn first_fallback(&mut self, command: &str) -> bool {
+        self.fallback_noticed.insert(command.to_string())
     }
 
     pub fn fork_detached(&self) -> Self {
@@ -310,6 +318,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid,
             reports: Vec::new(),
+            fallback_noticed: HashSet::new(),
         }
     }
 
@@ -374,6 +383,7 @@ impl Session {
             kill: KillSwitch::default(),
             uid,
             reports: Vec::new(),
+            fallback_noticed: HashSet::new(),
         })
     }
 

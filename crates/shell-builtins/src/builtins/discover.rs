@@ -19,6 +19,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: true,
 };
 
 impl Builtin for Discover {

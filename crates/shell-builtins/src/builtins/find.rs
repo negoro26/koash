@@ -26,6 +26,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Track,
+    strict_options: true,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
