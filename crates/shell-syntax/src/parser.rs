@@ -177,8 +177,9 @@ impl<'a> Parser<'a> {
     }
 
     /// The source of a sigil command (`@sql`, `@py`, `@js`) is code in another language, so its
-    /// arguments are taken verbatim from `src` up to the end of the command. A lone word keeps
-    /// its shell meaning: it is the quoted program and may be followed by redirections.
+    /// arguments are taken verbatim from `src` up to the end of the command. `||` belongs to the
+    /// source (SQL concatenation, JS logical or). A lone word keeps its shell meaning: it is the
+    /// quoted program and may be followed by redirections.
     fn take_sigil_source(&mut self) -> Option<Word> {
         let is_end = |kind: &TokenKind| {
             matches!(
@@ -186,7 +187,6 @@ impl<'a> Parser<'a> {
                 TokenKind::Pipe
                     | TokenKind::Semi
                     | TokenKind::AndIf
-                    | TokenKind::OrIf
                     | TokenKind::Amp
                     | TokenKind::Newline
                     | TokenKind::Eof
