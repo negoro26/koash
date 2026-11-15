@@ -1039,12 +1039,18 @@ fn hashline_builtins_print_the_columns_help_lists_for_them() {
     ] {
         let compact = run(&format!("{script} | to compact"));
         let header = compact.lines().next().unwrap_or_default();
-        let printed = header.trim_start_matches("@schema:").replace('|', ", ");
-        let listed = run(&format!("help {name} | to json"));
-        assert!(
-            listed.contains(&format!("\"columns\": \"{printed}\"")),
-            "{name} prints `{printed}` but help says: {listed}"
-        );
+        let printed = header
+            .strip_prefix("@schema:")
+            .unwrap_or_else(|| panic!("`{script}` printed no table: {compact:?}"))
+            .replace('|', ", ");
+        let listed: serde_json::Value =
+            serde_json::from_str(&run(&format!("help {name} | to json")))
+                .expect("help prints JSON");
+        let row = listed
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["command"] == name))
+            .unwrap_or_else(|| panic!("help lists no `{name}`: {listed}"));
+        assert_eq!(row["columns"], printed, "{name}");
     }
 }
 
