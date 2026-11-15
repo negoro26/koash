@@ -75,6 +75,7 @@ struct Koa<'a> {
     stdin: Option<Vec<u8>>,
     envs: Vec<(String, String)>,
     removed: Vec<&'static str>,
+    umask: Option<&'static str>,
 }
 
 fn koa<'a>(cwd: &'a Path, script: impl Into<String>) -> Koa<'a> {
@@ -84,6 +85,7 @@ fn koa<'a>(cwd: &'a Path, script: impl Into<String>) -> Koa<'a> {
         stdin: None,
         envs: Vec::new(),
         removed: vec!["CDPATH"],
+        umask: None,
     }
 }
 
@@ -104,8 +106,20 @@ impl Koa<'_> {
         self
     }
 
+    fn umask(mut self, mask: &'static str) -> Self {
+        self.umask = Some(mask);
+        self
+    }
+
     fn run(self) -> Run {
-        let mut cmd = Command::new(KOA);
+        let mut cmd = match self.umask {
+            Some(mask) => {
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args(["-c", "umask \"$1\"; shift; exec \"$@\"", "sh", mask, KOA]);
+                cmd
+            }
+            None => Command::new(KOA),
+        };
         cmd.arg("-c")
             .arg(&self.script)
             .current_dir(self.cwd)
@@ -270,27 +284,55 @@ fn rm_without_operands_is_a_usage_error() {
     assert_eq!(r.code, 2, "{}", r.stderr);
 }
 
-/// uutils rm.rs:813-824: `.` and `..` are refused. The cwd here is a directory inside the scratch dir.
+/// uutils rm.rs:813-824: `.` and `..` are refused, with or without a trailing slash or a
+/// leading directory. The cwd is a directory inside the scratch dir, so a regression only
+/// removes scratch files.
 #[test]
 fn rm_recursive_refuses_dot_and_dotdot() {
     let s = Scratch::new("rm-dot");
+    s.write("work/sub/f", b"keep");
     s.write("work/f", b"keep");
     let work = s.path("work");
-    let r = run(&work, "rm -r .");
-    assert_eq!(r.code, 1, "{}", r.stderr);
-    assert!(r.stderr.contains("refusing"), "{}", r.stderr);
-    let r = run(&work, "rm -r ..");
-    assert_eq!(r.code, 1, "{}", r.stderr);
-    assert_eq!(s.read("work/f"), "keep");
+    for operand in [".", "..", "./", "sub/..", "sub/."] {
+        let r = run(&work, &format!("rm -r {operand}"));
+        assert_eq!(r.code, 1, "rm -r {operand}: {}", r.stderr);
+        assert_eq!(s.read("work/sub/f"), "keep", "rm -r {operand}");
+        assert_eq!(s.read("work/f"), "keep", "rm -r {operand}");
+    }
+}
+
+/// Names that merely start with dots are ordinary directories.
+#[test]
+fn rm_recursive_removes_directories_whose_names_start_with_dots() {
+    let s = Scratch::new("rm-dotnames");
+    s.write("work/.hidden/f", b"x");
+    s.write("work/..x/f", b"x");
+    s.write("work/keep", b"keep");
+    let r = run(&s.path("work"), "rm -r .hidden ..x");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!s.exists("work/.hidden") && !s.exists("work/..x"));
+    assert_eq!(s.read("work/keep"), "keep");
 }
 
 #[test]
 fn rm_verbose_names_each_removed_path() {
     let s = Scratch::new("rm-verbose");
     s.write("a", b"x");
-    let r = run(&s.0, &format!("rm -v {}", s.q("a")));
-    assert_eq!(r.code, 0);
-    assert!(r.stdout.contains("removed"), "{}", r.stdout);
+    s.write("b", b"x");
+    let r = run(&s.0, &format!("rm -v {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{}", r.stdout);
+    assert!(
+        lines[0].contains(&s.path("a").display().to_string()),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        lines[1].contains(&s.path("b").display().to_string()),
+        "{}",
+        r.stdout
+    );
 }
 
 // ---------------------------------------------------------------- cp
@@ -417,11 +459,64 @@ fn cp_preserve_keeps_mode_and_mtime() {
         .unwrap()
         .set_modified(stamp)
         .unwrap();
-    let r = run(&s.0, &format!("cp -p {} {}", s.q("a"), s.q("b")));
+    let r = koa(&s.0, format!("cp -p {} {}", s.q("a"), s.q("b")))
+        .umask("077")
+        .run();
     assert_eq!(r.code, 0, "{}", r.stderr);
     let meta = fs::metadata(s.path("b")).unwrap();
     assert_eq!(meta.permissions().mode() & 0o777, 0o640);
     assert_eq!(meta.modified().unwrap(), stamp);
+}
+
+/// coreutils cp: a new file gets the source mode filtered by the umask, and setuid bits are
+/// dropped. The sources are empty, since the kernel clears setuid on any write.
+#[test]
+fn cp_without_preserve_applies_the_umask_to_a_new_file() {
+    let s = Scratch::new("cp-umask");
+    for (mode, expected) in [(0o666, 0o644), (0o755, 0o755), (0o4755, 0o755)] {
+        let a = s.write("a", b"");
+        fs::set_permissions(&a, fs::Permissions::from_mode(mode)).unwrap();
+        let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+            .umask("022")
+            .run();
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert_eq!(
+            fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o7777,
+            expected,
+            "source mode {mode:o} under umask 022"
+        );
+        fs::remove_file(s.path("a")).unwrap();
+        fs::remove_file(s.path("b")).unwrap();
+    }
+    let a = s.write("a", b"A");
+    fs::set_permissions(&a, fs::Permissions::from_mode(0o664)).unwrap();
+    let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+        .umask("027")
+        .run();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+}
+
+/// coreutils cp: an existing destination keeps its own mode and gets the new content.
+#[test]
+fn cp_onto_an_existing_file_keeps_its_mode() {
+    let s = Scratch::new("cp-existing-mode");
+    let a = s.write("a", b"new");
+    fs::set_permissions(&a, fs::Permissions::from_mode(0o644)).unwrap();
+    let b = s.write("b", b"old");
+    fs::set_permissions(&b, fs::Permissions::from_mode(0o600)).unwrap();
+    let r = koa(&s.0, format!("cp {} {}", s.q("a"), s.q("b")))
+        .umask("022")
+        .run();
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "new");
+    assert_eq!(
+        fs::metadata(s.path("b")).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]
@@ -603,21 +698,56 @@ fn mv_replaces_an_existing_target_by_default_and_force_does_too() {
     let s = Scratch::new("mv-replace");
     s.write("a", b"new");
     s.write("b", b"old");
-    let r = run(&s.0, &format!("mv -f {} {}", s.q("a"), s.q("b")));
+    let r = run(&s.0, &format!("mv {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "new");
+    assert!(!s.exists("a"));
+    s.write("a2", b"newer");
+    let r = run(&s.0, &format!("mv -f {} {}", s.q("a2"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "newer");
+    assert!(!s.exists("a2"));
+}
+
+#[test]
+fn mv_dash_n_and_dash_f_override_each_other_by_position() {
+    let s = Scratch::new("mv-override");
+    s.write("a", b"new");
+    s.write("b", b"old");
+    let r = run(&s.0, &format!("mv -f -n {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "old");
+    assert_eq!(s.read("a"), "new");
+    let r = run(&s.0, &format!("mv -n -f {} {}", s.q("a"), s.q("b")));
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(s.read("b"), "new");
     assert!(!s.exists("a"));
 }
 
-/// uutils mv.rs refuses `mv d d/sub` ("cannot move 'd' to a subdirectory of itself").
+/// coreutils cp: of `-n` and `-f` the last one given wins.
+#[test]
+fn cp_dash_n_and_dash_f_override_each_other_by_position() {
+    let s = Scratch::new("cp-override");
+    s.write("a", b"new");
+    s.write("b", b"old");
+    let r = run(&s.0, &format!("cp -f -n {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "old");
+    let r = run(&s.0, &format!("cp -n -f {} {}", s.q("a"), s.q("b")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(s.read("b"), "new");
+}
+
+/// uutils mv.rs refuses `mv d d/sub` ("cannot move 'd' to a subdirectory of itself"). On one
+/// filesystem the kernel also fails the rename, so the diagnostic is the only observable.
 #[test]
 fn mv_refuses_to_move_a_directory_into_itself() {
-    let s = Scratch::new("mv-itself");
+    let s = Scratch::new("mv-nested");
     s.write("d/f", b"F");
     s.mkdir("d/sub");
     let r = run(&s.0, &format!("mv {} {}", s.q("d"), s.q("d/sub")));
     assert_eq!(r.code, 1);
-    assert!(r.stderr.contains("itself"), "{}", r.stderr);
+    assert!(r.stderr.contains("subdirectory of itself"), "{}", r.stderr);
     assert_eq!(s.read("d/f"), "F");
 }
 
@@ -739,10 +869,19 @@ fn mkdir_parents_long_option_and_existing_directories() {
 #[test]
 fn mkdir_verbose_names_each_created_directory() {
     let s = Scratch::new("mkdir-verbose");
-    let r = run(&s.0, &format!("mkdir -v {}", s.q("v")));
+    let r = run(&s.0, &format!("mkdir -pv {}", s.q("x/y")));
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(r.stdout.contains("created directory"), "{}", r.stdout);
-    assert!(s.exists("v"));
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{}", r.stdout);
+    let x = s.path("x").display().to_string();
+    let xy = s.path("x/y").display().to_string();
+    assert!(
+        lines[0].contains(&x) && !lines[0].contains(&xy),
+        "{}",
+        r.stdout
+    );
+    assert!(lines[1].contains(&xy), "{}", r.stdout);
+    assert!(s.exists("x/y"));
 }
 
 #[test]
@@ -945,18 +1084,83 @@ fn tail_plus_count_starts_at_that_line() {
     );
 }
 
-/// uutils tail/src/chunks.rs `ReverseChunks`: a regular file is read from its end.
-/// The invalid UTF-8 byte at the start proves the head of the file is never read.
+/// A 200 KB file with a first line that is not UTF-8: the answer spans several read chunks.
 #[test]
-fn tail_reads_a_regular_file_from_its_end() {
-    let s = Scratch::new("tail-seek");
+fn tail_raw_returns_the_last_lines_of_a_large_file_with_invalid_utf8() {
+    let s = Scratch::new("tail-big");
     let mut content = vec![0xff];
+    content.extend_from_slice(b"irst\n");
     content.extend_from_slice(&vec![b'x'; 200_000]);
     content.extend_from_slice(b"\nlast\n");
     s.write("big", &content);
-    let r = run(&s.0, &format!("tail --raw -n 1 {}", s.q("big")));
+    let r = run(&s.0, &format!("tail --raw -n 2 {}", s.q("big")));
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert_eq!(r.stdout, "last\n");
+    let expected = format!("{}\nlast\n", "x".repeat(200_000));
+    assert_eq!(r.stdout.len(), 200_006);
+    assert_eq!(r.stdout, expected);
+}
+
+/// Hashline rows of a tail carry the real line numbers, not 1..N of the window.
+#[test]
+fn tail_hashline_rows_carry_the_line_numbers_of_the_file() {
+    let s = Scratch::new("tail-lines");
+    s.write("f", b"a\nb\nc\nd\n");
+    let r = run(&s.0, &format!("tail -n 2 {} | select line", s.q("f")));
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let numbers: Vec<u64> = r
+        .stdout
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    assert_eq!(numbers, [3, 4], "{}", r.stdout);
+}
+
+/// POSIX tail: the final newline ends the last line, it does not start another one.
+#[test]
+fn tail_raw_counts_lines_by_their_terminators() {
+    let s = Scratch::new("tail-edges");
+    let cases: [(&[u8], &str, &str); 8] = [
+        (b"a\nb\nc\n", "-n 2", "b\nc\n"),
+        (b"a\nb\nc", "-n 2", "b\nc"),
+        (b"a\nb\nc\n", "-n 10", "a\nb\nc\n"),
+        (b"a\n\n\n", "-n 2", "\n\n"),
+        (b"", "-n 3", ""),
+        (b"a\nb\n", "-n 0", ""),
+        (b"a\n", "-n +9", ""),
+        (b"h\n1\n2\n", "-n +1", "h\n1\n2\n"),
+    ];
+    for (content, flags, expected) in cases {
+        s.write("f", content);
+        let r = run(&s.0, &format!("tail --raw {flags} {}", s.q("f")));
+        assert_eq!(r.code, 0, "{flags}: {}", r.stderr);
+        assert_eq!(r.stdout, expected, "tail {flags} of {content:?}");
+    }
+    s.write("f", b"a\nb\nc\n");
+    let r = run(&s.0, &format!("tail -c +3 {}", s.q("f")));
+    assert_eq!(r.stdout, "b\nc\n");
+}
+
+/// When `-n` and `-c` are both given, the last one decides the unit.
+#[test]
+fn head_and_tail_let_the_last_of_dash_n_and_dash_c_decide() {
+    let s = Scratch::new("headtail-unit");
+    s.write("f", b"abc\ndef\n");
+    assert_eq!(
+        run(&s.0, &format!("head --raw -c 2 -n 1 {}", s.q("f"))).stdout,
+        "abc\n"
+    );
+    assert_eq!(
+        run(&s.0, &format!("head --raw -n 1 -c 2 {}", s.q("f"))).stdout,
+        "ab"
+    );
+    assert_eq!(
+        run(&s.0, &format!("tail --raw -c 2 -n 1 {}", s.q("f"))).stdout,
+        "def\n"
+    );
+    assert_eq!(
+        run(&s.0, &format!("tail --raw -n 1 -c 2 {}", s.q("f"))).stdout,
+        "f\n"
+    );
 }
 
 #[test]
@@ -1212,10 +1416,16 @@ fn cd_keeps_oldpwd_and_pwd_in_the_environment() {
 #[test]
 fn cd_without_home_is_an_error_and_stays_put() {
     let s = Scratch::new("cd-nohome");
-    let r = koa(&s.0, "cd && pwd").without_env("HOME").run();
+    let r = koa(&s.0, "cd").without_env("HOME").run();
     assert_ne!(r.code, 0, "{}", r.stdout);
     assert!(r.stderr.contains("HOME"), "{}", r.stderr);
-    assert!(!r.stdout.lines().any(|l| l.trim() == "/"), "{}", r.stdout);
+    let r = koa(&s.0, "cd; pwd").without_env("HOME").run();
+    let here = s.0.display().to_string();
+    assert!(
+        r.stdout.lines().any(|l| l.trim() == here),
+        "a failed cd must not move the shell: {}",
+        r.stdout
+    );
 }
 
 #[test]
@@ -1247,9 +1457,10 @@ fn cd_searches_cdpath_and_prints_the_directory_it_chose() {
     let r = koa(&s.0, "cd target; pwd").env("CDPATH", &cdpath).run();
     assert_eq!(r.code, 0, "{}", r.stderr);
     let want = s.path("base/target").display().to_string();
-    assert!(
-        r.stdout.lines().filter(|l| l.trim() == want).count() >= 2,
-        "cd prints the CDPATH hit and pwd confirms it: {}",
+    assert_eq!(
+        r.stdout.lines().filter(|l| l.trim() == want).count(),
+        2,
+        "cd prints the CDPATH hit once and pwd confirms it: {}",
         r.stdout
     );
 }
@@ -1293,16 +1504,48 @@ fn cd_dot_relative_paths_ignore_cdpath() {
 fn cd_to_a_missing_directory_or_a_file_fails_and_stays_put() {
     let s = Scratch::new("cd-fail");
     s.write("file", b"x");
-    let r = run(&s.0, &format!("cd {} && pwd", s.q("missing")));
-    assert_ne!(r.code, 0);
-    assert!(r.stderr.contains("missing"), "{}", r.stderr);
-    let r = run(&s.0, &format!("cd {} && pwd", s.q("file")));
-    assert_ne!(r.code, 0);
+    let here = s.0.display().to_string();
+    for operand in ["missing", "file"] {
+        let target = s.q(operand);
+        let r = run(&s.0, &format!("cd {target}"));
+        assert_eq!(r.code, 1, "{operand}: {}", r.stderr);
+        assert!(r.stderr.contains(operand), "{operand}: {}", r.stderr);
+        let r = run(&s.0, &format!("cd {target}; pwd"));
+        assert!(
+            r.stdout.lines().any(|l| l.trim() == here),
+            "cd {operand} must leave the directory unchanged: {}",
+            r.stdout
+        );
+    }
+    let r = run(&s.0, &format!("cd {}", s.q("file")));
     assert!(
         r.stderr.contains("Not a directory") || r.stderr.contains("not a directory"),
         "{}",
         r.stderr
     );
+}
+
+/// POSIX: when several options of one family are given, the last one wins.
+#[test]
+fn cd_dash_p_and_dash_l_override_each_other_by_position() {
+    let s = Scratch::new("cd-override");
+    s.mkdir("real");
+    symlink(s.path("real"), s.path("link")).unwrap();
+    let link = s.path("link").display().to_string();
+    let real = s.path("real").display().to_string();
+    let r = run(&s.0, &format!("cd -P -L {}; pwd", s.q("link")));
+    assert!(r.stdout.lines().any(|l| l.trim() == link), "{}", r.stdout);
+    let r = run(&s.0, &format!("cd -L -P {}; pwd", s.q("link")));
+    assert!(r.stdout.lines().any(|l| l.trim() == real), "{}", r.stdout);
+}
+
+/// The logical `..` of the root is the root.
+#[test]
+fn cd_dotdot_past_the_root_stays_at_the_root() {
+    let s = Scratch::new("cd-root");
+    let r = run(&s.0, "cd /../..; pwd");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.lines().any(|l| l.trim() == "/"), "{}", r.stdout);
 }
 
 #[test]
@@ -1337,7 +1580,7 @@ fn exported_variable_reaches_external_commands() {
     let s = Scratch::new("export-external");
     let r = run(
         &s.0,
-        "KOA_FS_EXPORT=seen; export KOA_FS_EXPORT; /bin/sh -c 'echo $KOA_FS_EXPORT'",
+        "export KOA_FS_EXPORT=seen; /bin/sh -c 'echo $KOA_FS_EXPORT'",
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout.trim(), "seen");
@@ -1428,9 +1671,21 @@ fn echo_prints_unknown_dash_words_literally() {
 #[test]
 fn kill_rejects_an_unknown_option_without_signalling() {
     let s = Scratch::new("kill-unknown");
-    let r = run(&s.0, "kill --bogus 1");
-    assert_eq!(r.code, 2);
+    let mut victim = Command::new("sleep")
+        .arg("30")
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("spawn sleep");
+    let r = run(&s.0, &format!("kill --bogus {}", victim.id()));
+    let still_running = victim.try_wait().expect("try_wait").is_none();
+    victim.kill().expect("kill sleep");
+    victim.wait().expect("reap sleep");
+    assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
+    assert!(
+        still_running,
+        "kill signalled the process despite the usage error"
+    );
 }
 
 #[test]
