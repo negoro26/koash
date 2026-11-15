@@ -1080,3 +1080,91 @@ fn rm_recursive_refuses_the_workspace_root_of_an_isolated_fork() {
         assert!(dir.join("sub/inner.txt").exists(), "{root}");
     }
 }
+
+fn koa_stdout(dir: &Path, script: &str) -> String {
+    let out = koa_c(dir, script, Duration::from_secs(10)).expect("koa -c finishes");
+    assert!(
+        out.status.success(),
+        "`{script}` failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf-8 stdout")
+}
+
+fn json_strings(json: &serde_json::Value, key: &str) -> Vec<String> {
+    json.as_array()
+        .expect("a json array")
+        .iter()
+        .map(|row| row[key].as_str().expect("string field").to_string())
+        .collect()
+}
+
+const SHELL_CONTROL: [&str; 5] = ["unset", "exit", "jobs", "fg", "bg"];
+
+#[test]
+fn help_and_schemas_list_pipeline_commands_and_leave_out_shell_control() {
+    let dir = scratch_dir("catalog");
+
+    let help: serde_json::Value =
+        serde_json::from_str(&koa_stdout(&dir, "help | select command | to json"))
+            .expect("help renders as json");
+    let helped = json_strings(&help, "command");
+
+    let mut rpc = RpcClient::start(&dir);
+    rpc.send(serde_json::json!({"id": 1, "method": "session.schemas"}));
+    let line = rpc
+        .lines
+        .recv_timeout(Duration::from_secs(5))
+        .expect("session.schemas response");
+    let response: serde_json::Value = serde_json::from_str(&line).expect("schemas is json");
+    let schemas = json_strings(&response["result"]["schemas"], "name");
+
+    for (source, names) in [("help", &helped), ("session.schemas", &schemas)] {
+        for known in ["ls", "cat", "undo"] {
+            assert!(
+                names.iter().any(|n| n == known),
+                "{source} lacks `{known}`: {names:?}"
+            );
+        }
+        for hidden in SHELL_CONTROL {
+            assert!(
+                !names.iter().any(|n| n == hidden),
+                "{source} lists shell-control command `{hidden}`: {names:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn underscore_spellings_are_accepted_for_hyphenated_commands() {
+    let fixture = |name: &str| {
+        let dir = scratch_dir(name);
+        std::fs::write(dir.join("a"), "").expect("write a");
+        std::fs::write(dir.join("b"), "").expect("write b");
+        dir
+    };
+
+    let hyphen = koa_stdout(
+        &fixture("alias-sort-hyphen"),
+        "ls | sort-by --desc name | select name | to json",
+    );
+    let underscore = koa_stdout(
+        &fixture("alias-sort-underscore"),
+        "ls | sort_by --desc name | select name | to json",
+    );
+    assert_eq!(underscore, hyphen);
+    let rows: serde_json::Value = serde_json::from_str(&underscore).expect("json rows");
+    assert_eq!(json_strings(&rows, "name"), ["b", "a"]);
+
+    let hyphen = koa_stdout(
+        &fixture("alias-log-hyphen"),
+        "rm a; tx-log | where command == rm | to json",
+    );
+    let underscore = koa_stdout(
+        &fixture("alias-log-underscore"),
+        "rm a; tx_log | where command == rm | to json",
+    );
+    assert_eq!(underscore, hyphen);
+    let rows: serde_json::Value = serde_json::from_str(&underscore).expect("json rows");
+    assert_eq!(json_strings(&rows, "tx_id"), ["tx_001"]);
+}
