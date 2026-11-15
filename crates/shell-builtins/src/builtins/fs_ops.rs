@@ -76,12 +76,17 @@ pub(super) fn is_inside(src: &Path, dest: &Path) -> bool {
     }
 }
 
-/// The filesystem root and the session's workspace root are never removed.
-pub(super) fn is_protected_root(session: &Session, path: &Path) -> bool {
-    let Ok(real) = path.canonicalize() else {
-        return false;
-    };
-    real.parent().is_none() || session.cow.as_ref().is_some_and(|c| real == c.root)
+/// Names the root `path` is when it is one koa never removes: the filesystem root, or the
+/// session's workspace root.
+pub(super) fn protected_root(session: &Session, path: &Path) -> Option<&'static str> {
+    let real = path.canonicalize().ok()?;
+    if real.parent().is_none() {
+        Some("the filesystem root")
+    } else if session.cow.as_ref().is_some_and(|c| real == c.root) {
+        Some("the workspace root")
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------- removal

@@ -1021,3 +1021,62 @@ fn removing_a_fifo_still_makes_undo_refuse() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("st=1"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("E_TX_OPAQUE"));
 }
+
+/// An isolated fork's workspace root is the one directory `rm -r` must never take, however it is
+/// spelled. The session runs inside a scratch directory, so a regression only empties that.
+#[test]
+fn rm_recursive_refuses_the_workspace_root_of_an_isolated_fork() {
+    let dir = scratch_dir("rm-workspace-root")
+        .canonicalize()
+        .expect("canonical scratch dir");
+    std::fs::write(dir.join("keep.txt"), "precious").expect("write keep.txt");
+    std::fs::create_dir(dir.join("sub")).expect("create sub");
+    std::fs::write(dir.join("sub/inner.txt"), "inner").expect("write inner.txt");
+    let mut rpc = RpcClient::start(&dir);
+    let parent = rpc.create_session();
+    rpc.send(serde_json::json!({
+        "id": 2,
+        "method": "session.fork",
+        "params": {"session_id": parent, "isolated": true}
+    }));
+    let fork_line = rpc
+        .lines
+        .recv_timeout(Duration::from_secs(5))
+        .expect("session.fork response");
+    let fork: serde_json::Value = serde_json::from_str(&fork_line).expect("session.fork is json");
+    let sid = fork["result"]["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session_id in {fork_line}"))
+        .to_string();
+
+    for (id, root) in [
+        (3, dir.display().to_string()),
+        (4, format!("{}/", dir.display())),
+    ] {
+        rpc.send(serde_json::json!({
+            "id": id,
+            "method": "exec",
+            "params": {"session_id": sid, "command": format!("rm -r '{root}'")}
+        }));
+        let events: Vec<serde_json::Value> = rpc
+            .lines_until_completed(id, Duration::from_secs(10))
+            .iter()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let completed = events
+            .iter()
+            .find(|v| v["event"] == "completed")
+            .unwrap_or_else(|| panic!("no completed event for {root}: {events:?}"));
+        assert_eq!(completed["exit_code"], 1, "{root}: {events:?}");
+        let stderr: String = events.iter().filter_map(|v| v["stderr"].as_str()).collect();
+        assert!(stderr.contains("E_RM"), "{root}: {stderr}");
+        assert!(stderr.contains("workspace root"), "{root}: {stderr}");
+        assert!(!stderr.contains("filesystem root"), "{root}: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("keep.txt")).expect("keep.txt survives"),
+            "precious",
+            "{root}"
+        );
+        assert!(dir.join("sub/inner.txt").exists(), "{root}");
+    }
+}
