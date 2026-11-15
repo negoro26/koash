@@ -355,7 +355,7 @@ mod tests {
         let args = Args::parse(&SIG, &owned).unwrap();
         assert_eq!(args.value("name"), Some("*.rs"));
         assert_eq!(parse_error(&["--name", "x"]).code, "E_ARGS");
-        let owned = argv(&["-nam", "x"]);
+        let owned = argv(&["-na", "x"]);
         let args = Args::parse(&SIG, &owned).unwrap();
         assert_eq!(args.value("name"), None);
     }
