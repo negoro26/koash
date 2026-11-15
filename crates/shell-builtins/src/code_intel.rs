@@ -1,8 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::Write as _;
-use std::path::Path;
 
-use crate::builtins::check_killed;
+use crate::builtins::common::{check_killed, resolve_path};
 use ignore::WalkBuilder;
 use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
@@ -337,13 +336,4 @@ fn score_centrality(rel: &str, skeleton: &str) -> usize {
         score += 50;
     }
     score
-}
-
-fn resolve_path(session: &Session, raw: &str) -> std::path::PathBuf {
-    let p = Path::new(raw);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        session.cwd.join(p)
-    }
 }

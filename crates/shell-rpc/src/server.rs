@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use shell_builtins::{BUILTIN_SCHEMAS, Chunk, Sink, post_edit_diagnostics, run_program};
+use shell_builtins::{
+    Chunk, InputMode, Signature, Sink, catalog, post_edit_diagnostics, run_program,
+};
 use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
 use shell_value::{
@@ -73,6 +75,16 @@ fn parse_params<T: serde::de::DeserializeOwned>(
 ) -> Result<T, StructuredDiagnostic> {
     serde_json::from_value(params)
         .map_err(|e| StructuredDiagnostic::new("E_RPC_PARAMS", e.to_string(), None, None))
+}
+
+fn schema_json(sig: &Signature) -> serde_json::Value {
+    serde_json::json!({
+        "name": sig.name,
+        "description": sig.description,
+        "flags": sig.flags,
+        "columns": sig.columns,
+        "reads_input": sig.input != InputMode::None,
+    })
 }
 
 async fn respond<W: AsyncWrite + Unpin>(
@@ -310,7 +322,7 @@ impl RpcServer {
                 respond(
                     writer,
                     req.id,
-                    Ok(serde_json::json!({ "schemas": BUILTIN_SCHEMAS })),
+                    Ok(serde_json::json!({ "schemas": catalog().map(schema_json).collect::<Vec<_>>() })),
                 )
                 .await
             }

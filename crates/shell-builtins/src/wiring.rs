@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use nix::unistd::Pid;
 use shell_kernel::{
-    ChildGroup, ExternalSpec, Session, SpawnError, expand_word, group_stopped, resume_group,
-    spawn_external,
+    ChildGroup, ExternalSpec, JobState, Session, SpawnError, expand_word, group_stopped,
+    resume_group, spawn_external, wait_foreground,
 };
 use shell_syntax::{RedirectKind, Redirection};
 use shell_value::{StructuredDiagnostic, Value};
@@ -419,4 +419,35 @@ pub(crate) fn launch_external(
         None => Flow::Value(Value::Empty),
     };
     Ok(())
+}
+
+pub(crate) fn finish_foreground(
+    session: &mut Session,
+    sink: &Sink,
+    pgid: Pid,
+    pids: &[Pid],
+    watch: Option<Pid>,
+    summary: &str,
+    existing_job: Option<usize>,
+) -> i32 {
+    let outcome = wait_foreground(pgid, pids, watch);
+    session.restore_terminal();
+    let Some(stopped) = outcome.stopped else {
+        if let Some(id) = existing_job {
+            session.jobs.retain(|j| j.id != id);
+        }
+        return outcome.watched_status;
+    };
+    let id = match existing_job {
+        Some(id) => {
+            if let Some(job) = session.jobs.iter_mut().find(|j| j.id == id) {
+                job.state = JobState::Stopped;
+                job.pids = stopped.alive;
+            }
+            id
+        }
+        None => session.add_job(pgid, stopped.alive, summary.to_string(), JobState::Stopped),
+    };
+    sink.stderr_line(&format!("\n[{id}]+ Stopped                 {summary}"));
+    128 + stopped.signal
 }

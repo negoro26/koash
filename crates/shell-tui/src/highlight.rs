@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use shell_builtins::is_builtin;
+use shell_builtins::lookup;
 use shell_syntax::{TokenKind, WordPart, tokenize};
 
 pub fn highlight_line(input: &str) -> String {
@@ -90,7 +90,7 @@ pub fn highlight_line(input: &str) -> String {
 }
 
 fn command_exists(name: &str) -> bool {
-    if is_builtin(name) || matches!(name, "jobs" | "fg" | "bg" | "exit") {
+    if lookup(name).is_some() {
         return true;
     }
     if name.contains('/') {
