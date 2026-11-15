@@ -1854,3 +1854,24 @@ fn hashline_builtins_print_the_columns_help_lists_for_them() {
         assert_eq!(row["columns"], printed, "{name}");
     }
 }
+
+#[test]
+fn rpc_timeout_stops_an_in_process_sql_query() {
+    let dir = scratch_dir("rpc-sql-timeout");
+    let mut rpc = RpcClient::start(&dir);
+    let sid = rpc.create_session();
+    let endless = "@sql 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c'";
+    let lines = exec_lines(&mut rpc, &sid, 2, endless, Some(200));
+    let completed: serde_json::Value = lines
+        .iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["event"] == "completed" || v.get("error").is_some())
+        .expect("exec must finish with a completed event or an error");
+    assert_eq!(completed["exit_code"], 124, "{completed}");
+    let next = exec_lines(&mut rpc, &sid, 3, "echo next", None);
+    assert_eq!(
+        stdout_of(&next),
+        "next\n",
+        "the session must accept the next command once the query is stopped: {next:?}"
+    );
+}
