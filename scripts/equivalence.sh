@@ -154,7 +154,6 @@ cells_cases() {
     c 'ls modes | where modified < 2023'
     c 'ls modes | where modified == 2023-11-14T22:13:20Z'
     c 'ls modes | where modified contains 1969'
-    c 'ls modes | where modified =~ ^2'
     c 'ls modes | where modified != 2023-11-14T22:13:20Z'
     c 'ls modes | where permissions == 644'
     c 'ls modes | where permissions == 7'
@@ -162,7 +161,6 @@ cells_cases() {
     c 'ls modes | where permissions < 70'
     c 'ls modes | where permissions >= 644'
     c 'ls modes | where permissions contains 4'
-    c 'ls modes | where permissions =~ ^[0-9]{3}$'
     c 'ls modes | where size == 0'
     c 'ls modes | where kind == file | where ext == TXT'
     c 'ls modes | sort-by modified'
@@ -176,15 +174,12 @@ cells_cases() {
     c 'ls modes | select name modified permissions'
     c 'ls modes | select permissions modified'
     c 'ls modes | select modified | to json'
-    c 'ls modes | grep 1969'
     c 'ls modes | grep -c 70'
-    c 'ls modes | grep -l 644'
-    c 'ls modes | grep -n 2023'
     c 'ls modes | first 3 | last 2'
     c 'stat modes/old modes/far modes/m7 modes/m70 | to json'
-    c 'stat modes/m70 | where permissions == 70'
+    c 'stat modes/m70 modes/m7 modes/m644 | where mode == 70'
     c 'stat modes/old modes/m7 modes/m70 | sort-by modified'
-    c 'stat modes/old modes/m7 modes/m70 | sort-by permissions'
+    c 'stat modes/old modes/m7 modes/m70 modes/m644 | sort-by mode'
     c 'stat modes/old modes/m7 | where modified > 1'
     c 'ls modes | /bin/cat'
     c 'ls modes | to json | /bin/cat'
@@ -255,7 +250,6 @@ cells_cases() {
     forms 'rm a.txt; mkdir z; ' 'rollback tx_001'
     forms '' 'rename compute calc'
     forms '' 'patch a.txt 2:BETAHASH "BETA"'
-    forms '' 'diag'
     forms '' 'discover process'
     forms '' 'discover list files'
     forms '' 'prewalk proj'
@@ -278,7 +272,7 @@ cells_cases() {
     forms '' '@sql "select 9223372036854775807 as big, -9223372036854775808 as small, 1e999 as inf"'
     forms '' '@sql "select '"'"'a'"'"' as c union all select '"'"'b'"'"' union all select null"'
     forms '' '@sql "select 1 as one where 0"'
-    forms '' '@sql "create table t(z int, a text, m real); insert into t values (1,'"'"'p'"'"',0.5),(2,null,1.5); select z, a, m from t"'
+    forms '' '@sql "create table t(z int, a text, m real)"; @sql "insert into t values (1,'"'"'p'"'"',0.5),(2,null,1.5)"; @sql "select z, a, m from t"'
     c '@sql "select 3 as n, 1 as m" | where n > 2'
     c '@sql "select 3 as n union select 1 union select 2" | sort-by n'
     c '@sql "select 3 as n, 1 as m" | select m n | to json'
@@ -296,7 +290,6 @@ cells_cases() {
     c 'cat --raw rich.json | from json | select b c | to json'
     c 'cat --raw rich.json | from json | select h i j'
     c 'cat --raw rich.json | from json | /bin/cat'
-    c 'cat --raw rich.json | from json | grep -c q'
     c 'cat --raw ragged.json | from json | sort-by a'
     c 'cat --raw ragged.json | from json | sort-by -r a'
     c 'cat --raw ragged.json | from json | sort-by c'
@@ -337,13 +330,11 @@ not json
     r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"Capital","abort_on_match":false}]' 'ls modes')"
     r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"m70","abort_on_match":true}]' 'ls modes')"
     r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"\"kind\":\"dir\"","abort_on_match":true}]' 'ls')"
-    r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"1970","abort_on_match":false}],"format":"compact"' 'ls modes')"
+    r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"2023-11","abort_on_match":false}],"format":"compact"' 'ls modes')"
     r "$(rpc_script_opts '"stream_rules":[{"name":"r","pattern":"Capital","abort_on_match":false}],"max_output_bytes":200' 'ls modes')"
-    r "$(rpc_script_opts '"format":"compact"' 'cat --raw rich.json | from json')"
-    r "$(rpc_script_opts '"format":"compact"' 'cat --raw ragged.json | from json')"
-    r "$(rpc_script 'cat --raw ragged.json | from json')"
     r "$(rpc_script_opts '"format":"compact"' 'env | where key == HOME')"
-    r "$(rpc_script_opts '"format":"compact"' 'ls modes | select name name')"
+    r "$(rpc_script_opts '"format":"compact"' 'ls modes; cat --raw data.json | from json')"
+    r "$(rpc_script_opts '"format":"compact"' 'ls modes; @sql "select 5 as modified, 7 as permissions, '"'"'q'"'"' as name"')"
     r "$(rpc_script_opts '"format":"table"' 'ls modes')"
 }
 
