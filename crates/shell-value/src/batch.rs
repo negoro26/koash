@@ -230,11 +230,6 @@ impl RecordBatch {
         }
         out.into_batch()
     }
-
-    #[cfg(test)]
-    pub(crate) fn text_bytes(&self) -> usize {
-        self.text.len()
-    }
 }
 
 #[cfg(test)]
