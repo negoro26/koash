@@ -83,7 +83,9 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
             e.insert(c)
         }
     };
-
+    let kill = session.kill.clone();
+    conn.progress_handler(1000, Some(move || kill.is_killed()))
+        .map_err(|e| sql_error(session, e))?;
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Ok(Value::Empty);
@@ -93,16 +95,11 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
     if upper.starts_with("SELECT") || upper.starts_with("PRAGMA") || upper.starts_with("WITH") {
         let mut stmt = conn
             .prepare_cached(trimmed)
-            .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;
+            .map_err(|e| sql_error(session, e))?;
         let col_names: Vec<String> = stmt.column_names().map(str::to_string).collect();
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;
+        let mut rows = stmt.query([]).map_err(|e| sql_error(session, e))?;
         let mut records = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?
-        {
+        while let Some(row) = rows.next().map_err(|e| sql_error(session, e))? {
             let mut rec = StructuredRecord::new();
             for (idx, col) in col_names.iter().enumerate() {
                 let val = match row.get_ref(idx) {
@@ -124,9 +121,21 @@ pub fn run_sql_inprocess(session: &Session, query: &str) -> Result<Value, Struct
         Value::from_records(records)
     } else {
         conn.execute_batch(trimmed)
-            .map_err(|e| StructuredDiagnostic::new("E_SQL", e.to_string(), None, None))?;
+            .map_err(|e| sql_error(session, e))?;
         Ok(Value::Empty)
     }
+}
+
+fn sql_error(session: &Session, err: rusqlite::Error) -> StructuredDiagnostic {
+    if session.kill.is_killed() {
+        return StructuredDiagnostic::new(
+            "E_KILLED",
+            "query stopped by timeout or cancel",
+            None,
+            None,
+        );
+    }
+    StructuredDiagnostic::new("E_SQL", err.to_string(), None, None)
 }
 
 pub fn run_worker(

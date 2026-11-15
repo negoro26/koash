@@ -1874,4 +1874,14 @@ fn rpc_timeout_stops_an_in_process_sql_query() {
         "next\n",
         "the session must accept the next command once the query is stopped: {next:?}"
     );
+    let after = exec_lines(
+        &mut rpc,
+        &sid,
+        4,
+        "@sql 'SELECT 41 + 1 AS v' | to json",
+        None,
+    );
+    let rows: serde_json::Value =
+        serde_json::from_str(&stdout_of(&after)).expect("to json prints JSON");
+    assert_eq!(rows, serde_json::json!([{"v": 42}]), "{after:?}");
 }
