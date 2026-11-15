@@ -1,0 +1,50 @@
+use serde_json::{Value as JsonVal, json};
+use shell_kernel::Session;
+use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
+
+use super::common::usage_error;
+use crate::args::Args;
+use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+
+pub(super) struct Redo;
+
+static SIGNATURE: Signature = Signature {
+    name: "redo",
+    aliases: &[],
+    description: "Re-apply the transactional micro-commit most recently undone",
+    flags: &[],
+    columns: &["tx_id", "restored_files"],
+    input: InputMode::None,
+    placement: Placement::Any,
+    tx: TxPolicy::Skip,
+    strict_options: false,
+};
+
+impl Builtin for Redo {
+    fn signature(&self) -> &'static Signature {
+        &SIGNATURE
+    }
+
+    fn run(
+        &self,
+        session: &mut Session,
+        args: &[String],
+        _input: Value,
+    ) -> Result<Value, StructuredDiagnostic> {
+        if let Some(extra) = Args::parse(&SIGNATURE, args)?.operands.first() {
+            return Err(usage_error(
+                format!("redo takes no arguments, got '{extra}'"),
+                "redo",
+            ));
+        }
+        match session.redo_last()? {
+            Some((tx_id, count)) => {
+                let mut rec = StructuredRecord::new();
+                rec.insert("tx_id".to_string(), JsonVal::String(tx_id));
+                rec.insert("restored_files".to_string(), json!(count));
+                Ok(Value::from_records(vec![rec]))
+            }
+            None => Ok(Value::from_records(Vec::new())),
+        }
+    }
+}

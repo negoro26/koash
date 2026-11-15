@@ -2,6 +2,8 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
+use super::common::usage_error;
+use crate::args::Args;
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Undo;
@@ -15,6 +17,7 @@ static SIGNATURE: Signature = Signature {
     input: InputMode::None,
     placement: Placement::Any,
     tx: TxPolicy::Skip,
+    strict_options: false,
 };
 
 impl Builtin for Undo {
@@ -25,9 +28,15 @@ impl Builtin for Undo {
     fn run(
         &self,
         session: &mut Session,
-        _args: &[String],
+        args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
+        if let Some(extra) = Args::parse(&SIGNATURE, args)?.operands.first() {
+            return Err(usage_error(
+                format!("undo takes no arguments, got '{extra}'"),
+                "undo",
+            ));
+        }
         match session.undo_last()? {
             Some((tx_id, count)) => {
                 let mut rec = StructuredRecord::new();
