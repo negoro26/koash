@@ -57,6 +57,9 @@ impl Serialize for Datum<'_> {
                 Ok(value) => value.serialize(s),
                 Err(_) => s.serialize_unit(),
             },
+            Datum::Time(_) | Datum::Mode(_) => {
+                s.serialize_str(self.short_text().unwrap_or_default().as_str())
+            }
         }
     }
 }
@@ -309,6 +312,9 @@ mod tests {
             Datum::Float(n) => Value::from(n),
             Datum::Str(s) => Value::String(s.to_string()),
             Datum::Json(text) => serde_json::from_str(text).unwrap(),
+            Datum::Time(_) | Datum::Mode(_) => {
+                Value::String(cell.short_text().unwrap().as_str().to_string())
+            }
         };
         batch
             .rows()

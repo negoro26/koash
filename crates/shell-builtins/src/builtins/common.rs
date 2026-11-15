@@ -110,29 +110,14 @@ pub(crate) fn search_file_with_hashline(
     );
 }
 
-pub(crate) fn format_unix_iso(secs: u64) -> String {
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let hour = rem / 3600;
-    let min = (rem % 3600) / 60;
-    let sec = rem % 60;
-    let (year, month, day) = civil_from_days(days as i64);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
-}
-
-// Howard Hinnant's civil_from_days: https://howardhinnant.github.io/date_algorithms.html#civil_from_days
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if m <= 2 { 1 } else { 0 };
-    (year, m, d)
+pub(crate) fn kind_of(meta: &std::fs::Metadata) -> &'static str {
+    if meta.is_dir() {
+        "dir"
+    } else if meta.is_symlink() {
+        "symlink"
+    } else {
+        "file"
+    }
 }
 
 pub(crate) fn job_index(
