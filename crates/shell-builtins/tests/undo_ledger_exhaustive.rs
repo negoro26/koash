@@ -18,9 +18,10 @@ enum Op {
     Undo,
     RollbackOldest,
     RollbackNewest,
+    Redo,
 }
 
-const ALPHABET: [Op; 9] = [
+const ALPHABET: [Op; 10] = [
     Op::BuiltinWrite(0),
     Op::BuiltinWrite(1),
     Op::BuiltinRm(0),
@@ -30,6 +31,7 @@ const ALPHABET: [Op; 9] = [
     Op::Undo,
     Op::RollbackOldest,
     Op::RollbackNewest,
+    Op::Redo,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,6 +66,7 @@ fn command_text(op: Op, step: usize, session: &Session) -> String {
         Op::BuiltinRm(f) => format!("rm {}", FILES[f]),
         Op::ExternalWrite(f) => format!("/bin/sh -c 'echo x{step} > {}'", FILES[f]),
         Op::Undo => "undo".to_string(),
+        Op::Redo => "redo".to_string(),
         Op::RollbackOldest => format!(
             "rollback {}",
             session
@@ -100,12 +103,14 @@ fn run_sequence(dir: &Path, ops: &[Op]) -> Result<(), Violation> {
     let mut author: BTreeMap<&'static str, Author> =
         FILES.iter().map(|f| (*f, Author::Initial)).collect();
     let mut before_tx: BTreeMap<String, Snapshot> = BTreeMap::new();
+    let mut redo_stack: Vec<Snapshot> = Vec::new();
     let mut trace = Vec::new();
 
     for (step, op) in ops.iter().copied().enumerate() {
         let text = command_text(op, step, &session);
         let before = snapshot(dir);
         let top_before = session.tx_log.last().map(|t| t.id.clone());
+        let redo_before = session.redo_depth();
         let undo_target = session.tx_log.last().map(|t| {
             (
                 t.id.clone(),
@@ -158,6 +163,60 @@ fn run_sequence(dir: &Path, ops: &[Op]) -> Result<(), Violation> {
             .copied()
             .filter(|f| before[f] != after[f])
             .collect();
+
+        let reverts = matches!(op, Op::Undo | Op::RollbackOldest | Op::RollbackNewest);
+        if reverts && session.redo_depth() > redo_before {
+            redo_stack.push(before.clone());
+        }
+        if matches!(op, Op::Redo) && status == 0 {
+            for f in &changed {
+                if author[f] == Author::External {
+                    return Err(Violation {
+                        property: "P1: a successful redo never overwrites a file an external command wrote",
+                        detail: format!(
+                            "`redo` changed `{f}`, last written by an external command"
+                        ),
+                        trace,
+                    });
+                }
+            }
+            if session.redo_depth() < redo_before {
+                let Some(expected) = redo_stack.pop() else {
+                    return Err(Violation {
+                        property: "P3: redo re-applies only an undo or rollback with no edit after it",
+                        detail: "`redo` re-applied a record that a later edit should have cleared"
+                            .to_string(),
+                        trace,
+                    });
+                };
+                for f in FILES {
+                    if after[f] != expected[f] {
+                        return Err(Violation {
+                            property: "P3: redo restores exactly the state before the undo it reverses",
+                            detail: format!(
+                                "after redo, `{f}` is {:?}, expected {:?}",
+                                after[f].as_deref().map(String::from_utf8_lossy),
+                                expected[f].as_deref().map(String::from_utf8_lossy),
+                            ),
+                            trace,
+                        });
+                    }
+                }
+            } else if !changed.is_empty() {
+                return Err(Violation {
+                    property: "P3: redo re-applies only an undo or rollback with no edit after it",
+                    detail: "`redo` changed files with nothing to redo".to_string(),
+                    trace,
+                });
+            }
+        }
+        if matches!(
+            op,
+            Op::BuiltinWrite(_) | Op::BuiltinRm(_) | Op::ExternalWrite(_)
+        ) && !changed.is_empty()
+        {
+            redo_stack.clear();
+        }
 
         if matches!(op, Op::Undo) && status == 0 {
             for f in &changed {
