@@ -12,7 +12,7 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Take first N records, file lines, or raw lines",
     flags: &slice::FLAGS,
-    columns: &HASHLINE_COLUMNS,
+    columns: HASHLINE_COLUMNS,
     input: InputMode::Lines,
     placement: Placement::Any,
     tx: TxPolicy::Track,

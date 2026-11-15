@@ -82,7 +82,7 @@ impl Builtin for Ls {
             na.cmp(nb)
         });
 
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }
 

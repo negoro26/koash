@@ -63,8 +63,8 @@ impl Builtin for TxLog {
             rec.insert("files".to_string(), json!(0));
             rec.insert("redo".to_string(), json!(redo));
             rec.insert("opaque_after".to_string(), JsonVal::Null);
-            return Ok(Value::from_records(vec![rec]));
+            return Value::from_records(vec![rec]);
         }
-        Ok(Value::from_records(records))
+        Value::from_records(records)
     }
 }

@@ -82,7 +82,7 @@ impl Builtin for Where {
                 Some("operators: == != < <= > >= =~".to_string()),
             ));
         };
-        let mut batch = input.into_batch();
+        let mut batch = input.into_batch()?;
         let Some(col_idx) = batch.col_index(field) else {
             batch.truncate_rows(0);
             return Ok(Value::from_batch(batch));

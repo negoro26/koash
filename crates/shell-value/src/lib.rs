@@ -2,6 +2,7 @@ mod batch;
 mod cell;
 mod datum;
 mod json;
+mod rows;
 mod schema;
 mod text;
 
@@ -13,9 +14,9 @@ use shell_syntax::{Span, SyntaxError};
 use thiserror::Error;
 
 pub use batch::{RecordBatch, Row, RowOrder};
-pub use cell::CellVal;
 pub use datum::Datum;
 pub use json::{Records, StructuredRecord};
+pub use rows::{CellValue, DynRows, Record, RowSink, Rows};
 pub use schema::{Column, Schema};
 pub use text::{batch_to_compact_sigil, render_batch_table};
 
@@ -83,18 +84,18 @@ impl Value {
         Value::Batch(batch)
     }
 
-    pub fn from_records(records: Vec<StructuredRecord>) -> Self {
-        Value::Batch(RecordBatch::from_maps(records))
+    pub fn from_records(records: Vec<StructuredRecord>) -> Result<Self, StructuredDiagnostic> {
+        Ok(Value::Batch(RecordBatch::from_maps(records)?))
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Value::Bytes(bytes)
     }
 
-    pub fn into_batch(self) -> RecordBatch {
+    pub fn into_batch(self) -> Result<RecordBatch, StructuredDiagnostic> {
         match self {
-            Value::Empty => RecordBatch::empty(),
-            Value::Batch(batch) => batch,
+            Value::Empty => Ok(RecordBatch::empty()),
+            Value::Batch(batch) => Ok(batch),
             Value::Bytes(bytes) => json::batch_from_raw_bytes(&bytes),
         }
     }

@@ -11,8 +11,8 @@ pub enum Datum<'a> {
     UInt(u64),
     Float(f64),
     Str(&'a str),
-    /// A JSON array or object.
-    Json(&'a serde_json::Value),
+    /// The compact text of a JSON array or object.
+    Json(&'a str),
 }
 
 impl<'a> Datum<'a> {
@@ -46,11 +46,10 @@ impl<'a> Datum<'a> {
             Datum::Null => "",
             Datum::Bool(true) => "true",
             Datum::Bool(false) => "false",
-            Datum::Str(s) => s,
+            Datum::Str(s) | Datum::Json(s) => s,
             Datum::Int(n) => format_into(scratch, &n),
             Datum::UInt(n) => format_into(scratch, &n),
             Datum::Float(n) => format_into(scratch, &n),
-            Datum::Json(v) => format_into(scratch, v),
         }
     }
 
@@ -60,12 +59,11 @@ impl<'a> Datum<'a> {
             Datum::Null => 0,
             Datum::Bool(true) => 4,
             Datum::Bool(false) => 5,
-            Datum::Str(s) => s.len(),
+            Datum::Str(s) | Datum::Json(s) => s.len(),
             Datum::UInt(u) => uint_decimal_len(u),
             Datum::Int(i) if i >= 0 => uint_decimal_len(i as u64),
             Datum::Int(i) => 1 + uint_decimal_len(i.wrapping_neg() as u64),
             Datum::Float(f) => format_into(scratch, &f).len(),
-            Datum::Json(v) => format_into(scratch, v).len(),
         }
     }
 
@@ -128,7 +126,7 @@ mod tests {
 
     #[test]
     fn text_is_what_the_table_prints() {
-        let nested = serde_json::json!([1, {"a": null}]);
+        let nested = "[1,{\"a\":null}]";
         assert_eq!(text(Datum::Null), "");
         assert_eq!(text(Datum::Bool(true)), "true");
         assert_eq!(text(Datum::Int(-7)), "-7");
@@ -136,12 +134,12 @@ mod tests {
         assert_eq!(text(Datum::Float(2.0)), "2");
         assert_eq!(text(Datum::Float(1e21)), "1000000000000000000000");
         assert_eq!(text(Datum::Str("é")), "é");
-        assert_eq!(text(Datum::Json(&nested)), "[1,{\"a\":null}]");
+        assert_eq!(text(Datum::Json(nested)), nested);
     }
 
     #[test]
     fn text_len_and_write_text_agree_with_text() {
-        let object = serde_json::json!({});
+        let object = "{}";
         let cells = [
             Datum::Null,
             Datum::Bool(false),
@@ -150,7 +148,7 @@ mod tests {
             Datum::UInt(10),
             Datum::Float(-0.5),
             Datum::Str("héllo"),
-            Datum::Json(&object),
+            Datum::Json(object),
         ];
         let mut scratch = String::new();
         for cell in cells {
@@ -164,10 +162,10 @@ mod tests {
 
     #[test]
     fn only_strings_are_strings_and_only_numbers_are_numbers() {
-        let array = serde_json::json!([1]);
+        let array = "[1]";
         assert_eq!(Datum::Str("1").as_f64(), None);
         assert_eq!(Datum::Int(1).as_str(), None);
-        assert_eq!(Datum::Json(&array).as_f64(), None);
+        assert_eq!(Datum::Json(array).as_f64(), None);
         assert_eq!(Datum::Bool(true).as_f64(), None);
         assert_eq!(Datum::UInt(3).as_f64(), Some(3.0));
         assert_eq!(Datum::Float(0.5).as_f64(), Some(0.5));
