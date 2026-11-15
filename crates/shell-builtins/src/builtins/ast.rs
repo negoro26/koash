@@ -27,6 +27,6 @@ impl Builtin for Ast {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        crate::code_intel::run_ast(session, args)
+        crate::code_intel::run_ast(session, &SIGNATURE, args)
     }
 }

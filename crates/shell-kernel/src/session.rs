@@ -92,6 +92,7 @@ pub struct Session {
     pub parent_id: Option<String>,
     pub kill: KillSwitch,
     pub uid: u64,
+    reports: Vec<StructuredDiagnostic>,
 }
 
 impl Session {
@@ -164,7 +165,19 @@ impl Session {
             parent_id: None,
             kill: KillSwitch::default(),
             uid: next_session_uid(),
+            reports: Vec::new(),
         })
+    }
+
+    /// Records a failure that does not stop the running builtin. A command that handles
+    /// several operands reports each failed one here and carries on; the executor prints
+    /// the reports after the command returns and turns them into exit status 1.
+    pub fn report(&mut self, diag: StructuredDiagnostic) {
+        self.reports.push(diag);
+    }
+
+    pub fn take_reports(&mut self) -> Vec<StructuredDiagnostic> {
+        std::mem::take(&mut self.reports)
     }
 
     pub fn fork_detached(&self) -> Self {
@@ -190,6 +203,7 @@ impl Session {
             parent_id: None,
             kill: KillSwitch::default(),
             uid: next_session_uid(),
+            reports: Vec::new(),
         }
     }
 
@@ -248,6 +262,7 @@ impl Session {
             parent_id: None,
             kill: KillSwitch::default(),
             uid: next_session_uid(),
+            reports: Vec::new(),
         })
     }
 

@@ -6,8 +6,9 @@ use std::sync::Arc;
 use grep_searcher::Searcher;
 use grep_searcher::sinks::UTF8;
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
+use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, hashline_bytes};
 
+use crate::args::Args;
 use crate::builtin::Signature;
 
 pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic> {
@@ -40,93 +41,43 @@ pub(crate) fn hashline_schema() -> Arc<[Cow<'static, str>]> {
     ])
 }
 
-pub(crate) fn parse_slice_args(args: &[String], default_n: usize) -> (usize, bool, Vec<&str>) {
-    let mut count = default_n;
-    let mut raw = false;
-    let mut paths = Vec::new();
-    let mut parse_flags = true;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if parse_flags && arg == "--" {
-            parse_flags = false;
-        } else if parse_flags && (arg == "--raw" || arg == "-r") {
-            raw = true;
-        } else if parse_flags && arg == "-n" {
-            if let Some(val) = iter.next()
-                && let Ok(n) = val.parse::<usize>()
-            {
-                count = n;
-            }
-        } else if parse_flags
-            && let Some(rest) = arg.strip_prefix("-n")
-            && let Ok(n) = rest.parse::<usize>()
-        {
-            count = n;
-        } else if parse_flags
-            && let Some(rest) = arg.strip_prefix('-')
-            && !rest.is_empty()
-            && rest.bytes().all(|b| b.is_ascii_digit())
-            && let Ok(n) = rest.parse::<usize>()
-        {
-            count = n;
-        } else {
-            paths.push(arg.as_str());
-        }
-    }
-    (count, raw, paths)
+/// Splits bytes into lines like `str::lines` does, without requiring UTF-8: a final newline
+/// ends the last line instead of starting another, and a `\r` before the `\n` is dropped.
+pub(crate) fn text_lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    (!bytes.is_empty())
+        .then(|| body.split(|b| *b == b'\n'))
+        .into_iter()
+        .flatten()
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
 }
 
-pub(crate) fn read_files_slice(
-    session: &Session,
-    paths: &[&str],
-    n: usize,
-    from_tail: bool,
-    raw: bool,
-) -> Result<Value, StructuredDiagnostic> {
-    if raw {
-        let mut out = String::new();
-        for arg in paths {
-            let p = resolve_path(session, arg);
-            let content = std::fs::read_to_string(&p)
-                .map_err(|e| StructuredDiagnostic::from_io("E_READ", &e, None))?;
-            let lines: Vec<&str> = content.lines().collect();
-            let slice = if from_tail {
-                let start = lines.len().saturating_sub(n);
-                &lines[start..]
-            } else {
-                &lines[..n.min(lines.len())]
-            };
-            for line in slice {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        return Ok(Value::from_bytes(out.into_bytes()));
+/// Appends one Hashline row per line, numbered from `first`. Invalid UTF-8 shows as U+FFFD.
+pub(crate) fn push_hashline_rows<'a>(
+    batch: &mut RecordBatch,
+    label: &Arc<str>,
+    first: u64,
+    lines: impl Iterator<Item = &'a [u8]>,
+) {
+    for (offset, line) in lines.enumerate() {
+        let text = String::from_utf8_lossy(line).into_owned();
+        batch.cells.push(CellVal::SharedStr(Arc::clone(label)));
+        batch.cells.push(CellVal::UInt(first + offset as u64));
+        batch
+            .cells
+            .push(CellVal::Hash(hashline_bytes(text.as_bytes())));
+        batch.cells.push(CellVal::Str(text));
     }
+}
 
-    let mut batch = RecordBatch::with_capacity(hashline_schema(), n.min(256));
-    for arg in paths {
-        let p = resolve_path(session, arg);
-        let content = std::fs::read_to_string(&p)
-            .map_err(|e| StructuredDiagnostic::from_io("E_READ", &e, None))?;
-        let lines: Vec<&str> = content.lines().collect();
-        let (start, slice) = if from_tail {
-            let s = lines.len().saturating_sub(n);
-            (s, &lines[s..])
-        } else {
-            (0, &lines[..n.min(lines.len())])
-        };
-        let file_cell: Arc<str> = Arc::from(*arg);
-        for (idx, line) in slice.iter().enumerate() {
-            batch.cells.push(CellVal::SharedStr(Arc::clone(&file_cell)));
-            batch.cells.push(CellVal::UInt((start + idx + 1) as u64));
-            batch
-                .cells
-                .push(CellVal::Hash(hashline_bytes(line.as_bytes())));
-            batch.cells.push(CellVal::Str((*line).to_string()));
-        }
-    }
-    Ok(Value::from_batch(batch))
+pub(crate) fn usage_error(message: impl Into<String>, usage: &str) -> StructuredDiagnostic {
+    StructuredDiagnostic::new("E_ARGS", message, None, Some(format!("usage: {usage}")))
+}
+
+/// Whether a command that reads files falls back to standard input: it has no operands or a
+/// lone `-`. An argument error means nothing is read, and `run` reports it.
+pub(crate) fn operands_read_stdin(sig: &'static Signature, args: &[String]) -> bool {
+    Args::parse(sig, args).is_ok_and(|a| a.operands.is_empty() || a.operands.contains(&"-"))
 }
 
 pub(crate) fn search_file_with_hashline(

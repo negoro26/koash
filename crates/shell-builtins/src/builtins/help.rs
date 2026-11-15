@@ -5,7 +5,7 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
 use super::catalog;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy, flag_spellings};
 
 pub(super) struct Help;
 
@@ -50,9 +50,9 @@ impl Builtin for Help {
             batch
                 .cells
                 .push(shell_value::CellVal::Str(schema.name.to_string()));
-            batch
-                .cells
-                .push(shell_value::CellVal::Str(schema.flags.join(" ")));
+            batch.cells.push(shell_value::CellVal::Str(
+                flag_spellings(schema.flags).join(" "),
+            ));
             batch
                 .cells
                 .push(shell_value::CellVal::Str(schema.columns.join(", ")));

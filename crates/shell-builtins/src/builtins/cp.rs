@@ -1,10 +1,9 @@
-use std::path::Path;
-
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
-use super::common::resolve_path;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use super::fs_ops::{CopyOpts, copy_operand, plan_transfers};
+use crate::args::Args;
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Cp;
 
@@ -12,7 +11,16 @@ static SIGNATURE: Signature = Signature {
     name: "cp",
     aliases: &[],
     description: "Copy files or directories",
-    flags: &["-r"],
+    flags: &[
+        Flag::switch('r', "recursive", "copy directories and their contents"),
+        Flag::short_switch('R', "same as -r"),
+        Flag::switch('n', "no-clobber", "never replace an existing file"),
+        Flag::switch('f', "force", "remove an unwritable target and retry"),
+        Flag::switch('p', "preserve", "keep mode and modification time"),
+        Flag::switch('L', "dereference", "follow every symlink in the source"),
+        Flag::switch('P', "no-dereference", "copy symlinks as symlinks"),
+        Flag::switch('v', "verbose", "say what was copied"),
+    ],
     columns: &[],
     input: InputMode::None,
     placement: Placement::Any,
@@ -24,95 +32,39 @@ impl Builtin for Cp {
         &SIGNATURE
     }
 
+    /// Mirrors uutils `cp` (cp.rs): `cp SRC... DIR` and `cp SRC DST`, symlinks copied as symlinks
+    /// under `-r` unless `-L`, and an existing target replaced unless `-n`.
     fn run(
         &self,
         session: &mut Session,
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        let mut recursive = false;
-        let mut positional = Vec::new();
-        for arg in args {
-            if arg == "-r" || arg == "-R" {
-                recursive = true;
-            } else {
-                positional.push(arg.clone());
-            }
-        }
-        if positional.len() < 2 {
-            return Err(StructuredDiagnostic::new(
-                "E_ARGS",
-                "cp requires source and destination",
-                None,
-                None,
-            ));
-        }
-        let src = resolve_path(session, &positional[0]);
-        let dst = resolve_path(session, &positional[1]);
-        if src.is_dir() {
-            if !recursive {
-                return Err(StructuredDiagnostic::new(
-                    "E_CP",
-                    format!("{} is a directory (use -r)", src.display()),
-                    None,
-                    None,
-                ));
-            }
-            record_copy_targets(session, &src, &dst);
-            copy_dir_recursive(&src, &dst)
-                .map_err(|e| StructuredDiagnostic::from_io("E_CP", &e, None))?;
-        } else {
-            let final_dst = if dst.is_dir() {
-                match src.file_name() {
-                    Some(name) => dst.join(name),
-                    None => dst.clone(),
-                }
-            } else {
-                dst.clone()
-            };
-            session.record_tree(&final_dst);
-            std::fs::copy(&src, &final_dst)
-                .map_err(|e| StructuredDiagnostic::from_io("E_CP", &e, None))?;
-        }
-        session.record_mutation(dst.to_string_lossy().to_string());
-        Ok(Value::Empty)
-    }
-}
-
-fn record_copy_targets(session: &mut Session, src: &Path, dst: &Path) {
-    let mut pending = vec![(src.to_path_buf(), dst.to_path_buf())];
-    while let Some((from, to)) = pending.pop() {
-        let existed = std::fs::symlink_metadata(&to).is_ok();
-        if !session.record_preimage(&to) {
-            return;
-        }
-        if !existed {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&from) else {
-            continue;
+        let args = Args::parse(&SIGNATURE, args)?;
+        let transfers = plan_transfers(session, "cp", "E_CP", &args.operands)?;
+        let recursive = args.has("r") || args.has("R");
+        let deref = args.last_of(&["L", "P"]);
+        let opts = CopyOpts {
+            recursive,
+            no_clobber: args.last_of(&["n", "f"]) == Some("n"),
+            force: args.last_of(&["n", "f"]) == Some("f"),
+            preserve: args.has("p"),
+            dereference: deref == Some("L"),
+            follow_operands: deref == Some("L") || (deref.is_none() && !recursive),
+            verbose: args.has("v"),
         };
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                pending.push((entry.path(), to.join(entry.file_name())));
-            } else if !session.record_preimage(&to.join(entry.file_name())) {
-                return;
-            }
+        let mut out = Vec::new();
+        for t in &transfers {
+            copy_operand(
+                session,
+                "E_CP",
+                &t.src,
+                &t.dest,
+                (&t.src_label, &t.dest_label),
+                opts,
+                &mut out,
+            );
         }
+        Ok(Value::from_bytes(out))
     }
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let to = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &to)?;
-        } else {
-            std::fs::copy(entry.path(), to)?;
-        }
-    }
-    Ok(())
 }

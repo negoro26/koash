@@ -11,7 +11,9 @@ use shell_kernel::Session;
 use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
 
 use super::common::{check_killed, hashline_schema, resolve_path, search_file_with_hashline};
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use super::fs_ops::{describe, fail};
+use crate::args::Args;
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Grep;
 
@@ -20,18 +22,44 @@ static SIGNATURE: Signature = Signature {
     aliases: &[],
     description: "Search files or input stream with Hashline anchors",
     flags: &[
-        "-i",
-        "-n",
-        "-r",
-        "-R",
-        "-E",
-        "-F",
-        "-w",
-        "-v",
-        "-l",
-        "-c",
-        "--include",
-        "--exclude",
+        Flag::switch('i', "ignore-case", "case-insensitive match"),
+        Flag::switch(
+            'n',
+            "line-number",
+            "accepted; every row already carries its line number",
+        ),
+        Flag::switch(
+            'r',
+            "recursive",
+            "search directory operands, or the current directory",
+        ),
+        Flag::short_switch('R', "same as -r"),
+        Flag::switch(
+            'E',
+            "extended-regexp",
+            "accepted; patterns are always extended regular expressions",
+        ),
+        Flag::switch('F', "fixed-strings", "match the pattern as plain text"),
+        Flag::switch('w', "word-regexp", "match whole words only"),
+        Flag::switch('v', "invert-match", "select lines that do not match"),
+        Flag::switch(
+            'l',
+            "files-with-matches",
+            "print only the names of files that match",
+        ),
+        Flag::switch('c', "count", "print a match count per file"),
+        Flag::switch(
+            'H',
+            "with-filename",
+            "accepted; every row already names its file",
+        ),
+        Flag::switch(
+            's',
+            "no-messages",
+            "do not report unreadable or missing operands",
+        ),
+        Flag::long_valued("include", "search only files whose name matches the glob"),
+        Flag::long_valued("exclude", "skip files whose name matches the glob"),
     ],
     columns: &["file", "line", "hash", "text"],
     input: InputMode::Lines,
@@ -256,6 +284,17 @@ impl Builtin for Grep {
 
         for path_arg in search_paths {
             let target = resolve_path(session, path_arg);
+            let unusable = match std::fs::metadata(&target) {
+                Err(e) => Some(describe(&e)),
+                Ok(meta) if meta.is_dir() && !opts.recursive => Some("Is a directory".to_string()),
+                Ok(_) => None,
+            };
+            if let Some(reason) = unusable {
+                if !opts.no_messages {
+                    fail(session, "E_GREP", format!("grep: {path_arg}: {reason}"));
+                }
+                continue;
+            }
             let walker = WalkBuilder::new(&target).build();
             for entry_res in walker {
                 check_killed(session)?;
@@ -297,6 +336,7 @@ struct GrepOpts {
     files_only: bool,
     count_only: bool,
     recursive: bool,
+    no_messages: bool,
     includes: Option<GlobSet>,
     excludes: Option<GlobSet>,
     positional: Vec<String>,
@@ -319,74 +359,20 @@ fn build_globset(patterns: &[String]) -> Result<Option<GlobSet>, StructuredDiagn
 }
 
 fn parse_grep_opts(args: &[String]) -> Result<GrepOpts, StructuredDiagnostic> {
-    let mut case_insensitive = false;
-    let mut fixed_strings = false;
-    let mut word_match = false;
-    let mut invert = false;
-    let mut files_only = false;
-    let mut count_only = false;
-    let mut recursive = false;
-    let mut include_pats = Vec::new();
-    let mut exclude_pats = Vec::new();
-    let mut positional = Vec::new();
-    let mut parse_flags = true;
-    let mut iter = args.iter();
-
-    while let Some(arg) = iter.next() {
-        if parse_flags && arg == "--" {
-            parse_flags = false;
-            continue;
-        }
-        if parse_flags && let Some(pat) = arg.strip_prefix("--include=") {
-            include_pats.push(pat.to_string());
-            continue;
-        }
-        if parse_flags && arg == "--include" {
-            if let Some(pat) = iter.next() {
-                include_pats.push(pat.clone());
-            }
-            continue;
-        }
-        if parse_flags && let Some(pat) = arg.strip_prefix("--exclude=") {
-            exclude_pats.push(pat.to_string());
-            continue;
-        }
-        if parse_flags && arg == "--exclude" {
-            if let Some(pat) = iter.next() {
-                exclude_pats.push(pat.clone());
-            }
-            continue;
-        }
-        if parse_flags && arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
-            for b in arg.as_bytes()[1..].iter() {
-                match b {
-                    b'i' => case_insensitive = true,
-                    b'F' => fixed_strings = true,
-                    b'w' => word_match = true,
-                    b'v' => invert = true,
-                    b'l' => files_only = true,
-                    b'c' => count_only = true,
-                    b'r' | b'R' => recursive = true,
-                    b'n' | b'E' | b'H' | b'h' | b's' => {}
-                    _ => {}
-                }
-            }
-            continue;
-        }
-        positional.push(arg.clone());
-    }
-
+    let args = Args::parse(&SIGNATURE, args)?;
+    let patterns = |key: &str| args.values(key).map(str::to_string).collect::<Vec<_>>();
     Ok(GrepOpts {
-        case_insensitive,
-        fixed_strings,
-        word_match,
-        invert,
-        files_only,
-        count_only,
-        recursive,
-        includes: build_globset(&include_pats)?,
-        excludes: build_globset(&exclude_pats)?,
-        positional,
+        case_insensitive: args.has("ignore-case"),
+        fixed_strings: args.has("fixed-strings"),
+        word_match: args.has("word-regexp"),
+        invert: args.has("invert-match"),
+        files_only: args.has("files-with-matches"),
+        count_only: args.has("count"),
+        recursive: args.has("recursive") || args.has("R"),
+        no_messages: args.has("no-messages"),
+        includes: build_globset(&patterns("include"))?,
+        excludes: build_globset(&patterns("exclude"))?,
+        positional: args.operands.iter().map(|s| (*s).to_string()).collect(),
     })
 }
 

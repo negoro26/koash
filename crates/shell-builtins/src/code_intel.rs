@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
+use crate::args::Args;
+use crate::builtin::Signature;
 use crate::builtins::common::{check_killed, resolve_path};
 use ignore::WalkBuilder;
 use serde_json::{Value as JsonVal, json};
@@ -27,24 +29,18 @@ where
     })
 }
 
-pub fn run_prewalk(session: &Session, args: &[String]) -> Result<Value, StructuredDiagnostic> {
-    let mut root = session.cwd.clone();
-    let mut budget_tokens: usize = 2000;
-    let mut deep = false;
-    let mut iter = args.iter();
-
-    while let Some(arg) = iter.next() {
-        if arg == "--budget"
-            && let Some(val) = iter.next()
-            && let Ok(n) = val.parse::<usize>()
-        {
-            budget_tokens = n;
-        } else if arg == "--deep" {
-            deep = true;
-        } else if !arg.starts_with('-') {
-            root = resolve_path(session, arg);
-        }
-    }
+pub fn run_prewalk(
+    session: &Session,
+    sig: &'static Signature,
+    args: &[String],
+) -> Result<Value, StructuredDiagnostic> {
+    let args = Args::parse(sig, args)?;
+    let budget_tokens = args.number::<usize>(sig, "budget")?.unwrap_or(2000);
+    let deep = args.has("deep");
+    let root = args
+        .operands
+        .last()
+        .map_or_else(|| session.cwd.clone(), |p| resolve_path(session, p));
 
     let walker = WalkBuilder::new(&root).build();
     let mut candidates: Vec<(usize, String, String)> = Vec::new();
@@ -108,8 +104,13 @@ pub fn run_prewalk(session: &Session, args: &[String]) -> Result<Value, Structur
     Ok(Value::from_records(records))
 }
 
-pub fn run_ast(session: &Session, args: &[String]) -> Result<Value, StructuredDiagnostic> {
-    let Some(pattern) = args.first() else {
+pub fn run_ast(
+    session: &Session,
+    sig: &'static Signature,
+    args: &[String],
+) -> Result<Value, StructuredDiagnostic> {
+    let args = Args::parse(sig, args)?;
+    let Some(pattern) = args.operands.first().copied() else {
         return Err(StructuredDiagnostic::new(
             "E_ARGS",
             "ast requires a symbol or pattern",
@@ -117,7 +118,7 @@ pub fn run_ast(session: &Session, args: &[String]) -> Result<Value, StructuredDi
             Some("usage: ast <symbol> [path]".to_string()),
         ));
     };
-    let root = match args.get(1) {
+    let root = match args.operands.get(1) {
         Some(p) => resolve_path(session, p),
         None => session.cwd.clone(),
     };

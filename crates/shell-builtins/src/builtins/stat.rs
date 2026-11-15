@@ -5,7 +5,9 @@ use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
 
-use super::common::{format_unix_iso, resolve_path};
+use super::common::{format_unix_iso, resolve_path, usage_error};
+use super::fs_ops::{describe, fail};
+use crate::args::Args;
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Stat;
@@ -32,20 +34,28 @@ impl Builtin for Stat {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        if args.is_empty() {
-            return Err(StructuredDiagnostic::new(
-                "E_ARGS",
+        let args = Args::parse(&SIGNATURE, args)?;
+        if args.operands.is_empty() {
+            return Err(usage_error(
                 "stat requires at least one path",
-                None,
-                Some("usage: stat <path>...".to_string()),
+                "stat <path>...",
             ));
         }
 
         let mut records = Vec::new();
-        for arg in args {
+        for arg in &args.operands {
             let p = resolve_path(session, arg);
-            let meta = std::fs::symlink_metadata(&p)
-                .map_err(|e| StructuredDiagnostic::from_io("E_STAT", &e, None))?;
+            let meta = match std::fs::symlink_metadata(&p) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    fail(
+                        session,
+                        "E_STAT",
+                        format!("cannot stat '{arg}': {}", describe(&e)),
+                    );
+                    continue;
+                }
+            };
             let kind = if meta.is_dir() {
                 "dir"
             } else if meta.is_symlink() {
@@ -62,7 +72,7 @@ impl Builtin for Stat {
             let perms = meta.permissions();
 
             let mut rec = StructuredRecord::new();
-            rec.insert("path".to_string(), JsonVal::String(arg.clone()));
+            rec.insert("path".to_string(), JsonVal::String((*arg).to_string()));
             rec.insert("kind".to_string(), JsonVal::String(kind.to_string()));
             rec.insert("size".to_string(), json!(meta.len()));
             rec.insert("modified".to_string(), JsonVal::String(modified));

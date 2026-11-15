@@ -1,4 +1,6 @@
 pub(crate) mod common;
+mod fs_ops;
+mod slice;
 
 mod ast;
 mod bg;

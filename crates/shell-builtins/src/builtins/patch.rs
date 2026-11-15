@@ -3,7 +3,7 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, StructuredRecord, Value, hashline_tag};
 
 use super::common::resolve_path;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Patch;
 
@@ -11,7 +11,10 @@ static SIGNATURE: Signature = Signature {
     name: "patch",
     aliases: &[],
     description: "Apply hash-verified line edit using line:hash anchor",
-    flags: &["--delete"],
+    flags: &[Flag::long_switch(
+        "delete",
+        "remove the line; written in place of the new text, which may itself start with a dash",
+    )],
     columns: &["file", "line", "old_hash", "new_hash", "status"],
     input: InputMode::None,
     placement: Placement::Any,

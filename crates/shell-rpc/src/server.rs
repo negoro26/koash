@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use shell_builtins::{
-    Chunk, InputMode, Signature, Sink, catalog, post_edit_diagnostics, run_program,
+    Chunk, InputMode, Signature, Sink, catalog, flag_spellings, post_edit_diagnostics, run_program,
 };
 use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
 use shell_syntax::{Command, Program, RedirectKind};
@@ -81,7 +81,7 @@ fn schema_json(sig: &Signature) -> serde_json::Value {
     serde_json::json!({
         "name": sig.name,
         "description": sig.description,
-        "flags": sig.flags,
+        "flags": flag_spellings(sig.flags),
         "columns": sig.columns,
         "reads_input": sig.input != InputMode::None,
     })

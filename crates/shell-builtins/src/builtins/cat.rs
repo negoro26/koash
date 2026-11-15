@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use shell_kernel::Session;
-use shell_value::{CellVal, RecordBatch, StructuredDiagnostic, Value, hashline_bytes};
+use shell_value::{RecordBatch, StructuredDiagnostic, Value};
 
-use super::common::{hashline_schema, resolve_path};
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use super::common::{
+    hashline_schema, operands_read_stdin, push_hashline_rows, resolve_path, text_lines,
+};
+use super::fs_ops::{describe, fail};
+use crate::args::Args;
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Cat;
 
@@ -12,7 +16,18 @@ static SIGNATURE: Signature = Signature {
     name: "cat",
     aliases: &[],
     description: "Read file contents with Hashline anchors or raw bytes",
-    flags: &["--raw", "-r", "-n"],
+    flags: &[
+        Flag::switch(
+            'r',
+            "raw",
+            "write the bytes unchanged instead of Hashline rows",
+        ),
+        Flag::switch(
+            'n',
+            "number",
+            "number the lines of raw output (Hashline rows always carry line numbers)",
+        ),
+    ],
     columns: &["file", "line", "hash", "text"],
     input: InputMode::Lines,
     placement: Placement::Any,
@@ -25,61 +40,68 @@ impl Builtin for Cat {
     }
 
     fn reads_input(&self, args: &[String]) -> bool {
-        cat_operands(args).1.is_empty()
+        operands_read_stdin(&SIGNATURE, args)
     }
 
+    /// Operands are files, or `-` for standard input, which is read once at its position.
+    /// Nothing requires UTF-8: raw output is byte-exact and Hashline text is lossy only where
+    /// the bytes are not valid. A file that cannot be read is reported and the rest still print.
     fn run(
         &self,
         session: &mut Session,
         args: &[String],
         input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        let (raw, paths) = cat_operands(args);
-        if paths.is_empty() {
+        let args = Args::parse(&SIGNATURE, args)?;
+        let raw = args.has("raw");
+        let number = args.has("number") && raw;
+        if args.operands.is_empty() && !number {
             return Ok(input);
         }
-        if raw {
-            let mut out = Vec::new();
-            for arg in paths {
-                let p = resolve_path(session, arg);
-                let bytes = std::fs::read(&p)
-                    .map_err(|e| StructuredDiagnostic::from_io("E_CAT", &e, None))?;
+        let operands: &[&str] = if args.operands.is_empty() {
+            &["-"]
+        } else {
+            &args.operands
+        };
+
+        let mut stdin = Some(input);
+        let mut out = Vec::new();
+        let mut batch = RecordBatch::new(hashline_schema());
+        let mut numbered = 0u64;
+        for operand in operands {
+            let (label, bytes) = if *operand == "-" {
+                let bytes = stdin.take().map(Value::into_raw_bytes).unwrap_or_default();
+                ("<stdin>", bytes)
+            } else {
+                match std::fs::read(resolve_path(session, operand)) {
+                    Ok(bytes) => (*operand, bytes),
+                    Err(e) => {
+                        fail(
+                            session,
+                            "E_CAT",
+                            format!("cat: {operand}: {}", describe(&e)),
+                        );
+                        continue;
+                    }
+                }
+            };
+            if !raw {
+                let label: Arc<str> = Arc::from(label);
+                push_hashline_rows(&mut batch, &label, 1, text_lines(&bytes));
+            } else if number {
+                for line in bytes.split_inclusive(|b| *b == b'\n') {
+                    numbered += 1;
+                    out.extend_from_slice(format!("{numbered:>6}\t").as_bytes());
+                    out.extend_from_slice(line);
+                }
+            } else {
                 out.extend_from_slice(&bytes);
             }
-            return Ok(Value::from_bytes(out));
         }
-        let mut batch = RecordBatch::new(hashline_schema());
-        for arg in paths {
-            let p = resolve_path(session, arg);
-            let content = std::fs::read_to_string(&p)
-                .map_err(|e| StructuredDiagnostic::from_io("E_CAT", &e, None))?;
-            let file_cell: Arc<str> = Arc::from(arg.as_str());
-            for (idx, line) in content.lines().enumerate() {
-                batch.cells.push(CellVal::SharedStr(Arc::clone(&file_cell)));
-                batch.cells.push(CellVal::UInt((idx + 1) as u64));
-                batch
-                    .cells
-                    .push(CellVal::Hash(hashline_bytes(line.as_bytes())));
-                batch.cells.push(CellVal::Str(line.to_string()));
-            }
-        }
-        Ok(Value::from_batch(batch))
-    }
-}
-
-fn cat_operands(args: &[String]) -> (bool, Vec<&String>) {
-    let mut raw = false;
-    let mut paths = Vec::new();
-    let mut parse_flags = true;
-    for arg in args {
-        if parse_flags && arg == "--" {
-            parse_flags = false;
-        } else if parse_flags && (arg == "--raw" || arg == "-r") {
-            raw = true;
-        } else if (parse_flags && matches!(arg.as_str(), "-n" | "-b" | "-u" | "-s")) || arg == "-" {
+        Ok(if raw {
+            Value::from_bytes(out)
         } else {
-            paths.push(arg);
-        }
+            Value::from_batch(batch)
+        })
     }
-    (raw, paths)
 }
