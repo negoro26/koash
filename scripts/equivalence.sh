@@ -10,10 +10,21 @@ if [ "$#" -ne 2 ]; then
     echo "usage: $0 <old-koa> <new-koa>" >&2
     exit 2
 fi
+for bin in "$1" "$2"; do
+    if [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
+        echo "$0: not an executable file: $bin" >&2
+        exit 2
+    fi
+    if [[ "$("$bin" --version 2>/dev/null)" != koa\ * ]]; then
+        echo "$0: '$bin --version' did not answer 'koa <version>'; not a koa binary" >&2
+        exit 2
+    fi
+done
 OLD=$(realpath "$1")
 NEW=$(realpath "$2")
 
-ROOT=${KOA_EQUIV_ROOT:-/tmp/koa-equiv}
+ROOT=$(mktemp -d)
+trap 'rm -rf "$ROOT"' EXIT
 SCRATCH=$ROOT/work
 HOME_DIR=$ROOT/home
 OUT=$ROOT/out
