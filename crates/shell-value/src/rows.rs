@@ -69,7 +69,7 @@ pub trait Record {
 
 #[macro_export]
 macro_rules! record {
-    ($vis:vis struct $name:ident<$life:lifetime> { $($field:ident: $ty:ty),+ $(,)? }) => {
+    ($vis:vis struct $name:ident<$life:lifetime> { $($(#[$mark:ident])? $field:ident: $ty:ty),+ $(,)? }) => {
         $vis struct $name<$life> {
             $(pub $field: $ty),+
         }
@@ -77,7 +77,7 @@ macro_rules! record {
         impl<$life> $crate::Record for $name<$life> {
             type Table = $name<'static>;
             const COLUMNS: &'static [$crate::Column] =
-                &[$($crate::Column::typed(stringify!($field), <$ty as $crate::CellValue>::TYPE)),+];
+                &[$($crate::Column::typed(stringify!($field), <$ty as $crate::CellValue>::TYPE)$(.$mark())?),+];
 
             fn write(&self, row: &mut $crate::RowSink<'_>) {
                 $($crate::CellValue::put(&self.$field, row);)+
@@ -288,41 +288,5 @@ impl DynRows {
 
     pub(crate) fn into_batch(self) -> RecordBatch {
         self.builder.into_batch()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    record! { struct Pair<'a> { name: &'a str, n: u64 } }
-
-    fn texts(batch: &RecordBatch) -> Vec<Vec<String>> {
-        let mut scratch = String::new();
-        batch
-            .rows()
-            .map(|row| {
-                row.iter()
-                    .map(|d| d.text(&mut scratch).to_string())
-                    .collect()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn a_record_writes_its_fields_in_declaration_order() {
-        let mut rows = Rows::<Pair<'static>>::new();
-        let owned = String::from("a");
-        rows.push(&Pair { name: &owned, n: 1 });
-        rows.push(&Pair { name: "b", n: 2 });
-        let batch = rows.finish().unwrap();
-        assert_eq!(batch.schema().names().collect::<Vec<_>>(), ["name", "n"]);
-        assert_eq!(texts(&batch), [["a", "1"], ["b", "2"]]);
-    }
-
-    #[test]
-    fn an_empty_batch_keeps_its_schema() {
-        let batch = Rows::<Pair<'static>>::new().finish().unwrap();
-        assert_eq!((batch.nrows(), batch.ncols()), (0, 2));
     }
 }

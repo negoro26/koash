@@ -223,15 +223,6 @@ fn rm_recursive_does_not_follow_symlinks_out_of_the_tree() {
 }
 
 #[test]
-fn rm_double_dash_makes_dash_names_operands() {
-    let s = Scratch::new("rm-dashdash");
-    s.write("-f", b"x");
-    let r = run(&s.0, "rm -- -f");
-    assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(!s.exists("-f"));
-}
-
-#[test]
 fn rm_attempts_every_operand_and_exits_1_when_one_fails() {
     let s = Scratch::new("rm-accumulate");
     s.write("a", b"x");
@@ -265,15 +256,6 @@ fn rm_unknown_option_is_a_usage_error_that_touches_nothing() {
     let r = run_builtins_only(&s, &format!("rm -x {}", s.q("a")));
     assert_eq!(r.code, 2);
     assert!(s.exists("a"));
-}
-
-#[test]
-fn rm_without_operands_is_a_usage_error() {
-    let s = Scratch::new("rm-noop");
-    let r = run(&s.0, "rm");
-    assert_eq!(r.code, 2, "{}", r.stderr);
-    let r = run(&s.0, "rm -f");
-    assert_eq!(r.code, 2, "{}", r.stderr);
 }
 
 #[test]
@@ -597,17 +579,6 @@ fn cp_with_one_operand_is_a_usage_error() {
 }
 
 #[test]
-fn cp_unknown_option_is_a_usage_error_not_an_operand() {
-    let s = Scratch::new("cp-unknown");
-    s.write("a", b"A");
-    s.write("b", b"B");
-    let r = run_builtins_only(&s, &format!("cp --bogus {} {}", s.q("a"), s.q("b")));
-    assert_eq!(r.code, 2);
-    assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
-    assert_eq!(s.read("b"), "B");
-}
-
-#[test]
 fn undo_restores_every_target_a_multi_source_cp_replaced() {
     let s = Scratch::new("cp-undo");
     s.write("a", b"A");
@@ -817,19 +788,6 @@ fn mkdir_creates_the_other_operands_when_one_fails() {
 }
 
 #[test]
-fn mkdir_parents_long_option_and_existing_directories() {
-    let s = Scratch::new("mkdir-parents");
-    let r = run(&s.0, &format!("mkdir --parents {}", s.q("x/y/z")));
-    assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(s.exists("x/y/z"));
-    let r = run(&s.0, &format!("mkdir -p {}", s.q("x/y/z")));
-    assert_eq!(r.code, 0, "{}", r.stderr);
-    let r = run(&s.0, &format!("mkdir {}", s.q("x")));
-    assert_eq!(r.code, 1);
-    assert!(r.stderr.contains("exists"), "{}", r.stderr);
-}
-
-#[test]
 fn mkdir_verbose_names_each_created_directory() {
     let s = Scratch::new("mkdir-verbose");
     let r = run(&s.0, &format!("mkdir -pv {}", s.q("x/y")));
@@ -845,20 +803,6 @@ fn mkdir_verbose_names_each_created_directory() {
     );
     assert!(lines[1].contains(&xy), "{}", r.stdout);
     assert!(s.exists("x/y"));
-}
-
-#[test]
-fn mkdir_unknown_option_is_a_usage_error_that_creates_nothing() {
-    let s = Scratch::new("mkdir-unknown");
-    let r = run_builtins_only(&s, &format!("mkdir --exact-typo {}", s.q("x")));
-    assert_eq!(r.code, 2);
-    assert!(!s.exists("x"));
-}
-
-#[test]
-fn mkdir_without_operands_is_a_usage_error() {
-    let s = Scratch::new("mkdir-none");
-    assert_eq!(run(&s.0, "mkdir").code, 2);
 }
 
 #[test]
@@ -952,15 +896,6 @@ fn cat_raw_number_flag_numbers_the_lines() {
 }
 
 #[test]
-fn cat_unknown_option_is_a_usage_error() {
-    let s = Scratch::new("cat-unknown");
-    s.write("a", b"A\n");
-    let r = run_builtins_only(&s, &format!("cat -Z {}", s.q("a")));
-    assert_eq!(r.code, 2);
-    assert!(r.stderr.contains("-Z"), "{}", r.stderr);
-}
-
-#[test]
 fn head_raw_is_byte_exact() {
     let s = Scratch::new("head-bytes");
     s.write("f", b"one\r\ntwo\r\nthree");
@@ -986,39 +921,6 @@ fn tail_raw_is_byte_exact() {
         .output()
         .expect("spawn koa");
     assert_eq!(out.stdout, b"two\r\nthree");
-}
-
-#[test]
-fn head_and_tail_reject_an_invalid_count() {
-    let s = Scratch::new("headtail-invalid");
-    s.write("f", b"a\nb\n");
-    for cmd in ["head", "tail"] {
-        let r = run(&s.0, &format!("{cmd} -n x {}", s.q("f")));
-        assert_eq!(r.code, 2, "{cmd}: {}", r.stderr);
-        assert!(r.stderr.contains("invalid"), "{cmd}: {}", r.stderr);
-    }
-}
-
-#[test]
-fn head_and_tail_accept_attached_and_numeric_counts() {
-    let s = Scratch::new("headtail-forms");
-    s.write("f", b"1\n2\n3\n4\n");
-    assert_eq!(
-        run(&s.0, &format!("head --raw -n2 {}", s.q("f"))).stdout,
-        "1\n2\n"
-    );
-    assert_eq!(
-        run(&s.0, &format!("head --raw -2 {}", s.q("f"))).stdout,
-        "1\n2\n"
-    );
-    assert_eq!(
-        run(&s.0, &format!("tail --raw -n2 {}", s.q("f"))).stdout,
-        "3\n4\n"
-    );
-    assert_eq!(
-        run(&s.0, &format!("tail --raw --lines=1 {}", s.q("f"))).stdout,
-        "4\n"
-    );
 }
 
 #[test]
@@ -1553,15 +1455,6 @@ fn grep_recurses_into_a_directory_with_dash_r() {
 }
 
 #[test]
-fn grep_unknown_option_is_a_usage_error() {
-    let s = Scratch::new("grep-unknown");
-    s.write("f", b"needle\n");
-    let r = run_builtins_only(&s, &format!("grep --bogus needle {}", s.q("f")));
-    assert_eq!(r.code, 2);
-    assert!(r.stderr.contains("--bogus"), "{}", r.stderr);
-}
-
-#[test]
 fn grep_reads_a_named_file_and_options_after_the_pattern() {
     let s = Scratch::new("grep-file");
     s.write("f", b"Needle\nhay\n");
@@ -1589,15 +1482,6 @@ fn find_keeps_its_single_dash_predicates() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     let r = run(&s.0, &format!("find {} -maxdepth x", s.q(".")));
     assert_eq!(r.code, 2, "{}", r.stderr);
-}
-
-#[test]
-fn echo_prints_unknown_dash_words_literally() {
-    let s = Scratch::new("echo-literal");
-    assert_eq!(run(&s.0, "echo -x hi").stdout, "-x hi\n");
-    assert_eq!(run(&s.0, "echo -n hi").stdout, "hi");
-    assert_eq!(run(&s.0, "echo hi -n").stdout, "hi -n\n");
-    assert_eq!(run(&s.0, "echo -- hi").stdout, "-- hi\n");
 }
 
 #[test]

@@ -204,7 +204,7 @@ fn builtin_to_external_to_builtin_pipeline_streams_large_input() {
     std::fs::write(dir.join("big.txt"), body).expect("write big.txt");
     let out = koa_c(
         &dir,
-        "cat big.txt | /bin/cat | first 1",
+        "cat big.txt | /bin/cat | last 1",
         Duration::from_secs(10),
     )
     .expect("pipeline larger than the pipe buffer must not hang");
@@ -215,8 +215,8 @@ fn builtin_to_external_to_builtin_pipeline_streams_large_input() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("big.txt"),
-        "first record expected, got: {stdout}"
+        stdout.contains("50000") && !stdout.contains("49999"),
+        "last line expected, got: {stdout}"
     );
 }
 

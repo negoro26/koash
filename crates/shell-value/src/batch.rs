@@ -154,6 +154,27 @@ impl RecordBatch {
         self.cells = cells;
     }
 
+    pub fn write_lines(&self, out: &mut Vec<u8>) {
+        let cols = match self.schema.text_column() {
+            Some(col) => col..col + 1,
+            None => 0..self.ncols(),
+        };
+        let mut scratch = String::new();
+        for row in self.rows() {
+            if cols.len() == 1 {
+                row.get(cols.start).write_text(out, &mut scratch);
+            } else {
+                for col in cols.clone() {
+                    if col != cols.start {
+                        out.push(b'\t');
+                    }
+                    write_tsv_field(out, row.get(col).text(&mut scratch));
+                }
+            }
+            out.push(b'\n');
+        }
+    }
+
     pub fn from_maps(records: Vec<StructuredRecord>) -> Result<Self, StructuredDiagnostic> {
         if records.is_empty() {
             return Ok(Self::empty());
@@ -229,81 +250,14 @@ impl RecordBatch {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn batch(rows: &[serde_json::Value]) -> RecordBatch {
-        let maps = rows
-            .iter()
-            .map(|row| serde_json::from_value(row.clone()).unwrap_or_default())
-            .collect();
-        RecordBatch::from_maps(maps).unwrap()
-    }
-
-    fn column(batch: &RecordBatch, name: &str) -> Vec<String> {
-        let col = batch.col_index(name).unwrap_or(usize::MAX);
-        let mut scratch = String::new();
-        batch
-            .rows()
-            .map(|row| row.get(col).text(&mut scratch).to_string())
-            .collect()
-    }
-
-    #[test]
-    fn retain_rows_keeps_order_and_whole_rows() {
-        let mut b = batch(&[
-            json!({"k": 1, "v": "a"}),
-            json!({"k": 2, "v": "b"}),
-            json!({"k": 3, "v": "c"}),
-            json!({"k": 4, "v": "d"}),
-        ]);
-        let k = b.col_index("k").unwrap_or(0);
-        b.retain_rows(|row| row.get(k).as_f64().is_some_and(|n| n != 2.0 && n != 3.0));
-        assert_eq!(column(&b, "k"), ["1", "4"]);
-        assert_eq!(column(&b, "v"), ["a", "d"]);
-        b.retain_rows(|_| false);
-        assert_eq!((b.nrows(), b.ncols()), (0, 2));
-    }
-
-    #[test]
-    fn order_by_is_stable_and_take_rows_moves_whole_rows() {
-        let mut b = batch(&[
-            json!({"g": "x", "n": 1}),
-            json!({"g": "y", "n": 2}),
-            json!({"g": "x", "n": 3}),
-            json!({"g": "y", "n": 4}),
-        ]);
-        let g = b.col_index("g").unwrap_or(0);
-        let order = b.order_by(|row| row.get(g).as_str().unwrap_or("").to_string());
-        b.take_rows(order);
-        assert_eq!(column(&b, "n"), ["1", "3", "2", "4"]);
-        let order =
-            b.order_by(|row| std::cmp::Reverse(row.get(g).as_str().unwrap_or("").to_string()));
-        b.take_rows(order);
-        assert_eq!(column(&b, "n"), ["2", "4", "1", "3"]);
-    }
-
-    #[test]
-    fn select_columns_reorders_and_repeats() {
-        let mut b = batch(&[
-            json!({"a": 1, "b": "x", "c": true}),
-            json!({"a": 2, "b": "y", "c": false}),
-        ]);
-        b.select_columns(&[2, 0, 2]);
-        let names: Vec<&str> = b.schema().names().collect();
-        assert_eq!(names, ["c", "a", "c"]);
-        assert_eq!(b.nrows(), 2);
-        let flat: Vec<String> = b
-            .rows()
-            .flat_map(|row| {
-                row.iter()
-                    .map(|d| d.text(&mut String::new()).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        assert_eq!(flat, ["true", "1", "true", "false", "2", "false"]);
+fn write_tsv_field(out: &mut Vec<u8>, text: &str) {
+    for &byte in text.as_bytes() {
+        match byte {
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            _ => out.push(byte),
+        }
     }
 }

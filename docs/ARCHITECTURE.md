@@ -13,7 +13,8 @@ This document maps the code. Read it before changing the executor or adding a co
 - `shell-value` defines `Value` (`Empty`, `Bytes`, `Batch`), `RecordBatch`, `StructuredDiagnostic`, Hashline tags, and taint levels.
   A batch is a `Schema`, a vector of 16-byte `Cell`s, and one text arena. A consumer reads it through `Row` and `Datum`, and reshapes it with `retain_rows`, `order_by` and `take_rows`, and `select_columns`.
   A builtin writes rows with `Rows` over a `record!` struct, which fixes the columns and their order, or with `DynRows` when the columns are only known at run time.
-  `Records` is the one JSON encoder: `to json`, ACP, NDJSON to external programs, TSP and RPC records all use it, with sorted keys and no null cells.
+  `Records` is the one JSON encoder: `to json`, ACP, TSP and RPC records all use it, with sorted keys and no null cells.
+  An external stage gets `RecordBatch::write_lines` instead: the column a `record!` field marks `#[text]` (`text` for Hashline rows, `name` for `ls`, `path` for `find`), else a lone column, else tab-separated cells with `\t`, `\n`, `\r` and `\\` escaped. `select` clears the mark, so picked columns arrive as picked. A `>` redirect still writes JSON lines.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
   It also spawns and waits for process groups.
 - `shell-builtins` is the executor and every builtin command.
