@@ -8,6 +8,8 @@ use shell_rpc::RpcServer;
 use shell_surface::SurfaceMode;
 use shell_tui::{LineEditor, ReadLineResult};
 
+mod rc;
+
 fn build_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -20,6 +22,7 @@ fn print_help() {
 
 USAGE:
   koa                         Interactive TUI shell (or read script from stdin)
+  koa --norc                  Interactive shell without reading the startup file
   koa -c <script>             Execute command string and exit (-lc/-ic also supported)
   koa --rpc | --acp           Run headless NDJSON-RPC or ACP server on stdio
   koa --socket <path>         Run headless NDJSON-RPC server on Unix socket
@@ -36,6 +39,8 @@ BASH TRANSITION QUICK GUIDE:
   * Table verbs: where <col op val>, select <cols...>, sort-by [--desc] <col>,
     first [N], last [N], from json, to json|compact.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
+  * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
+  * Shell state: alias/unalias, history [N], export, unset.
   * Sub-kernels & discovery: @sql \"...\", @py \"...\", @js \"...\", discover \"<intent>\".",
         env!("CARGO_PKG_VERSION")
     );
@@ -147,7 +152,8 @@ fn main() -> ExitCode {
         return run_oneshot(&script, force_tsp);
     }
 
-    run_interactive_repl(force_tsp)
+    let read_rc = !args.iter().any(|a| a == "--norc");
+    run_interactive_repl(force_tsp, read_rc)
 }
 
 fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
@@ -180,7 +186,7 @@ fn report_finished_jobs(session: &mut Session) {
     }
 }
 
-fn run_interactive_repl(force_tsp: bool) -> ExitCode {
+fn run_interactive_repl(force_tsp: bool, read_rc: bool) -> ExitCode {
     let mut session = match Session::new(true) {
         Ok(s) => s,
         Err(diag) => {
@@ -194,6 +200,9 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
         let sink = Sink::Tty {
             mode: SurfaceMode::detect(force_tsp, true),
         };
+        if read_rc && let Some(code) = rc::run_startup_file(&mut session, &sink) {
+            return ExitCode::from((code & 0xff) as u8);
+        }
         loop {
             report_finished_jobs(&mut session);
             let prompt = format!(
