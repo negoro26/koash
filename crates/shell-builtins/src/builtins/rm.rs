@@ -40,6 +40,9 @@ impl Builtin for Rm {
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         let args = Args::parse(&SIGNATURE, args)?;
+        if args.operands.is_empty() && args.has("f") {
+            return Ok(Value::Empty);
+        }
         if args.operands.is_empty() {
             return Err(StructuredDiagnostic::new(
                 "E_ARGS",
