@@ -1,11 +1,10 @@
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
-use super::common::{HASHLINE_COLUMNS, HashlineRows, check_killed, push_hashline_row};
+use super::common::{HASHLINE_COLUMNS, HashlineRows, check_killed, search_file_with_hashline};
 use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Refs;
@@ -41,6 +40,14 @@ impl Builtin for Refs {
                 None,
             ));
         };
+        let matcher = RegexMatcherBuilder::new()
+            .fixed_strings(true)
+            .word(true)
+            .build(symbol)
+            .map_err(|e| StructuredDiagnostic::new("E_ARGS", e.to_string(), None, None))?;
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\0'))
+            .build();
         let mut rows = HashlineRows::with_capacity(32);
         let walker = WalkBuilder::new(&session.cwd).build();
         for entry_res in walker {
@@ -56,50 +63,8 @@ impl Builtin for Refs {
                 .strip_prefix(&session.cwd)
                 .unwrap_or(entry.path())
                 .to_string_lossy();
-            search_file(entry.path(), &rel, symbol, &mut rows);
+            search_file_with_hashline(&mut searcher, &matcher, entry.path(), &rel, &mut rows);
         }
         Ok(Value::from_batch(rows.finish()?))
     }
-}
-
-fn search_file(path: &Path, label: &str, symbol: &str, rows: &mut HashlineRows) {
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
-    let mut reader = BufReader::new(file);
-    if reader.fill_buf().map_or(true, |head| head.contains(&0)) {
-        return;
-    }
-    let mut buf = Vec::new();
-    let mut line_no = 0u64;
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => line_no += 1,
-        }
-        if buf.contains(&0) {
-            return;
-        }
-        let Ok(line) = std::str::from_utf8(&buf) else {
-            continue;
-        };
-        let line = line.strip_suffix('\n').unwrap_or(line);
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        if contains_word(line, symbol) {
-            push_hashline_row(rows, label, line_no, line);
-        }
-    }
-}
-
-fn contains_word(line: &str, word: &str) -> bool {
-    line.match_indices(word).any(|(at, _)| {
-        let before = line[..at].chars().next_back();
-        let after = line[at + word.len()..].chars().next();
-        !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char)
-    })
-}
-
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
 }
