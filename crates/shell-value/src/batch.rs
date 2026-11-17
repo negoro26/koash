@@ -33,6 +33,13 @@ impl<'a> Row<'a> {
 #[derive(Debug)]
 pub struct RowOrder(Vec<usize>);
 
+impl RowOrder {
+    pub fn reverse(mut self) -> Self {
+        self.0.reverse();
+        self
+    }
+}
+
 impl RecordBatch {
     pub fn empty() -> Self {
         Self::from_parts(Schema::empty(), Vec::new(), String::new())
@@ -122,10 +129,17 @@ impl RecordBatch {
     }
 
     pub fn order_by<'s, K: Ord>(&'s self, mut key: impl FnMut(Row<'s>) -> K) -> RowOrder {
+        self.order_by_index(|_, row| key(row))
+    }
+
+    pub fn order_by_index<'s, K: Ord>(
+        &'s self,
+        mut key: impl FnMut(usize, Row<'s>) -> K,
+    ) -> RowOrder {
         let mut keyed: Vec<(K, usize)> = self
             .rows()
             .enumerate()
-            .map(|(idx, row)| (key(row), idx))
+            .map(|(idx, row)| (key(idx, row), idx))
             .collect();
         keyed.sort_by(|a, b| a.0.cmp(&b.0));
         RowOrder(keyed.into_iter().map(|(_, idx)| idx).collect())
