@@ -13,7 +13,8 @@ fn rc_path() -> Option<(PathBuf, bool)> {
 }
 
 fn continues(line: &str) -> bool {
-    line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
+    !line.trim_start().starts_with('#')
+        && line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
 }
 
 pub fn run_startup_file(session: &mut Session, sink: &Sink) -> Option<i32> {

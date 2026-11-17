@@ -67,11 +67,13 @@ koa -c 'patch main.rs 12:4c7 "let x = 2;"'
 
 ## Aliases and startup file
 
-`alias ll='ls -la'` works as in bash. `alias` lists your aliases, and `unalias ll` removes one.
+`alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases are not expanded inside `$(...)` or backticks, and Tab completion does not know alias names yet.
 
-The interactive shell runs `~/.koarc` when it starts, one line at a time, so you can put `alias`, `export` and `source` lines there. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c` and `koa --rpc` never read it.
+The interactive shell runs `~/.koarc` when it starts. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c`, piped scripts, `--rpc`, `--socket` and `--acp` never read it.
 
-`history` lists the commands you typed in the interactive shell.
+koa runs the file one line at a time, so put each `alias`, `export` or `source` on its own line. A multi-line `if` or function does not work there; write it on one line, or put it in a file and `source` it. A koa syntax error in the file prints `.koarc:LINE:` and the rest of the file still runs. Other errors print without the line number.
+
+`history` lists the commands you typed in the interactive shell, and `history 5` the last five. There is no `history -c` yet.
 
 ## For agents
 

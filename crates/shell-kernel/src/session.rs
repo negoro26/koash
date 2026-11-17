@@ -280,7 +280,13 @@ impl Session {
             return shell_syntax::parse(src);
         }
         let expanded = shell_syntax::expand_aliases(src, |name| self.aliases.get(name).cloned());
-        shell_syntax::parse(&expanded)
+        shell_syntax::parse(&expanded).map_err(|mut err| {
+            if expanded != src {
+                err.span = shell_syntax::Span::new(0, src.len());
+                err.message = format!("{} (after alias expansion)", err.message);
+            }
+            err
+        })
     }
 
     pub fn first_fallback(&mut self, command: &str) -> bool {
