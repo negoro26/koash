@@ -5,7 +5,9 @@ use crate::ast::{
 use crate::lexer::{Lexer, SyntaxError, Token, TokenKind};
 use crate::span::Span;
 
-const POSIX_KEYWORDS: &[&str] = &["if", "for", "while", "until", "case", "{", "function"];
+const POSIX_KEYWORDS: &[&str] = &[
+    "if", "for", "while", "until", "case", "{", "function", "source", ".", "eval",
+];
 
 pub struct Parser<'a> {
     src: &'a str,
