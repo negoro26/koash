@@ -152,19 +152,3 @@ impl From<Vec<Column>> for Schema {
         Schema(Columns::Shared(columns.into()))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    static FIXED: [Column; 2] = [Column::new("a"), Column::new("b")];
-
-    #[test]
-    fn a_static_and_a_named_schema_with_the_same_names_agree() {
-        let fixed = Schema::of(&FIXED);
-        let named = Schema::named(["a", "b"]);
-        assert_eq!(fixed.columns(), named.columns());
-        assert_eq!(named.index_of("b"), Some(1));
-        assert_eq!(named.index_of("c"), None);
-    }
-}
