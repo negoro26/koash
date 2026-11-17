@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use shell_builtins::{
     Chunk, InputMode, Signature, Sink, catalog, flag_spellings, post_edit_diagnostics, run_program,
 };
-use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word};
+use shell_kernel::{CowWorkspace, KillSwitch, Session, expand_word, expand_words};
 use shell_syntax::{Command, Program, RedirectKind};
 use shell_value::{
     RecordBatch, Records, StructuredDiagnostic, TaintLevel, batch_to_compact_sigil, redact_secrets,
@@ -664,11 +664,7 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
                 }
                 Command::PosixFallback { .. } => continue,
             };
-            let args: Vec<String> = simple
-                .words
-                .iter()
-                .map(|w| expand_word(w, &session.env, session.last_status))
-                .collect();
+            let args = expand_words(&simple.words, &session.env, session.last_status);
             let prog = args.first().map(|s| s.as_str()).unwrap_or("");
 
             if !policy.allow_network && network_cmds.contains(&prog) {

@@ -1,7 +1,9 @@
 use std::io::Write;
 
 use nix::unistd::Pid;
-use shell_kernel::{JobState, Session, expand_word, find_executable, reap_background_jobs};
+use shell_kernel::{
+    JobState, Session, expand_word, expand_words, find_executable, reap_background_jobs,
+};
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
@@ -109,10 +111,9 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
 
 fn command_name(session: &Session, cmd: &Command) -> Option<String> {
     match cmd {
-        Command::Simple(simple) => simple
-            .words
-            .first()
-            .map(|w| expand_word(w, &session.env, session.last_status)),
+        Command::Simple(simple) => expand_words(&simple.words, &session.env, session.last_status)
+            .into_iter()
+            .next(),
         Command::PosixFallback { .. } => None,
     }
 }
@@ -155,11 +156,7 @@ fn defers_to_executable(
 }
 
 fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
-    let args: Vec<String> = simple
-        .words
-        .iter()
-        .map(|w| expand_word(w, &session.env, session.last_status))
-        .collect();
+    let args = expand_words(&simple.words, &session.env, session.last_status);
     let builtin = lookup(args.first()?)?;
     (builtin.signature().placement == Placement::SoleStage)
         .then(|| builtin.run_alone(session, &args[1..], sink))
@@ -188,11 +185,7 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline, sink: &Sink) 
                 redirs: &[],
             },
             Command::Simple(simple) => {
-                let argv: Vec<String> = simple
-                    .words
-                    .iter()
-                    .map(|w| expand_word(w, &session.env, session.last_status))
-                    .collect();
+                let argv = expand_words(&simple.words, &session.env, session.last_status);
                 let env: Vec<(String, String)> = simple
                     .assignments
                     .iter()

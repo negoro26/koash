@@ -10,6 +10,23 @@ pub fn expand_word(word: &Word, env: &SessionEnv, last_status: i32) -> String {
     out
 }
 
+pub fn expand_words(words: &[Word], env: &SessionEnv, last_status: i32) -> Vec<String> {
+    words
+        .iter()
+        .filter_map(|word| {
+            let text = expand_word(word, env, last_status);
+            (!text.is_empty() || word.parts.iter().any(is_quoted)).then_some(text)
+        })
+        .collect()
+}
+
+fn is_quoted(part: &WordPart) -> bool {
+    matches!(
+        part,
+        WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. }
+    )
+}
+
 fn expand_part(part: &WordPart, env: &SessionEnv, last_status: i32, out: &mut String) {
     match part {
         WordPart::Literal { text, .. } | WordPart::SingleQuoted { text, .. } => {
