@@ -69,7 +69,7 @@ impl Builtin for Stat {
             let perms = meta.permissions();
             rows.push(&StatRow {
                 kind: kind_of(&meta),
-                mode: FileMode(perms.mode() & 0o777),
+                mode: FileMode(perms.mode() & 0o7777),
                 modified: OrBlank(UnixTime::from_system(meta.modified())),
                 path: arg,
                 readonly: perms.readonly(),
