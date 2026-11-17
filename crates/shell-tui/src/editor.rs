@@ -71,6 +71,7 @@ impl LineEditor {
         let mut cur = 0usize;
         let mut hist_idx: Option<usize> = None;
         let mut saved_draft = String::new();
+        let mut search: Option<Search> = None;
 
         redraw(&mut stdout, prompt, &buf, cur)?;
 
@@ -88,6 +89,54 @@ impl LineEditor {
             else {
                 continue;
             };
+
+            if let Some(mut s) = search.take() {
+                match s.key(&self.history, code, modifiers) {
+                    SearchKey::Stay => {
+                        s.draw(&mut stdout, &self.history)?;
+                        search = Some(s);
+                        continue;
+                    }
+                    SearchKey::Cancel => {
+                        buf = s.origin;
+                        cur = s.origin_cur;
+                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        continue;
+                    }
+                    SearchKey::Run => {
+                        let line = match s.found.and_then(|i| self.history.get(i)) {
+                            Some(e) => e.command.clone(),
+                            None => s.origin,
+                        };
+                        redraw(&mut stdout, prompt, &line, line.len())?;
+                        let _ = write!(stdout, "\r\n");
+                        let _ = stdout.flush();
+                        return Ok(ReadLineResult::Line(line));
+                    }
+                    SearchKey::Abort => {
+                        buf = s.origin;
+                        cur = s.origin_cur;
+                        redraw(&mut stdout, prompt, &buf, cur)?;
+                    }
+                    SearchKey::Leave => {
+                        match s.found.and_then(|i| self.history.get(i).map(|e| (i, e))) {
+                            Some((i, e)) => {
+                                if hist_idx.is_none() {
+                                    saved_draft = s.origin;
+                                }
+                                buf = e.command.clone();
+                                cur = buf.find(&s.query).unwrap_or(buf.len());
+                                hist_idx = Some(i);
+                            }
+                            None => {
+                                buf = s.origin;
+                                cur = s.origin_cur;
+                            }
+                        }
+                        redraw(&mut stdout, prompt, &buf, cur)?;
+                    }
+                }
+            }
 
             match (code, modifiers) {
                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -195,6 +244,42 @@ impl LineEditor {
                         redraw(&mut stdout, prompt, &buf, cur)?;
                     }
                 }
+                (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    let s = Search::new(&buf, cur);
+                    s.draw(&mut stdout, &self.history)?;
+                    search = Some(s);
+                }
+                (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    cur = 0;
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    cur = buf.len();
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    buf.drain(..cur);
+                    cur = 0;
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('k'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    buf.truncate(cur);
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    let start = word_back(&buf, cur, char::is_whitespace);
+                    buf.drain(start..cur);
+                    cur = start;
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('b'), m) if m.contains(KeyModifiers::ALT) => {
+                    cur = word_back(&buf, cur, not_alnum);
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
+                (KeyCode::Char('f'), m) if m.contains(KeyModifiers::ALT) => {
+                    cur = word_forward(&buf, cur, not_alnum);
+                    redraw(&mut stdout, prompt, &buf, cur)?;
+                }
                 (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
                     buf.insert(cur, c);
                     cur += c.len_utf8();
@@ -231,6 +316,145 @@ fn redraw(
         .flush()
         .map_err(|e| StructuredDiagnostic::from_io("E_TERM_WRITE", &e, None))?;
     Ok(())
+}
+
+enum SearchKey {
+    Stay,
+    Cancel,
+    Abort,
+    Run,
+    Leave,
+}
+
+struct Search {
+    query: String,
+    found: Option<usize>,
+    failed: bool,
+    origin: String,
+    origin_cur: usize,
+}
+
+impl Search {
+    fn new(origin: &str, origin_cur: usize) -> Self {
+        Self {
+            query: String::new(),
+            found: None,
+            failed: false,
+            origin: origin.to_string(),
+            origin_cur,
+        }
+    }
+
+    fn key(&mut self, history: &History, code: KeyCode, mods: KeyModifiers) -> SearchKey {
+        let ctrl = mods.contains(KeyModifiers::CONTROL);
+        match code {
+            KeyCode::Esc => SearchKey::Cancel,
+            KeyCode::Char('g') if ctrl => SearchKey::Cancel,
+            KeyCode::Char('c') if ctrl => SearchKey::Abort,
+            KeyCode::Enter => SearchKey::Run,
+            KeyCode::Char('r') if ctrl => {
+                self.step(history, self.found, true);
+                SearchKey::Stay
+            }
+            KeyCode::Backspace => {
+                if self.query.pop().is_some() {
+                    if self.query.is_empty() {
+                        self.found = None;
+                        self.failed = false;
+                    } else {
+                        self.found = None;
+                        self.step(history, None, false);
+                    }
+                }
+                SearchKey::Stay
+            }
+            KeyCode::Char(c) if !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.query.push(c);
+                self.step(history, self.found, false);
+                SearchKey::Stay
+            }
+            _ => SearchKey::Leave,
+        }
+    }
+
+    fn step(&mut self, history: &History, from: Option<usize>, older: bool) {
+        if self.query.is_empty() {
+            return;
+        }
+        let (end, skip) = match from {
+            Some(i) if older => (i, history.get(i).map(|e| e.command.as_str())),
+            Some(i) => (i + 1, None),
+            None => (history.len(), None),
+        };
+        match history.search_back(&self.query, end, skip) {
+            Some(i) => {
+                self.found = Some(i);
+                self.failed = false;
+            }
+            None => self.failed = true,
+        }
+    }
+
+    fn text<'a>(&self, history: &'a History) -> &'a str {
+        self.found
+            .and_then(|i| history.get(i))
+            .map_or("", |e| e.command.as_str())
+    }
+
+    fn draw(&self, stdout: &mut io::Stdout, history: &History) -> Result<(), StructuredDiagnostic> {
+        let text = self.text(history);
+        let label = if self.failed {
+            "failed reverse-i-search"
+        } else {
+            "reverse-i-search"
+        };
+        let prompt = format!("({label})'{}': ", self.query);
+        redraw(stdout, &prompt, text, text.find(&self.query).unwrap_or(0))
+    }
+}
+
+fn word_back(buf: &str, cur: usize, is_sep: fn(char) -> bool) -> usize {
+    let mut pos = cur;
+    let mut chars = buf[..cur].char_indices().rev().peekable();
+    while let Some(&(i, c)) = chars.peek() {
+        if !is_sep(c) {
+            break;
+        }
+        pos = i;
+        chars.next();
+    }
+    while let Some(&(i, c)) = chars.peek() {
+        if is_sep(c) {
+            break;
+        }
+        pos = i;
+        chars.next();
+    }
+    pos
+}
+
+fn word_forward(buf: &str, cur: usize, is_sep: fn(char) -> bool) -> usize {
+    let mut pos = cur;
+    let mut chars = buf[cur..].char_indices().peekable();
+    while let Some(&(i, c)) = chars.peek() {
+        if !is_sep(c) {
+            break;
+        }
+        pos = cur + i + c.len_utf8();
+        chars.next();
+    }
+    while let Some(&(i, c)) = chars.peek() {
+        if is_sep(c) {
+            break;
+        }
+        pos = cur + i + c.len_utf8();
+        chars.next();
+    }
+    pos
+}
+
+fn not_alnum(c: char) -> bool {
+    !c.is_alphanumeric()
 }
 
 fn prev_char_boundary(s: &str, idx: usize) -> usize {
