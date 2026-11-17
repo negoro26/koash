@@ -14,5 +14,3 @@ shell-value.workspace = true
 shell-builtins.workspace = true
 shell-kernel.workspace = true
 crossterm.workspace = true
-serde.workspace = true
-serde_json.workspace = true

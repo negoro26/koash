@@ -623,8 +623,6 @@ name = "shell-tui"
 version = "0.3.1"
 dependencies = [
  "crossterm",
- "serde",
- "serde_json",
  "shell-builtins",
  "shell-kernel",
  "shell-syntax",
