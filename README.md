@@ -19,8 +19,10 @@ The release binary is emitted at `target/release/koa`.
 ## Usage
 
 ```bash
-# Interactive TUI shell
+# Interactive TUI shell (reads ~/.koarc first)
 koa
+koa --norc
+KOA_RC=~/work/koarc koa
 
 # One-shot execution
 koa -c "find crates | where ext == rs | sort-by path"
@@ -41,6 +43,7 @@ koa --tsp -c "ls"
 - **Hashline anchors.** `cat`, `grep` and `ast` print a `line:hash` tag per line. `patch file N:hash 'text'` refuses the edit when line `N` has changed since you read it.
 - **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one, `redo` re-applies it, and `rollback <tx>` reverts back to a point. Snapshots live on disk under `.koa/undo`, as reflinks on btrfs and XFS and as copies elsewhere. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
 - **Sub-kernels.** `@sql` runs in an in-process SQLite database. `@py` and `@js` keep a `python3` or `node` worker alive per session, so variables survive between commands.
+- **Aliases, startup file, history.** `alias ll='ls -la'` defines an alias for the session, `alias` lists them in bash's reusable form (sorted, `'it'\''s'` quoting), `alias name` shows one, `unalias name` and `unalias -a` remove them. Bash's rules hold: only the first word of a command (and the word after `|`, `&&`, `||`, `;`, `&`, `!`, `then`, `do` and the like, or after an `X=1` prefix or a leading redirect) is looked up, quoted or backslashed words are not, an alias whose value ends in a space also expands the next word, an alias is not expanded again inside its own expansion, and an alias takes effect from the next command line (or RPC `exec`), not later in the line that defines it. Aliases are per session, in the REPL and in each RPC session, and are never exported to child processes. Interactive `koa` runs `~/.koarc` before the first prompt, line by line through the normal executor (a line ending in `\` continues on the next), so `export`, `alias`, `source ~/.venv/bin/activate` and other bash-construct lines all apply. `$KOA_RC` names another file (empty means none) and `koa --norc` skips it. A failing line prints its error and the file carries on. `koa -c`, `koa --rpc`, `--acp`, `--socket` and a script piped into `koa` never read it, as `bash -c` skips `~/.bashrc`. `history [N]` lists `~/.koa_history`, the file the line editor appends to after each command, as a table with `n`, `time`, `cwd`, `exit` and `command` columns; `history | grep make` hands `grep` just the commands.
 - **Discovery.** `discover "<intent>"` ranks builtins by BM25 over their descriptions.
 - **Code tools.** `prewalk` and `ast` parse source with tree-sitter. `diag` runs `cargo check`. `refs` and `rename` are text search and replace over the workspace, not LSP-backed.
 - **Agent modes.** `koa --rpc` (newline-delimited JSON over stdio), `koa --socket PATH` (the same protocol over a Unix socket) and `koa --acp` (Agent Client Protocol). Each RPC session has its own state; `exec` supports `timeout_ms`, which kills the whole process group, and a `policy` object.
@@ -51,6 +54,7 @@ koa --tsp -c "ls"
 - The RPC `policy` matches commands by name. `/usr/bin/touch` or `sh -c` get past it, so it is not a sandbox.
 - `session.fork` with isolation creates a session directory under `.koa/sessions/`, but writes are not redirected into it yet, so forked sessions are not isolated.
 - Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs, `if`/`for`/`while`, `source`, `.` or `eval` run as a whole through `bash -c` (`sh -c` where bash is missing). Exported variables, `unset`s and the working directory carry over to the next command, so `source .venv/bin/activate` and `if ...; then cd dir; fi` work. Shell functions, aliases and unexported variables do not carry over, so `deactivate` is not available afterwards; a function exported with `export -f` travels as a `BASH_FUNC_` variable. A line stopped with Ctrl-Z and resumed with `fg` carries nothing over. Because the whole line goes to bash, koa commands such as `select` or `where` on the same line as `source` are bash syntax errors; put them on the next line. Structured output, undo tracking and RPC policy checks do not apply inside these lines.
+- Alias expansion is textual and stops at the first `$(...)`, `${x:-y}` or backtick-in-quotes on a line, so `q $(date)` expands `q` but `echo $(q)` and anything after that point on the same line do not. A line in `~/.koarc` is one command: a multi-line `if` or function there fails line by line, so keep it in a file you `source`. `history` does not list the command that is currently running, `history -c` and `-d` are not implemented, and `koa -ic` does not read `~/.koarc` (bash's `-ic` reads `~/.bashrc`).
 - Linux only. macOS is untested.
 
 ## Workspace layout
