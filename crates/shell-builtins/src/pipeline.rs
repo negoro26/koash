@@ -29,6 +29,7 @@ pub(crate) struct Stage<'a> {
     pub kind: StageKind,
     pub label: String,
     pub argv: Vec<String>,
+    pub display: Option<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
 }
@@ -206,6 +207,7 @@ fn build_stages<'a>(
                         Some(capture) => capture.argv(shell, raw),
                         None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
                     },
+                    display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],
                 }
@@ -239,6 +241,7 @@ fn build_stages<'a>(
                             kind: StageKind::Assign,
                             label: String::new(),
                             argv,
+                            display: None,
                             env: Vec::new(),
                             redirs: &[],
                         }
@@ -247,6 +250,7 @@ fn build_stages<'a>(
                         kind: StageKind::Builtin(builtin),
                         label: name.clone(),
                         argv,
+                        display: None,
                         env: Vec::new(),
                         redirs: &simple.redirections,
                     },
@@ -258,6 +262,7 @@ fn build_stages<'a>(
                             kind: StageKind::External,
                             label: name.clone(),
                             argv,
+                            display: None,
                             env,
                             redirs: &simple.redirections,
                         }
@@ -273,7 +278,7 @@ fn build_stages<'a>(
 fn summarize(stages: &[Stage]) -> String {
     stages
         .iter()
-        .map(|s| s.argv.join(" "))
+        .map(|s| s.display.clone().unwrap_or_else(|| s.argv.join(" ")))
         .collect::<Vec<_>>()
         .join(" | ")
 }

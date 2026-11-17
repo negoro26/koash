@@ -38,8 +38,9 @@ Otherwise `run_pipeline` opens a tx ledger entry, builds one `Stage` per command
 - Everything else, including a `SoleStage` name that is not alone, is an external process.
 
 A line the parser cannot read, or one that starts with a POSIX keyword, `source`, `.` or `eval`, is one `PosixFallback` stage: `bash -c`, or `sh -c` without bash.
-When it is the whole foreground pipeline, `env_capture` wraps it. An `EXIT` trap writes `$PWD`, `env -0` and an end marker to a 0600 file created with `O_EXCL`, and `run_pipeline` applies the difference to `session.env` and `session.cwd` after the stage ends.
-A file without the end marker, from a killed or `exec`ed shell, changes nothing.
+When it is the whole foreground pipeline, `env_capture` prepends an `EXIT` trap to the same line, so the user's text keeps its line numbers. The trap appends the shell's `pwd`, `command -p env -0` and an end marker to a 0600 file koa created with `O_EXCL`, under `umask 077`, and only while that file still exists. `run_pipeline` applies the difference to `session.env` and `session.cwd` after the stage ends, and deletes the file.
+A file without the end marker changes nothing: a killed or `exec`ed shell, or an `env` that failed. `command -p` finds `env` on the default path, so a line that changes `PATH` still reports its environment, and `pwd` ignores a `PWD` that does not name the current directory.
+A fallback stage's `display` is `bash -c <line>`, which `jobs` shows instead of the wrapper.
 
 `run_stages` runs the stages in order.
 A builtin stage receives the previous value as `Value`, or reads its input first: a stdin redirect, the shell's own stdin when `reads_input` says so, or the bytes of a pipe from an external process.

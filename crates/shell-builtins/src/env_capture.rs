@@ -11,12 +11,7 @@ const VAR: &str = "KOA_ENV_CAPTURE";
 const END: &[u8] = b"koa-end\0";
 const SHELL_OWNED: &[&str] = &["SHLVL", "_"];
 
-const SCRIPT: &str = r#"__koa_out=$KOA_ENV_CAPTURE
-unset KOA_ENV_CAPTURE
-__koa_src=$1
-shift
-trap '__koa_status=$?; { printf "%s\0" "$PWD"; env -0; printf "koa-end\0"; } > "$__koa_out"; exit $__koa_status' EXIT
-eval "$__koa_src""#;
+const PREFIX: &str = r#"__koa_out=$KOA_ENV_CAPTURE; unset KOA_ENV_CAPTURE; trap '__koa_s=$?; umask 077; if [ -f "$__koa_out" ]; then { printf "%s\0" "$(pwd)"; command -p env -0 && printf "koa-end\0"; } >> "$__koa_out"; fi; exit $__koa_s' EXIT; "#;
 
 pub(crate) struct EnvCapture {
     path: PathBuf,
@@ -41,9 +36,11 @@ impl EnvCapture {
     }
 
     pub(crate) fn argv(&self, shell: &str, raw: &str) -> Vec<String> {
-        [shell, "-c", SCRIPT, shell, raw]
-            .map(str::to_string)
-            .to_vec()
+        vec![
+            shell.to_string(),
+            "-c".to_string(),
+            format!("{PREFIX}{raw}"),
+        ]
     }
 
     pub(crate) fn env(&self) -> Vec<(String, String)> {
