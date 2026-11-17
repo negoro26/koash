@@ -1,5 +1,5 @@
 pkgname=koash
-pkgver=0.3.1
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Agent-native structured command shell written in Rust (koa)'
 arch=('x86_64' 'aarch64')
