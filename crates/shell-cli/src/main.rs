@@ -6,7 +6,6 @@ use shell_builtins::{Sink, run_program};
 use shell_kernel::{CowWorkspace, Session, reap_background_jobs};
 use shell_rpc::RpcServer;
 use shell_surface::SurfaceMode;
-use shell_syntax::parse;
 use shell_tui::{LineEditor, ReadLineResult};
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
@@ -160,7 +159,7 @@ fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
         }
     };
 
-    let program = match parse(script) {
+    let program = match session.parse(script) {
         Ok(p) => p,
         Err(err) => {
             eprintln!("koa: syntax error ({}): {}", err.code, err.message);
@@ -212,7 +211,7 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let code = match parse(trimmed) {
+                    let code = match session.parse(trimmed) {
                         Ok(program) => run_program(&mut session, &program, &sink),
                         Err(err) => {
                             eprintln!("koa: syntax error ({}): {}", err.code, err.message);
@@ -252,7 +251,7 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                 if trimmed.is_empty() {
                     continue;
                 }
-                session.last_status = match parse(trimmed) {
+                session.last_status = match session.parse(trimmed) {
                     Ok(program) => run_program(&mut session, &program, &sink),
                     Err(err) => {
                         eprintln!("koa: syntax error ({}): {}", err.code, err.message);

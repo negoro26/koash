@@ -572,7 +572,6 @@ dependencies = [
  "shell-kernel",
  "shell-rpc",
  "shell-surface",
- "shell-syntax",
  "shell-tui",
  "tokio",
 ]
@@ -627,6 +626,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shell-builtins",
+ "shell-kernel",
  "shell-syntax",
  "shell-value",
 ]

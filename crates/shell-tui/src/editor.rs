@@ -11,7 +11,7 @@ use shell_value::StructuredDiagnostic;
 
 use crate::complete::complete_line;
 use crate::highlight::highlight_line;
-use crate::history::History;
+use shell_kernel::History;
 
 static PANIC_HOOK_INIT: Once = Once::new();
 

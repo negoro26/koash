@@ -184,12 +184,6 @@ impl AcpServer {
                 if let Some(ref flag) = cancel_flag {
                     flag.store(false, Ordering::SeqCst);
                 }
-                let program = match shell_syntax::parse(&cmd_text) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return send_acp_error(writer, req.id, -32602, &e.to_string()).await;
-                    }
-                };
                 let Some(session) = self.sessions.lock().await.remove(&sid) else {
                     return send_acp_error(
                         writer,
@@ -198,6 +192,13 @@ impl AcpServer {
                         &format!("session `{sid}` not found"),
                     )
                     .await;
+                };
+                let program = match session.parse(&cmd_text) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.sessions.lock().await.insert(sid, session);
+                        return send_acp_error(writer, req.id, -32602, &e.to_string()).await;
+                    }
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(64);
                 let executor = tokio::task::spawn_blocking(move || {

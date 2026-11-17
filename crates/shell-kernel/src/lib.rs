@@ -2,6 +2,7 @@ pub mod cow;
 pub mod env;
 pub mod exec;
 mod fs_util;
+pub mod history;
 pub mod kill;
 pub mod session;
 mod undo_store;
@@ -14,6 +15,7 @@ pub use exec::{
     group_stopped, prepare_child, reap_background_jobs, resume_group, spawn_external,
     wait_foreground,
 };
+pub use history::{History, HistoryEntry};
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Preimage, Session, TxRecord};
 pub use undo_store::Snapshot;
