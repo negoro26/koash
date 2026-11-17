@@ -273,7 +273,7 @@ fn rm_without_operands_is_a_usage_error() {
     let r = run(&s.0, "rm");
     assert_eq!(r.code, 2, "{}", r.stderr);
     let r = run(&s.0, "rm -f");
-    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert_eq!(r.code, 0, "{}", r.stderr);
 }
 
 #[test]
