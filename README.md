@@ -50,7 +50,7 @@ koa --tsp -c "ls"
 - Builtins pass whole tables between stages; they do not stream yet. A builtin in a background pipeline (`ls &`) fails with `E_BG_BUILTIN`.
 - The RPC `policy` matches commands by name. `/usr/bin/touch` or `sh -c` get past it, so it is not a sandbox.
 - `session.fork` with isolation creates a session directory under `.koa/sessions/`, but writes are not redirected into it yet, so forked sessions are not isolated.
-- Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs or `if`/`for`/`while` run through `sh -c` as a whole. Structured output, undo tracking and RPC policy checks do not apply inside them.
+- Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs, `if`/`for`/`while`, `source`, `.` or `eval` run as a whole through `bash -c` (`sh -c` where bash is missing). Exported variables, `unset`s and the working directory carry over to the next command, so `source .venv/bin/activate` and `if ...; then cd dir; fi` work. Shell functions, aliases and unexported variables do not carry over, so `deactivate` is not available afterwards; a function exported with `export -f` travels as a `BASH_FUNC_` variable. A line stopped with Ctrl-Z and resumed with `fg` carries nothing over. Because the whole line goes to bash, koa commands such as `select` or `where` on the same line as `source` are bash syntax errors; put them on the next line. Structured output, undo tracking and RPC policy checks do not apply inside these lines.
 - Linux only. macOS is untested.
 
 ## Workspace layout

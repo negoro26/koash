@@ -1,5 +1,5 @@
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::Searcher;
+use grep_searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
@@ -32,7 +32,7 @@ impl Builtin for Refs {
         args: &[String],
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
-        let Some(symbol) = args.first() else {
+        let Some(symbol) = args.first().filter(|s| !s.is_empty()) else {
             return Err(StructuredDiagnostic::new(
                 "E_ARGS",
                 "refs requires a symbol name",
@@ -41,10 +41,13 @@ impl Builtin for Refs {
             ));
         };
         let matcher = RegexMatcherBuilder::new()
+            .fixed_strings(true)
             .word(true)
             .build(symbol)
-            .map_err(|e| StructuredDiagnostic::new("E_REGEX", e.to_string(), None, None))?;
-        let mut searcher = Searcher::new();
+            .map_err(|e| StructuredDiagnostic::new("E_ARGS", e.to_string(), None, None))?;
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\0'))
+            .build();
         let mut rows = HashlineRows::with_capacity(32);
         let walker = WalkBuilder::new(&session.cwd).build();
         for entry_res in walker {
