@@ -16,7 +16,7 @@ record! {
         ext: &'a str,
         kind: &'a str,
         modified: OrBlank<UnixTime>,
-        name: &'a str,
+        #[text] name: &'a str,
         permissions: FileMode,
         size: u64,
     }

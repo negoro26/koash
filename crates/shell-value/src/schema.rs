@@ -19,6 +19,7 @@ enum Name {
 pub struct Column {
     name: Name,
     ty: ColType,
+    text: bool,
 }
 
 impl Column {
@@ -30,7 +31,17 @@ impl Column {
         Column {
             name: Name::Static(name),
             ty,
+            text: false,
         }
+    }
+
+    pub const fn text(mut self) -> Self {
+        self.text = true;
+        self
+    }
+
+    pub fn is_text(&self) -> bool {
+        self.text
     }
 
     pub fn name(&self) -> &str {
@@ -111,6 +122,7 @@ impl Schema {
             .map(|name| Column {
                 name: Name::Shared(Arc::from(name.as_ref())),
                 ty: ColType::Any,
+                text: false,
             })
             .collect();
         Schema(Columns::Shared(columns))
@@ -139,10 +151,19 @@ impl Schema {
         self.columns().iter().position(|c| c.name() == name)
     }
 
+    pub fn text_column(&self) -> Option<usize> {
+        self.columns().iter().position(Column::is_text)
+    }
+
     pub fn project(&self, cols: &[usize]) -> Self {
         let columns = self.columns();
         Schema(Columns::Shared(
-            cols.iter().map(|&col| columns[col].clone()).collect(),
+            cols.iter()
+                .map(|&col| Column {
+                    text: false,
+                    ..columns[col].clone()
+                })
+                .collect(),
         ))
     }
 }

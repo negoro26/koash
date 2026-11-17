@@ -154,6 +154,23 @@ impl RecordBatch {
         self.cells = cells;
     }
 
+    pub fn write_lines(&self, out: &mut Vec<u8>) {
+        let cols = match self.schema.text_column() {
+            Some(col) => col..col + 1,
+            None => 0..self.ncols(),
+        };
+        let mut scratch = String::new();
+        for row in self.rows() {
+            for col in cols.clone() {
+                if col != cols.start {
+                    out.push(b'\t');
+                }
+                row.get(col).write_text(out, &mut scratch);
+            }
+            out.push(b'\n');
+        }
+    }
+
     pub fn from_maps(records: Vec<StructuredRecord>) -> Result<Self, StructuredDiagnostic> {
         if records.is_empty() {
             return Ok(Self::empty());
