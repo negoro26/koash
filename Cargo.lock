@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "shell-builtins"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "globset",
  "grep-regex",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "shell-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "shell-builtins",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "shell-kernel"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "glob",
  "nix",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "shell-rpc"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "shell-surface"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "shell-syntax"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "shell-tui"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "crossterm",
  "serde",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "shell-value"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
