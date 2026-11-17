@@ -32,6 +32,8 @@ koa -c 'ls | wc -l'
 koa -c 'find . -name "*.log" | xargs rm'
 ```
 
+Wildcards and braces expand as in bash: `rm *.log`, `cat src/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
+
 `grep` is koa's own command and searches lines of text. To filter file names, use `where`:
 
 ```bash
@@ -81,7 +83,6 @@ After such a line, exported variables, unset variables and the current folder ca
 
 ## Limits
 
-- Wildcards are not expanded yet. `rm *.txt` looks for a file named `*.txt`. Run such lines as `bash -c 'rm *.txt'` for now.
 - There is no `alias`, startup file or `history` command yet, and Ctrl-R does not search history.
 - `ls` does not support `-t`, `-S` or `-r` yet. Those options run the system `ls` and return plain text.
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
