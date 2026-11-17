@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-koa = sys.argv[1]
+koa = os.path.abspath(sys.argv[1])
 TEXT = "".join(f"line {i}\n" for i in range(1, 21))
 
 READS = [
@@ -16,6 +16,8 @@ READS = [
     "tail -n2 -- -x",
     "cat f", "cat -- -x", "cat f -- -x",
     "head -n2 -n5 f", "tail -n9 --lines=3 f",
+    "grep -i 'LINE 1' f", "grep -iw 'line 1' f", "grep -F 'line 1' f", "grep -v 1 f",
+    "grep -Fv 'line 1' f", "grep -wi 'LINE 2' -- f",
 ]
 FAILS = [
     "head -n", "head -n x f", "head --nope f", "tail --lines", "cat --nope f", "rm", "mkdir",
@@ -54,12 +56,17 @@ def gnu(cmd, cwd):
     return subprocess.run(["bash", "-c", cmd], cwd=cwd, capture_output=True, text=True)
 
 
-def koa_run(cmd, cwd, lines):
-    script = f"{cmd} | select text | to json" if lines else cmd
-    return subprocess.run([koa, "-c", script], cwd=cwd, capture_output=True, text=True)
-
-
 bad = []
+
+
+def koa_run(cmd, cwd, lines, fallback_ok=False):
+    script = f"{cmd} | select text | to json" if lines else cmd
+    out = subprocess.run([koa, "-c", script], cwd=cwd, capture_output=True, text=True)
+    if not fallback_ok and "is not built in, running" in out.stderr:
+        bad.append(f"{cmd!r}: koa handed it to the external program, so its own parser was not tested")
+    return out
+
+
 for cmd in READS:
     root = scratch()
     want = gnu(cmd, root).stdout.splitlines()
@@ -70,7 +77,7 @@ for cmd in READS:
     shutil.rmtree(root)
 for cmd in FAILS:
     root = scratch()
-    g, k = gnu(cmd, root).returncode, koa_run(cmd, root, False).returncode
+    g, k = gnu(cmd, root).returncode, koa_run(cmd, root, False, fallback_ok=True).returncode
     if (g == 0) != (k == 0):
         bad.append(f"{cmd!r}: gnu rc={g}, koa rc={k}")
     shutil.rmtree(root)
