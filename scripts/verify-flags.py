@@ -38,6 +38,40 @@ TREES = [
 ]
 
 
+GLOB_FILES = [
+    "a.txt", "b.txt", "B.txt", "c.log", "d.log", ".hidden.txt", ".dot.log", "sp ace.txt", "\u00e9.txt",
+    "\u00fcn\u00ef.log", "a1", "a2", "a10", "aB", "-dash.txt", "star*.txt", "q?.txt",
+    "sub/x.txt", "sub/y.log", "sub/.h", "sub/deep/z.txt", "dir1/f.txt", "dir2/f.txt", "dir.x/q", "dir/q",
+    "sp ace/in side.txt", ".hid/in.txt",
+]
+GLOB_ARGS = [
+    "*.txt", "*.log", ".*.txt", ".*", "*", "?.txt", "??.txt", "a[0-9]*", "a[!0-9]*", "a[^0-9]*", "[ab].txt",
+    "[A-B].*", "sub/*", "sub/.*", "*/*.txt", "*/", "*/*/", "dir*/", "*/f.txt", "\u00e9*", "[\u00e9]*", "sp*",
+    "sp\\ *", "'sp ace'/*", "\"*.txt\"", "'*.txt'", "\\*.txt", "star\\*.txt", "star[*].txt", "*.nomatch",
+    "nomatch/*", "*.nomatch *.txt", "a.txt *.nomatch c.log", "[", "[x", "q?.txt", "q\\?.txt", "{a,b}.txt",
+    "{a,b,c}.{txt,log}", "{1..5}", "{05..8}", "{a..e}", "{5..1}", "{1..10..3}", "{-2..2}", "x{a,b{c,d}}y",
+    "{a}", "{}", "a{b", "{a,b", "{a,{b,c}", "{,a}", "x{,a}", "'{a,b}' \\{a,b}", "{1..a}", "{*,x}.txt",
+    "a{1..3}b{x,y}", "{sub,dir1}/*", "{nonexist,dir2}/*", "./*.log", "sub//*", "*/in*", ".h*/*", "*/.h",
+    "*.[lt]*", "***.txt", "-*", "[a-c]*.txt", "[!a-c]*.txt",
+]
+GLOB_ASSIGNED = [
+    "x='*.txt'; printf '[%s]\\n' $x", "x='*.txt'; printf '[%s]\\n' \"$x\"", "x='a,b'; printf '[%s]\\n' {$x}",
+    "x=sub; printf '[%s]\\n' $x/*", "x=; printf '[%s]\\n' $x*.log",
+]
+GLOB_TREES = [
+    "rm *.log", "rm sub/*.txt dir?/*.txt", "mkdir -p out/{x,y}/z", "rm *.nomatch", "mv *.log sub", "cp a1 a2 dir1",
+]
+
+
+def glob_scratch():
+    root = tempfile.mkdtemp()
+    for name in GLOB_FILES:
+        path = os.path.join(root, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+    return root
+
+
 def scratch():
     root = tempfile.mkdtemp()
     for name in ("f", "-x"):
@@ -105,6 +139,29 @@ for cmd in RAW:
     if g != k:
         bad.append(f"{cmd!r}: gnu {g!r}, koa {k!r}")
     shutil.rmtree(root)
+GLOB_ENV = dict(os.environ, LC_ALL="C.UTF-8")
+for args in GLOB_ARGS:
+    root = glob_scratch()
+    cmd = f"printf '[%s]\\n' {args}"
+    want = subprocess.run(["bash", "-c", cmd], cwd=root, capture_output=True, text=True, env=GLOB_ENV).stdout
+    got = koa_run(cmd, root, False).stdout
+    if got != want:
+        bad.append(f"{cmd!r}: bash {want!r}, koa {got!r}")
+    shutil.rmtree(root)
+for cmd in GLOB_ASSIGNED:
+    root = glob_scratch()
+    want = subprocess.run(["bash", "-c", cmd], cwd=root, capture_output=True, text=True, env=GLOB_ENV).stdout
+    got = koa_run(cmd, root, False).stdout
+    if got != want:
+        bad.append(f"{cmd!r}: bash {want!r}, koa {got!r}")
+    shutil.rmtree(root)
+for cmd in GLOB_TREES:
+    a, b = glob_scratch(), glob_scratch()
+    gr, kr = gnu(cmd, a).returncode, koa_run(cmd, b, False).returncode
+    if tree(a) != tree(b) or (gr == 0) != (kr == 0):
+        bad.append(f"{cmd!r}: gnu rc={gr} {tree(a)}, koa rc={kr} {tree(b)}")
+    shutil.rmtree(a)
+    shutil.rmtree(b, ignore_errors=True)
 for cmd in FINDS:
     root = scratch()
     want = sorted(p.removeprefix("./") for p in gnu(cmd, root).stdout.splitlines() if p != ".")
@@ -123,7 +180,14 @@ if not os.path.isdir(os.path.join(root, "d")):
     bad.append("'rm -r d; mkdir -p ''; undo': undo must restore d")
 shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + 2
+root = glob_scratch()
+before = tree(root)
+koa_run("rm *.log; undo", root, False)
+if tree(root) != before:
+    bad.append("'rm *.log; undo': undo must restore every file the glob removed")
+shutil.rmtree(root)
+
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + 3
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)
