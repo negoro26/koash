@@ -109,7 +109,107 @@ for cmd in FINDS:
         bad.append(f"{cmd!r}: gnu {want}, koa rc={out.returncode} {got}")
     shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS)
+TABLE_FILES = ["Bar.RS", "baz.txt", "foo.rs", "FOO.md", "my file.rs", "foobar.txt", "sub/foo.c", "sub/Zed.rs"]
+TABLE_TEXT = "alpha\n\nBeta\nfoo bar\nfoobar\nFOO\nrs\n"
+LS_GREPS = [
+    "foo", "-i foo", "-v foo", "-iv foo", "-w foo", "-wi foo", "-F .rs", "-Fi .RS", "-Fv .rs",
+    "rs", "'^b'", "-i '^b'", "-E 'rs$|md$'", "-- -x",
+    ("-c rs", "count"), ("-vc rs", "count"), ("-ic RS", "count"),
+    ("-n rs", "number"), ("-nv rs", "number"), ("-n -i foo", "number"),
+]
+FIND_GREPS = [
+    "foo", "-i foo", "-v foo", "-iv foo", "-w foo", "-wi foo", "-F zed", "-Fi ZED",
+    ("-c foo", "count"), ("-ic FOO", "count"),
+]
+CAT_GREPS = [
+    "foo", "-i foo", "-v foo", "-iv FOO", "-w foo", "-wi FOO", "-F 'foo bar'", "-v ''", "''",
+    "'^$'", "-v '^$'", ("-c foo", "count"), ("-vc foo", "count"), ("-c ''", "count"),
+]
+ENV_GREPS = [
+    "PATH", "-i path", "-F PATH", "-w PATHX", "-i pathy", "-w zzz", ("-c PATH", "count"), ("-ic path", "count"),
+]
+ENV_VARS = ["A=1", "PATHX=/x", "pathy=2", "B=zzzpathy", "C=zzz pathy", "PATH=/usr/bin:/bin"]
+PS_FLAGS = ["", "-i ", "-w ", "-iw "]
+
+
+def table_scratch():
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "sub"))
+    for name in TABLE_FILES + ["-x"]:
+        open(os.path.join(root, name), "w").close()
+    with open(os.path.join(root, "t"), "w") as fh:
+        fh.write(TABLE_TEXT)
+    return root
+
+
+def table_case(label, root, source, case, column, sort=False, strip_dot=False):
+    args, mode = case if isinstance(case, tuple) else (case, "")
+    tail = {"count": "", "number": f" | select line {column}", "": f" | select {column}"}[mode]
+    out = subprocess.run(
+        [koa, "-c", f"{source} | grep {args}{tail} | to json"], cwd=root, capture_output=True, text=True,
+    )
+    rows = json.loads(out.stdout or "[]")
+    want = gnu(f"LC_ALL=C {source} | grep {args}", root).stdout.splitlines()
+    if mode == "count":
+        have = [str(rows[0]["count"] if rows else 0)]
+    elif mode == "number":
+        have = [f"{row['line']}:{row[column]}" for row in rows]
+    else:
+        have = [row[column] for row in rows]
+        if strip_dot:
+            want = [p.removeprefix("./") for p in want if p != "."]
+    if sort:
+        have, want = sorted(have), sorted(want)
+    if out.returncode not in (0, 1) or have != want:
+        bad.append(f"{label} | grep {args}: koa rc={out.returncode} {have[:4]}..., gnu {want[:4]}...")
+
+
+root = table_scratch()
+for case in LS_GREPS:
+    table_case("ls", root, "ls", case, "name")
+for case in FIND_GREPS:
+    table_case("find .", root, "find .", case, "path", sort=True, strip_dot=True)
+for case in CAT_GREPS:
+    table_case("cat t", root, "cat t", case, "text")
+shutil.rmtree(root)
+
+marker = f"kpsmarker{os.getpid()}"
+proc = subprocess.Popen(["bash", "-c", f"exec -a {marker} sleep 60"])
+try:
+    for flags in PS_FLAGS:
+        arg = f"[k]{marker[1:]}"
+        arg = arg.upper() if "i" in flags else arg
+        listing = gnu(f"ps -eo pid,args | grep {flags}{arg}", "/").stdout.split()
+        want = [w for w in listing if w.isdigit() and int(w) == proc.pid]
+        out = subprocess.run(
+            [koa, "-c", f"ps | grep {flags}{arg} | select pid | to json"], capture_output=True, text=True,
+        )
+        have = [str(row["pid"]) for row in json.loads(out.stdout or "[]") if row["pid"] == proc.pid]
+        if have != want or have != [str(proc.pid)]:
+            bad.append(f"ps | grep {flags}{arg}: koa {have}, gnu {want}, started {proc.pid}")
+finally:
+    proc.kill()
+    proc.wait()
+
+for case in ENV_GREPS:
+    args, mode = case if isinstance(case, tuple) else (case, "")
+    listing = subprocess.run(
+        ["env", "-i", *ENV_VARS, "bash", "-c", f"env | grep {args}"], capture_output=True, text=True,
+    ).stdout.splitlines()
+    tail = "" if mode == "count" else " | select key"
+    out = subprocess.run(
+        ["env", "-i", *ENV_VARS, koa, "-c", f"env | grep {args}{tail} | to json"], capture_output=True, text=True,
+    )
+    rows = json.loads(out.stdout or "[]")
+    if mode == "count":
+        have, want = [str(rows[0]["count"] if rows else 0)], listing
+    else:
+        have, want = sorted(row["key"] for row in rows), sorted(line.split("=", 1)[0] for line in listing)
+    if out.returncode not in (0, 1) or have != want:
+        bad.append(f"env | grep {args}: koa rc={out.returncode} {have}, gnu {want}")
+
+TABLE_FORMS = len(LS_GREPS) + len(FIND_GREPS) + len(CAT_GREPS) + len(ENV_GREPS) + len(PS_FLAGS)
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + TABLE_FORMS
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)
