@@ -24,12 +24,16 @@ FAILS = [
     "rm --force=1 d", "cat -5 f",
 ]
 USAGE = ["rm", "mkdir", "head -n x f", "tail -n x f", "find . -maxdepth x"]
-RAW = ["echo -n hi", "echo -x hi", "echo hi -n", "echo -- hi", "echo -nx hi"]
+RAW = [
+    "echo -n hi", "echo -x hi", "echo hi -n", "echo -- hi", "echo -nx hi",
+    "e=; printf '%s|' a $e b \"$e\" c", "e=; $e echo hi",
+]
 FINDS = ["find . -name g", "find . -name 'f*'", "find . -type d", "find . -maxdepth 1 -type f", "find d -iname G"]
 TREES = [
     "rm -rf d", "rm -r -f d", "rm --recursive --force d", "rm -fr d", "rm -- -x",
     "rm -f missing", "mkdir -p a/b/c", "mkdir --parents a/b", "mkdir -p -- -y",
     "mkdir -p d", "mkdir d", "rm -f",
+    "rm -rf ''", "files=; rm -rf $files", "e=; rm -r d $e", "rm -f ''", "rm ''",
 ]
 
 
@@ -93,7 +97,7 @@ for cmd in TREES:
     if tree(a) != tree(b) or (gr == 0) != (kr == 0):
         bad.append(f"{cmd!r}: gnu rc={gr} {tree(a)}, koa rc={kr} {tree(b)}")
     shutil.rmtree(a)
-    shutil.rmtree(b)
+    shutil.rmtree(b, ignore_errors=True)
 for cmd in RAW:
     root = scratch()
     g, k = gnu(cmd, root).stdout, koa_run(cmd, root, False).stdout
