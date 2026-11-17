@@ -26,7 +26,7 @@ FAILS = [
 USAGE = ["rm", "mkdir", "head -n x f", "tail -n x f", "find . -maxdepth x"]
 RAW = [
     "echo -n hi", "echo -x hi", "echo hi -n", "echo -- hi", "echo -nx hi",
-    "e=; printf '%s|' a $e b \"$e\" c", "e=; $e echo hi",
+    "e=; printf '%s|' a $e b \"$e\" c", "e=; $e echo hi", "HOME=; printf '[%s]' ~ x",
 ]
 FINDS = ["find . -name g", "find . -name 'f*'", "find . -type d", "find . -maxdepth 1 -type f", "find d -iname G"]
 TREES = [
@@ -34,6 +34,7 @@ TREES = [
     "rm -f missing", "mkdir -p a/b/c", "mkdir --parents a/b", "mkdir -p -- -y",
     "mkdir -p d", "mkdir d", "rm -f",
     "rm -rf ''", "files=; rm -rf $files", "e=; rm -r d $e", "rm -f ''", "rm ''",
+    "e=; $e > f", "e=; $e > newfile", "e=; $e < missing", "mkdir -p ''", "mkdir ''",
 ]
 
 
@@ -113,7 +114,16 @@ for cmd in FINDS:
         bad.append(f"{cmd!r}: gnu {want}, koa rc={out.returncode} {got}")
     shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS)
+root = scratch()
+koa_run("e=; $e > f", root, False)
+if os.path.getsize(os.path.join(root, "f")) != 0:
+    bad.append("'e=; $e > f': f must be emptied, as bash does")
+koa_run("rm -r d; mkdir -p ''; undo", root, False)
+if not os.path.isdir(os.path.join(root, "d")):
+    bad.append("'rm -r d; mkdir -p ''; undo': undo must restore d")
+shutil.rmtree(root)
+
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + 2
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)

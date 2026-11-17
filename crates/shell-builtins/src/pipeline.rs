@@ -13,7 +13,7 @@ use crate::builtins::lookup;
 use crate::sink::{Sink, diag_status};
 use crate::wiring::{
     Flow, LaunchError, Launched, Plan, finish_foreground, launch_external, read_all,
-    read_all_watching, read_redirect_file,
+    read_all_watching, read_redirect_file, resolve_redirs,
 };
 
 pub const KILLED_STATUS: i32 = 124;
@@ -210,7 +210,7 @@ fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline, sink: &Sink) 
                             label: String::new(),
                             argv,
                             env: Vec::new(),
-                            redirs: &[],
+                            redirs: &simple.redirections,
                         }
                     }
                     (Some(name), Some(builtin)) => Stage {
@@ -264,7 +264,13 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         match stage.kind {
             StageKind::Assign => {
                 flow = Flow::Value(Value::Empty);
-                final_status = Some(0);
+                final_status = Some(match resolve_redirs(session, stage.redirs) {
+                    Ok(_) => 0,
+                    Err(diag) => {
+                        plan.sink.diag(&diag);
+                        1
+                    }
+                });
             }
             StageKind::Builtin(builtin) => {
                 let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);

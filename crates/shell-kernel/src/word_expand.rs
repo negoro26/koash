@@ -15,15 +15,15 @@ pub fn expand_words(words: &[Word], env: &SessionEnv, last_status: i32) -> Vec<S
         .iter()
         .filter_map(|word| {
             let text = expand_word(word, env, last_status);
-            (!text.is_empty() || word.parts.iter().any(is_quoted)).then_some(text)
+            (!text.is_empty() || word.parts.iter().any(kept_when_empty)).then_some(text)
         })
         .collect()
 }
 
-fn is_quoted(part: &WordPart) -> bool {
+fn kept_when_empty(part: &WordPart) -> bool {
     matches!(
         part,
-        WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. }
+        WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. } | WordPart::Tilde { .. }
     )
 }
 
