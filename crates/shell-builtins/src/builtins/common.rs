@@ -23,7 +23,7 @@ pub(crate) fn check_killed(session: &Session) -> Result<(), StructuredDiagnostic
 
 pub(crate) fn resolve_path(session: &Session, raw: &str) -> PathBuf {
     let p = Path::new(raw);
-    if p.is_absolute() {
+    if raw.is_empty() || p.is_absolute() {
         p.to_path_buf()
     } else {
         session.cwd.join(p)

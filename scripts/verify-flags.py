@@ -24,12 +24,17 @@ FAILS = [
     "rm --force=1 d", "cat -5 f",
 ]
 USAGE = ["rm", "mkdir", "head -n x f", "tail -n x f", "find . -maxdepth x"]
-RAW = ["echo -n hi", "echo -x hi", "echo hi -n", "echo -- hi", "echo -nx hi"]
+RAW = [
+    "echo -n hi", "echo -x hi", "echo hi -n", "echo -- hi", "echo -nx hi",
+    "e=; printf '%s|' a $e b \"$e\" c", "e=; $e echo hi", "HOME=; printf '[%s]' ~ x",
+]
 FINDS = ["find . -name g", "find . -name 'f*'", "find . -type d", "find . -maxdepth 1 -type f", "find d -iname G"]
 TREES = [
     "rm -rf d", "rm -r -f d", "rm --recursive --force d", "rm -fr d", "rm -- -x",
     "rm -f missing", "mkdir -p a/b/c", "mkdir --parents a/b", "mkdir -p -- -y",
     "mkdir -p d", "mkdir d", "rm -f",
+    "rm -rf ''", "files=; rm -rf $files", "e=; rm -r d $e", "rm -f ''", "rm ''",
+    "e=; $e > f", "e=; $e > newfile", "e=; $e < missing", "mkdir -p ''", "mkdir ''",
 ]
 LS_FIXTURE = [
     ("a", 10, 1000, 0), ("b", 30, 3000, 0), ("c", 30, 2000, 0), ("d", 20, 3000, 0),
@@ -122,7 +127,7 @@ for cmd in TREES:
     if tree(a) != tree(b) or (gr == 0) != (kr == 0):
         bad.append(f"{cmd!r}: gnu rc={gr} {tree(a)}, koa rc={kr} {tree(b)}")
     shutil.rmtree(a)
-    shutil.rmtree(b)
+    shutil.rmtree(b, ignore_errors=True)
 for cmd in RAW:
     root = scratch()
     g, k = gnu(cmd, root).stdout, koa_run(cmd, root, False).stdout
@@ -156,8 +161,17 @@ for flags in LS_FALLBACKS:
         bad.append(f"ls {flags}: must fall back to the real ls, gnu {want!r}, koa {out.stdout!r} {out.stderr!r}")
     shutil.rmtree(root)
 
+root = scratch()
+koa_run("e=; $e > f", root, False)
+if os.path.getsize(os.path.join(root, "f")) != 0:
+    bad.append("'e=; $e > f': f must be emptied, as bash does")
+koa_run("rm -r d; mkdir -p ''; undo", root, False)
+if not os.path.isdir(os.path.join(root, "d")):
+    bad.append("'rm -r d; mkdir -p ''; undo': undo must restore d")
+shutil.rmtree(root)
+
 checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS)
-checked += len(LS_ORDERS) + len(LS_FALLBACKS)
+checked += len(LS_ORDERS) + len(LS_FALLBACKS) + 2
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)

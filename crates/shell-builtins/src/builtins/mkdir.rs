@@ -54,6 +54,14 @@ impl Builtin for Mkdir {
         let verbose = args.has("v");
         let mut out = Vec::new();
         for operand in &args.operands {
+            if operand.is_empty() {
+                fail(
+                    session,
+                    "E_MKDIR",
+                    "cannot create directory '': No such file or directory".to_string(),
+                );
+                continue;
+            }
             let path = resolve_path(session, operand);
             let missing: Vec<&Path> = path
                 .ancestors()
