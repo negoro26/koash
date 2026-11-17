@@ -164,10 +164,12 @@ fn defers_to_executable(
 }
 
 fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
+    let builtin = lookup(&command_word(&simple.words, session)?)?;
+    if builtin.signature().placement != Placement::SoleStage {
+        return None;
+    }
     let args = expand_words(&simple.words, session);
-    let builtin = lookup(args.first()?)?;
-    (builtin.signature().placement == Placement::SoleStage)
-        .then(|| builtin.run_alone(session, &args[1..], sink))
+    Some(builtin.run_alone(session, args.get(1..)?, sink))
 }
 
 fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
