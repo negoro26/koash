@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::cell::Cell;
 use crate::rows::DynRows;
 use crate::{Column, Datum, Schema, StructuredDiagnostic, StructuredRecord, json};
@@ -27,6 +29,19 @@ impl<'a> Row<'a> {
             .iter()
             .enumerate()
             .map(move |(col, cell)| cell.datum(text, columns, col))
+    }
+
+    pub fn write_line(&self, cols: Range<usize>, out: &mut Vec<u8>, scratch: &mut String) {
+        if cols.len() == 1 {
+            self.get(cols.start).write_text(out, scratch);
+            return;
+        }
+        for col in cols.clone() {
+            if col != cols.start {
+                out.push(b'\t');
+            }
+            write_tsv_field(out, self.get(col).text(scratch));
+        }
     }
 }
 
@@ -161,16 +176,7 @@ impl RecordBatch {
         };
         let mut scratch = String::new();
         for row in self.rows() {
-            if cols.len() == 1 {
-                row.get(cols.start).write_text(out, &mut scratch);
-            } else {
-                for col in cols.clone() {
-                    if col != cols.start {
-                        out.push(b'\t');
-                    }
-                    write_tsv_field(out, row.get(col).text(&mut scratch));
-                }
-            }
+            row.write_line(cols.clone(), out, &mut scratch);
             out.push(b'\n');
         }
     }

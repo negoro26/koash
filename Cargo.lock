@@ -545,6 +545,7 @@ name = "shell-builtins"
 version = "0.3.1"
 dependencies = [
  "globset",
+ "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
