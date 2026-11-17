@@ -59,7 +59,7 @@ koa -c 'patch main.rs 12:4c7 "let x = 2;"'
 
 ## Background jobs
 
-End a line with `&` to run it in the background. `jobs` lists the jobs, `fg` and `bg` bring one to the front or resume it, and Ctrl-Z stops the job in front.
+End a line with `&` to run it in the background. `jobs` lists the jobs, `fg` and `bg` bring one to the front or resume it, `kill %1` ends job 1, and Ctrl-Z stops the job in front.
 
 ```bash
 koa -c 'find . | where size > 1000000 | select path > big.txt &'
