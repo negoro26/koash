@@ -25,7 +25,7 @@ step "tests"
 cargo nextest run --workspace --locked
 step "real-binary checks"
 cargo build --locked --bin koa
-koa="${CARGO_TARGET_DIR:-target}/debug/koa"
+koa="$(realpath "${CARGO_TARGET_DIR:-target}")/debug/koa"
 python3 scripts/verify-ls-cells.py "$koa"
 python3 scripts/verify-json.py "$koa"
 python3 scripts/verify-flags.py "$koa"
