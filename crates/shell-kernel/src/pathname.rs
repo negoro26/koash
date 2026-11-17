@@ -56,7 +56,7 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
                 let Some(name) = name.to_str() else {
                     continue;
                 };
-                if pattern.matches_with(name, OPTIONS) && (!needs_dir || is_dir(&entry, &dir)) {
+                if pattern.matches(name) && (!needs_dir || is_dir(&entry, &dir)) {
                     let mut name = name.to_owned();
                     if dir_only && i == last {
                         name.push('/');
@@ -105,10 +105,23 @@ fn join(base: &str, name: &str) -> String {
     }
 }
 
-fn compile(segment: &[Sym]) -> Option<Pattern> {
-    if !has_meta(segment) {
-        return None;
+struct Compiled {
+    pattern: Pattern,
+    prefix: String,
+    suffix: String,
+}
+
+impl Compiled {
+    fn matches(&self, name: &str) -> bool {
+        name.len() >= self.prefix.len() + self.suffix.len()
+            && name.starts_with(&self.prefix)
+            && name.ends_with(&self.suffix)
+            && self.pattern.matches_with(name, OPTIONS)
     }
+}
+
+fn compile(segment: &[Sym]) -> Option<Compiled> {
+    let first = segment.iter().position(|s| is_meta(*s))?;
     let mut pattern = String::with_capacity(segment.len() + 2);
     let mut after_open = false;
     for &sym in segment {
@@ -129,5 +142,18 @@ fn compile(segment: &[Sym]) -> Option<Pattern> {
         }
         after_open = active && sym.ch == '[';
     }
-    Pattern::new(&pattern).ok()
+    let has_class = segment
+        .iter()
+        .any(|s| s.kind != Kind::Quoted && s.ch == '[');
+    let last = segment.iter().rposition(|s| is_meta(*s))?;
+    let suffix = if has_class {
+        &[][..]
+    } else {
+        &segment[last + 1..]
+    };
+    Some(Compiled {
+        pattern: Pattern::new(&pattern).ok()?,
+        prefix: segment[..first].iter().map(|s| s.ch).collect(),
+        suffix: suffix.iter().map(|s| s.ch).collect(),
+    })
 }
