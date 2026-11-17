@@ -2,7 +2,8 @@ use std::io::Write;
 
 use nix::unistd::Pid;
 use shell_kernel::{
-    JobState, Session, expand_word, expand_words, find_executable, reap_background_jobs,
+    JobState, Session, command_word, expand_word, expand_words, find_executable,
+    reap_background_jobs,
 };
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
@@ -120,9 +121,7 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
 
 fn command_name(session: &Session, cmd: &Command) -> Option<String> {
     match cmd {
-        Command::Simple(simple) => expand_words(&simple.words, &session.env, session.last_status)
-            .into_iter()
-            .next(),
+        Command::Simple(simple) => command_word(&simple.words, session),
         Command::PosixFallback { .. } => None,
     }
 }
@@ -165,7 +164,7 @@ fn defers_to_executable(
 }
 
 fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
-    let args = expand_words(&simple.words, &session.env, session.last_status);
+    let args = expand_words(&simple.words, session);
     let builtin = lookup(args.first()?)?;
     (builtin.signature().placement == Placement::SoleStage)
         .then(|| builtin.run_alone(session, &args[1..], sink))
@@ -210,7 +209,7 @@ fn build_stages<'a>(
                 }
             }
             Command::Simple(simple) => {
-                let argv = expand_words(&simple.words, &session.env, session.last_status);
+                let argv = expand_words(&simple.words, session);
                 let env: Vec<(String, String)> = simple
                     .assignments
                     .iter()
