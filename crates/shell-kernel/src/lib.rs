@@ -19,4 +19,4 @@ pub use history::{History, HistoryEntry};
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Preimage, Session, TxRecord};
 pub use undo_store::Snapshot;
-pub use word_expand::expand_word;
+pub use word_expand::{expand_word, expand_words};
