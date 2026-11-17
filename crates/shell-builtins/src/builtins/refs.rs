@@ -1,3 +1,6 @@
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
 use ignore::WalkBuilder;
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
@@ -48,24 +51,44 @@ impl Builtin for Refs {
             if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(entry.path()) else {
-                continue;
-            };
-            let Ok(text) = std::str::from_utf8(&bytes) else {
-                continue;
-            };
             let rel = entry
                 .path()
                 .strip_prefix(&session.cwd)
                 .unwrap_or(entry.path())
                 .to_string_lossy();
-            for (idx, line) in text.lines().enumerate() {
-                if contains_word(line, symbol) {
-                    push_hashline_row(&mut rows, &rel, idx as u64 + 1, line);
-                }
-            }
+            search_file(entry.path(), &rel, symbol, &mut rows);
         }
         Ok(Value::from_batch(rows.finish()?))
+    }
+}
+
+fn search_file(path: &Path, label: &str, symbol: &str, rows: &mut HashlineRows) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let mut reader = BufReader::new(file);
+    if reader.fill_buf().map_or(true, |head| head.contains(&0)) {
+        return;
+    }
+    let mut buf = Vec::new();
+    let mut line_no = 0u64;
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => line_no += 1,
+        }
+        if buf.contains(&0) {
+            return;
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            continue;
+        };
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if contains_word(line, symbol) {
+            push_hashline_row(rows, label, line_no, line);
+        }
     }
 }
 
