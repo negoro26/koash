@@ -8,6 +8,7 @@ use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 use crate::args::Args;
 use crate::builtin::{Builtin, Placement, TxPolicy};
 use crate::builtins::lookup;
+use crate::env_capture::EnvCapture;
 use crate::sink::{Sink, diag_status};
 use crate::wiring::{
     Flow, LaunchError, Launched, Plan, finish_foreground, launch_external, read_all,
@@ -76,7 +77,11 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
     }
 
     begin_pipeline_tx(session, pipeline);
-    let stages = build_stages(session, pipeline, sink);
+    let capture = match pipeline.commands.as_slice() {
+        [Command::PosixFallback { .. }] if !background => EnvCapture::create(session),
+        _ => None,
+    };
+    let stages = build_stages(session, pipeline, sink, capture.as_ref());
     let status = if background
         && stages
             .iter()
@@ -104,6 +109,9 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
         status
     };
     session.finish_tx();
+    if let Some(capture) = capture {
+        capture.apply(session);
+    }
     status
 }
 
@@ -176,17 +184,32 @@ fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
     }
 }
 
-fn build_stages<'a>(session: &mut Session, pipeline: &'a Pipeline, sink: &Sink) -> Vec<Stage<'a>> {
+fn build_stages<'a>(
+    session: &mut Session,
+    pipeline: &'a Pipeline,
+    sink: &Sink,
+    capture: Option<&EnvCapture>,
+) -> Vec<Stage<'a>> {
     let mut stages = Vec::with_capacity(pipeline.commands.len());
     for cmd in &pipeline.commands {
         let stage = match cmd {
-            Command::PosixFallback { raw, .. } => Stage {
-                kind: StageKind::External,
-                label: raw.clone(),
-                argv: vec!["sh".to_string(), "-c".to_string(), raw.clone()],
-                env: Vec::new(),
-                redirs: &[],
-            },
+            Command::PosixFallback { raw, .. } => {
+                let shell = if find_executable(session, "bash").is_some() {
+                    "bash"
+                } else {
+                    "sh"
+                };
+                Stage {
+                    kind: StageKind::External,
+                    label: raw.clone(),
+                    argv: match capture {
+                        Some(capture) => capture.argv(shell, raw),
+                        None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
+                    },
+                    env: capture.map(EnvCapture::env).unwrap_or_default(),
+                    redirs: &[],
+                }
+            }
             Command::Simple(simple) => {
                 let argv: Vec<String> = simple
                     .words

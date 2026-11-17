@@ -36,6 +36,10 @@ Otherwise `run_pipeline` opens a tx ledger entry, builds one `Stage` per command
 - A name found in the registry with `Placement::Any` is a builtin stage.
 - Everything else, including a `SoleStage` name that is not alone, is an external process.
 
+A line the parser cannot read, or one that starts with a POSIX keyword, `source`, `.` or `eval`, is one `PosixFallback` stage: `bash -c`, or `sh -c` without bash.
+When it is the whole foreground pipeline, `env_capture` wraps it. An `EXIT` trap writes `$PWD`, `env -0` and an end marker to a 0600 file created with `O_EXCL`, and `run_pipeline` applies the difference to `session.env` and `session.cwd` after the stage ends.
+A file without the end marker, from a killed or `exec`ed shell, changes nothing.
+
 `run_stages` runs the stages in order.
 A builtin stage receives the previous value as `Value`, or reads its input first: a stdin redirect, the shell's own stdin when `reads_input` says so, or the bytes of a pipe from an external process.
 A builtin produces a `Value` for the next stage.
