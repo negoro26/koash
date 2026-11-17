@@ -337,7 +337,7 @@ pub(crate) fn launch_external(
         }
         None => match std::mem::replace(flow, Flow::None) {
             Flow::Pipe(fd) => Stdio::from(fd),
-            Flow::Value(value) => feed(plan.scope, value.into_raw_bytes())?,
+            Flow::Value(value) => feed(plan.scope, value.into_text_bytes())?,
             Flow::None if plan.background || plan.sink.is_capture() => Stdio::null(),
             Flow::None => Stdio::inherit(),
         },

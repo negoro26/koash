@@ -35,7 +35,7 @@ record! {
         file: &'a str,
         line: u64,
         hash: &'a str,
-        text: &'a str,
+        #[text] text: &'a str,
     }
 }
 

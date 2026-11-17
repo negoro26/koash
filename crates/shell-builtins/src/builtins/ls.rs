@@ -16,7 +16,7 @@ record! {
         ext: &'a str,
         kind: &'a str,
         modified: OrBlank<UnixTime>,
-        name: &'a str,
+        #[text] name: &'a str,
         permissions: FileMode,
         size: u64,
     }
@@ -148,7 +148,7 @@ fn push_ls_row(rows: &mut Rows<LsRow<'static>>, name: &str, path: &Path, meta: &
         kind: kind_of(meta),
         modified: OrBlank(UnixTime::from_system(meta.modified())),
         name,
-        permissions: FileMode(meta.permissions().mode() & 0o777),
+        permissions: FileMode(meta.permissions().mode() & 0o7777),
         size: meta.len(),
     });
 }

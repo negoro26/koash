@@ -37,7 +37,7 @@ koa --tsp -c "ls"
 
 ## What works today
 
-- **Structured pipelines.** `ls`, `stat`, `find`, `ps`, `cat`, `grep` and `env` produce tables that `where`, `select`, `sort-by`, `first`, `last`, `from` and `to` filter in-process. At an external command the table becomes NDJSON or text, and external output comes back as lines.
+- **Structured pipelines.** `ls`, `stat`, `find`, `ps`, `cat`, `grep` and `env` produce tables that `where`, `select`, `sort-by`, `first`, `last`, `from` and `to` filter in-process. An external command receives the text bash would give it: `ls | wc -l` counts file names, `cat f | sort` sends the lines, `find . | xargs ls -d` sends paths. A table without such a column, or one reshaped by `select`, arrives as tab-separated rows. Use `to json` to send JSON. External output comes back as lines. `grep` here is koa's builtin and reads the `text` column, so `ls | grep foo` finds nothing; filter names with `ls | where name =~ foo` or call `/usr/bin/grep`.
 - **Hashline anchors.** `cat`, `grep` and `ast` print a `line:hash` tag per line. `patch file N:hash 'text'` refuses the edit when line `N` has changed since you read it.
 - **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one, `redo` re-applies it, and `rollback <tx>` reverts back to a point. Snapshots live on disk under `.koa/undo`, as reflinks on btrfs and XFS and as copies elsewhere. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
 - **Sub-kernels.** `@sql` runs in an in-process SQLite database. `@py` and `@js` keep a `python3` or `node` worker alive per session, so variables survive between commands.
@@ -68,7 +68,9 @@ koa --tsp -c "ls"
 
 ## Development
 
-`scripts/check.sh` is the gate CI runs. It runs rustfmt, taplo, typos, a comment budget, clippy with `-D warnings`, cargo-nextest, cargo-deny and cargo-machete. Clippy denies `unwrap`, `expect` and `panic` outside tests. The comment budget fails when `crates/` has more comment lines than `scripts/comment-budget` allows; keep a comment only for a reason the code cannot show.
+`scripts/check.sh` is the gate CI runs. It runs rustfmt, taplo, typos, a comment budget, clippy with `-D warnings`, cargo-nextest, three checks against the built `koa`, cargo-deny and cargo-machete. Clippy denies `unwrap`, `expect` and `panic` outside tests. The comment budget fails when `crates/` has more comment lines than `scripts/comment-budget` allows; keep a comment only for a reason the code cannot show.
+
+Tests drive the real binary. A check that compares koa with an independent reference is preferred over a test that pins an expected value: `verify-ls-cells.py` compares every day from 1960 to 2100 and every file mode with Python, `verify-json.py` sends 3,000 random records through `from json | to json`, and `verify-flags.py` runs each flag spelling through koa and GNU coreutils.
 
 ```bash
 scripts/check.sh                       # full gate
@@ -76,6 +78,7 @@ bacon clippy                           # watch mode
 cargo nextest run                      # tests; .config/nextest.toml kills a test after 60 s
 cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
 scripts/verify-undo.sh                 # every command sequence up to depth 5 against the undo promise
+python3 scripts/verify-flags.py target/debug/koa   # one check against the built binary
 ```
 
 With a distro Rust instead of rustup, point coverage at the system LLVM: `LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata`.

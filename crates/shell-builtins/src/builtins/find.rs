@@ -1,13 +1,21 @@
 use globset::GlobBuilder;
 use ignore::WalkBuilder;
-use serde_json::{Value as JsonVal, json};
 use shell_kernel::Session;
-use shell_value::{StructuredDiagnostic, StructuredRecord, Value};
+use shell_value::{Rows, StructuredDiagnostic, Value, record};
 
 use super::common::{check_killed, resolve_path, usage_error};
 use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
+
+record! {
+    struct FindRow<'a> {
+        ext: &'a str,
+        kind: &'a str,
+        #[text] path: &'a str,
+        size: u64,
+    }
+}
 
 pub(super) struct Find;
 
@@ -90,7 +98,9 @@ impl Builtin for Find {
                 "E_FIND",
                 format!("find: '{label}': {}", describe(&e)),
             );
-            return Value::from_records(Vec::new());
+            return Ok(Value::from_batch(
+                Rows::<FindRow<'static>>::new().finish_or_empty()?,
+            ));
         }
 
         let mut builder = WalkBuilder::new(&root);
@@ -98,7 +108,7 @@ impl Builtin for Find {
         if let Some(d) = max_depth {
             builder.max_depth(Some(d));
         }
-        let mut records = Vec::new();
+        let mut rows = Rows::<FindRow<'static>>::new();
         for entry_res in builder.build() {
             check_killed(session)?;
             let Ok(entry) = entry_res else {
@@ -134,20 +144,15 @@ impl Builtin for Find {
                 .path()
                 .extension()
                 .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            let mut rec = StructuredRecord::new();
-            rec.insert("path".to_string(), JsonVal::String(display_path));
-            rec.insert("ext".to_string(), JsonVal::String(ext));
-            rec.insert(
-                "kind".to_string(),
-                JsonVal::String(if is_dir { "dir" } else { "file" }.to_string()),
-            );
-            rec.insert("size".to_string(), json!(meta.len()));
-            records.push(rec);
+                .unwrap_or("");
+            rows.push(&FindRow {
+                ext,
+                kind: if is_dir { "dir" } else { "file" },
+                path: &display_path,
+                size: meta.len(),
+            });
         }
 
-        Value::from_records(records)
+        Ok(Value::from_batch(rows.finish_or_empty()?))
     }
 }
