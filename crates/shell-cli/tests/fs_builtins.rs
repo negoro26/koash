@@ -259,7 +259,6 @@ fn rm_unknown_option_is_a_usage_error_that_touches_nothing() {
 }
 
 #[test]
-
 fn rm_recursive_refuses_dot_and_dotdot() {
     let s = Scratch::new("rm-dot");
     s.write("work/sub/f", b"keep");
