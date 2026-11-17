@@ -56,6 +56,7 @@ impl<'a> Parser<'a> {
                 op: None,
                 span,
             }],
+            source: src.to_string(),
             span,
         }
     }
@@ -149,7 +150,11 @@ impl<'a> Parser<'a> {
             _ => Span::empty(0),
         };
 
-        Ok(Program { items, span })
+        Ok(Program {
+            items,
+            source: self.src.to_string(),
+            span,
+        })
     }
 
     fn is_plain_keyword(word: &Word) -> bool {

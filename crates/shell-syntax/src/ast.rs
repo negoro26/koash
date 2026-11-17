@@ -5,6 +5,7 @@ use crate::span::Span;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Program {
     pub items: Vec<ListItem>,
+    pub source: String,
     pub span: Span,
 }
 
