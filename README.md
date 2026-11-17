@@ -1,102 +1,107 @@
-# koash (`koa`)
+# koash
 
-An agent-native structured command shell written in Rust. `koa` runs POSIX pipelines alongside typed record tables, tags lines with Hashline anchors that `patch` verifies, records file changes so `undo` can revert them, keeps `@py`/`@js`/`@sql` sub-kernels alive between commands, and serves headless RPC and ACP modes from one binary.
+`koa` is a command shell for people and AI agents, written in Rust. Its own commands pass tables instead of text, every file change they make can be undone, and agents can drive it over JSON.
+
+It runs on Linux.
 
 ## Install
 
-Prebuilt Linux binaries are attached on [GitHub Releases](https://github.com/negoro26/koash/releases):
+Download a binary for x86_64 or aarch64 from [Releases](https://github.com/negoro26/koash/releases), or build it:
 
 ```bash
-# Cargo
 cargo install --git https://github.com/negoro26/koash
-
-# Or build from source
-cargo build --release --bin koa
 ```
 
-The release binary is emitted at `target/release/koa`.
+## Use
 
-## Usage
+Run `koa` for an interactive shell, or `koa -c '...'` to run one line.
 
 ```bash
-# Interactive TUI shell
-koa
-
-# One-shot execution
-koa -c "find crates | where ext == rs | sort-by path"
-koa -c "cat src/main.rs | grep SurfaceMode"
-koa -c 'discover "search code"'
-koa -c "@sql SELECT 1 + 1 AS x"
-
-# Agent / programmatic modes
-koa --rpc
-koa --acp
-koa --socket /tmp/koa.sock
-koa --tsp -c "ls"
+koa -c 'ls -t | first 5'
+koa -c 'ls | where size > 1000 | sort-by size | select name size'
+koa -c 'find src | where ext == rs | first 5'
+koa -c 'cat notes.txt | where text =~ todo'
+koa -c 'ps | where name == bash | to json'
 ```
 
-## What works today
+`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `sort-by`, `first`, `last` and `to json` work on those tables.
 
-- **Structured pipelines.** `ls`, `stat`, `find`, `ps`, `cat`, `grep` and `env` produce tables that `where`, `select`, `sort-by`, `first`, `last`, `from` and `to` filter in-process. An external command receives the text bash would give it: `ls | wc -l` counts file names, `cat f | sort` sends the lines, `find . | xargs ls -d` sends paths. A table without such a column, or one reshaped by `select`, arrives as tab-separated rows. Use `to json` to send JSON. External output comes back as lines. `grep` here is koa's builtin and reads the `text` column, so `ls | grep foo` finds nothing; filter names with `ls | where name =~ foo` or call `/usr/bin/grep`.
-- **`ls` flags.** `-a`, `-A`, `-t` (newest first, to the nanosecond, ties by name), `-S` (largest first), `-r` (reverse), and `-l`, `-1`, `-h`, which are accepted and change nothing: the table already has one row per entry with every column, and `size` stays a number of bytes so `where size > 1000` and `sort-by size` keep working. Any other option runs `/usr/bin/ls`.
-- **Hashline anchors.** `cat`, `grep` and `ast` print a `line:hash` tag per line. `patch file N:hash 'text'` refuses the edit when line `N` has changed since you read it.
-- **Undo.** Builtin file changes (`>`/`>>` redirects, `rm`, `mkdir`, `cp`, `mv`, `patch`, `rename`) are recorded per command. `undo` reverts the last one, `redo` re-applies it, and `rollback <tx>` reverts back to a point. Snapshots live on disk under `.koa/undo`, as reflinks on btrfs and XFS and as copies elsewhere. After an external command runs, `undo` refuses with `E_TX_OPAQUE` instead of guessing, because koa cannot see what the external program wrote.
-- **Sub-kernels.** `@sql` runs in an in-process SQLite database. `@py` and `@js` keep a `python3` or `node` worker alive per session, so variables survive between commands.
-- **Discovery.** `discover "<intent>"` ranks builtins by BM25 over their descriptions.
-- **Code tools.** `prewalk` and `ast` parse source with tree-sitter. `diag` runs `cargo check`. `refs` and `rename` are text search and replace over the workspace, not LSP-backed.
-- **Agent modes.** `koa --rpc` (newline-delimited JSON over stdio), `koa --socket PATH` (the same protocol over a Unix socket) and `koa --acp` (Agent Client Protocol). Each RPC session has its own state; `exec` supports `timeout_ms`, which kills the whole process group, and a `policy` object.
+Normal programs still work. When a table goes into one, it gets the text bash would send:
 
-## Known limits
+```bash
+koa -c 'ls | wc -l'
+koa -c 'find . -name "*.log" | xargs rm'
+```
 
-- Builtins pass whole tables between stages; they do not stream yet. A builtin in a background pipeline (`ls &`) fails with `E_BG_BUILTIN`.
-- The RPC `policy` matches commands by name. `/usr/bin/touch` or `sh -c` get past it, so it is not a sandbox.
-- `session.fork` with isolation creates a session directory under `.koa/sessions/`, but writes are not redirected into it yet, so forked sessions are not isolated.
-- Lines that use `$(...)`, `${x:-y}`, backticks, subshells, here-docs, `if`/`for`/`while`, `source`, `.` or `eval` run as a whole through `bash -c` (`sh -c` where bash is missing). Exported variables, `unset`s and the working directory carry over to the next command, so `source .venv/bin/activate` and `if ...; then cd dir; fi` work. Shell functions, aliases and unexported variables do not carry over, so `deactivate` is not available afterwards; a function exported with `export -f` travels as a `BASH_FUNC_` variable. A line stopped with Ctrl-Z and resumed with `fg` carries nothing over. Because the whole line goes to bash, koa commands such as `select` or `where` on the same line as `source` are bash syntax errors; put them on the next line. Structured output, undo tracking and RPC policy checks do not apply inside these lines.
-- Linux only. macOS is untested.
+`grep` is koa's own command and searches lines of text. To filter file names, use `where`:
 
-## Workspace layout
+```bash
+koa -c 'ls | where name =~ test'
+```
 
-| Crate | Role |
-| :--- | :--- |
-| `shell-syntax` | Lexer and recursive-descent parser |
-| `shell-value` | `Value` (`Empty`, `Bytes`, `Batch`), `RecordBatch`, Hashline tags, taint and secret redaction |
-| `shell-kernel` | `Session`, process spawning and job control, kill switch, undo ledger, CoW session directories |
-| `shell-builtins` | Builtin commands, the pipeline executor, `discover`, code tools, sub-kernels |
-| `shell-rpc` | `--rpc`, `--socket` and `--acp` servers, RPC policy checks |
-| `shell-surface` | Terminal tables, compact sigil format, TSP output |
-| `shell-tui` | `crossterm` line editor, syntax highlighting, completion |
-| `shell-cli` | The `koa` binary |
+## Undo
+
+koa saves a copy of a file before its own commands change it. That covers `rm`, `cp`, `mv`, `mkdir`, `patch`, `rename` and `>` or `>>` redirects.
+
+```bash
+koa -c 'rm notes.txt; undo'
+```
+
+`undo` puts back the last change, `redo` reapplies it, and `tx-log` lists the changes it can undo. Once a normal program has run, `undo` refuses with `E_TX_OPAQUE`, because koa cannot see what that program changed.
+
+## Safe edits
+
+`cat` prints a short hash next to each line. `patch` changes a line only if it still has that hash, so an edit based on an old read fails instead of overwriting newer text.
+
+```bash
+koa -c 'cat main.rs'
+koa -c 'patch main.rs 12:4c7 "let x = 2;"'
+```
+
+## Other commands
+
+- `@sql SELECT 1 + 1` runs SQL in an SQLite database that lives as long as the session.
+- `@py` and `@js` send code to a Python or Node process that stays running, so variables persist between lines.
+- `refs NAME` finds every line that uses `NAME` as a whole word.
+- `discover "undo a change"` suggests commands for a task.
+- `help` lists every command, its options and its columns.
+
+## For agents
+
+- `koa --rpc` reads one JSON request per line on stdin and answers on stdout.
+- `koa --socket PATH` speaks the same protocol on a Unix socket.
+- `koa --acp` speaks the Agent Client Protocol.
+
+Each session keeps its own folder, variables and undo history. An `exec` request can set `timeout_ms`, which stops the whole command when the time runs out.
+
+## Bash lines
+
+koa passes lines it does not handle itself to bash. That includes `if`, `for`, `while`, `$(...)`, here-docs, `source`, `.` and `eval`.
+
+After such a line, exported variables, unset variables and the current folder carry over to the next line, so `source .venv/bin/activate` works. Functions, aliases and unexported variables do not carry over.
+
+## Limits
+
+- Wildcards are not expanded yet. `rm *.txt` looks for a file named `*.txt`. Run such lines as `bash -c 'rm *.txt'` for now.
+- There is no `alias`, startup file or `history` command yet, and Ctrl-R does not search history.
+- Commands hold a whole table in memory before passing it on. They do not stream yet.
+- koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
+- The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
+- Undo and the RPC policy do not see inside bash lines.
+- macOS is untested.
 
 ## Development
 
-`scripts/check.sh` is the gate CI runs. It runs rustfmt, taplo, typos, a comment budget, clippy with `-D warnings`, cargo-nextest, three checks against the built `koa`, cargo-deny and cargo-machete. Clippy denies `unwrap`, `expect` and `panic` outside tests. The comment budget fails when `crates/` has more comment lines than `scripts/comment-budget` allows; keep a comment only for a reason the code cannot show.
-
-Tests drive the real binary. A check that compares koa with an independent reference is preferred over a test that pins an expected value: `verify-ls-cells.py` compares every day from 1960 to 2100 and every file mode with Python, `verify-json.py` sends 3,000 random records through `from json | to json`, and `verify-flags.py` runs each flag spelling through koa and GNU coreutils.
+`scripts/check.sh` runs everything CI runs: formatting, lints, tests, and three checks that compare the built `koa` with Python and GNU coreutils.
 
 ```bash
-scripts/check.sh                       # full gate
-bacon clippy                           # watch mode
-cargo nextest run                      # tests; .config/nextest.toml kills a test after 60 s
-cargo llvm-cov nextest --html          # coverage report in target/llvm-cov/html
-scripts/verify-undo.sh                 # every command sequence up to depth 5 against the undo promise
-python3 scripts/verify-flags.py target/debug/koa   # one check against the built binary
+scripts/check.sh
+scripts/verify-undo.sh       # every sequence of up to 5 commands against the undo rules
+scripts/bench.sh BINARY      # times ls, pipelines and cat on large inputs
+scripts/profile.sh flamegraph -- -c 'find . | where ext == rs'
 ```
 
-With a distro Rust instead of rustup, point coverage at the system LLVM: `LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata`.
-
-Profiling builds use the `profiling` profile, which is release with symbols. `scripts/profile.sh` builds it and runs one tool against `koa`. `flamegraph` and `samply` sample through `perf_event_open`, which needs `kernel.perf_event_paranoid` set to 1 or lower.
-
-```bash
-scripts/profile.sh flamegraph -- -c 'find crates | where ext == rs | sort-by path'
-scripts/profile.sh samply     -- -c '...'   # saves target/profile/samply.json.gz; view with samply load
-scripts/profile.sh heaptrack  -- -c '...'   # allocations
-scripts/profile.sh cachegrind -- -c '...'   # cache misses
-scripts/profile.sh strace     -- -c '...'   # syscall counts
-```
-
-`scripts/bench.sh <koa> [<koa-to-compare>]` times `ls`, a filtered `ls` pipeline and `cat | last` on 20, 1,000 and 20,000 files and a 200,000-line file, next to `/bin/ls -la` and `tail`. It checks the outputs first and refuses to time a wrong answer. Performance PRs report its numbers for the base and the branch.
-
-To debug, use `lldb-dap` (any DAP client) or `rust-lldb` / `rust-gdb`. Load `$(rustc --print sysroot)/lib/rustlib/etc/lldb_lookup.py` in lldb-dap's `initCommands` so `Vec`, `String` and `PathBuf` print readably. Dependencies build with line tables only, and workspace crates keep full debug info.
+Code comments are kept for reasons the code cannot show. `scripts/check.sh` fails if the number of comment lines goes up. `docs/ARCHITECTURE.md` explains how the code fits together and how to add a command.
 
 ## License
 
