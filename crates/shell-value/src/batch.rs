@@ -154,6 +154,27 @@ impl RecordBatch {
         self.cells = cells;
     }
 
+    pub fn write_lines(&self, out: &mut Vec<u8>) {
+        let cols = match self.schema.text_column() {
+            Some(col) => col..col + 1,
+            None => 0..self.ncols(),
+        };
+        let mut scratch = String::new();
+        for row in self.rows() {
+            if cols.len() == 1 {
+                row.get(cols.start).write_text(out, &mut scratch);
+            } else {
+                for col in cols.clone() {
+                    if col != cols.start {
+                        out.push(b'\t');
+                    }
+                    write_tsv_field(out, row.get(col).text(&mut scratch));
+                }
+            }
+            out.push(b'\n');
+        }
+    }
+
     pub fn from_maps(records: Vec<StructuredRecord>) -> Result<Self, StructuredDiagnostic> {
         if records.is_empty() {
             return Ok(Self::empty());
@@ -226,5 +247,17 @@ impl RecordBatch {
             left = left.saturating_sub(batch.nrows());
         }
         out.into_batch()
+    }
+}
+
+fn write_tsv_field(out: &mut Vec<u8>, text: &str) {
+    for &byte in text.as_bytes() {
+        match byte {
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            _ => out.push(byte),
+        }
     }
 }

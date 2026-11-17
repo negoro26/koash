@@ -69,7 +69,7 @@ pub trait Record {
 
 #[macro_export]
 macro_rules! record {
-    ($vis:vis struct $name:ident<$life:lifetime> { $($field:ident: $ty:ty),+ $(,)? }) => {
+    ($vis:vis struct $name:ident<$life:lifetime> { $($(#[$mark:ident])? $field:ident: $ty:ty),+ $(,)? }) => {
         $vis struct $name<$life> {
             $(pub $field: $ty),+
         }
@@ -77,7 +77,7 @@ macro_rules! record {
         impl<$life> $crate::Record for $name<$life> {
             type Table = $name<'static>;
             const COLUMNS: &'static [$crate::Column] =
-                &[$($crate::Column::typed(stringify!($field), <$ty as $crate::CellValue>::TYPE)),+];
+                &[$($crate::Column::typed(stringify!($field), <$ty as $crate::CellValue>::TYPE)$(.$mark())?),+];
 
             fn write(&self, row: &mut $crate::RowSink<'_>) {
                 $($crate::CellValue::put(&self.$field, row);)+

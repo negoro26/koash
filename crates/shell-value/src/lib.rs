@@ -114,6 +114,17 @@ impl Value {
         }
     }
 
+    pub fn into_text_bytes(self) -> Vec<u8> {
+        match self {
+            Value::Batch(batch) => {
+                let mut out = Vec::new();
+                batch.write_lines(&mut out);
+                out
+            }
+            other => other.into_raw_bytes(),
+        }
+    }
+
     pub fn render_tty(self, writer: &mut dyn Write, color: bool) {
         match self {
             Value::Empty => {}
