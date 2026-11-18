@@ -52,7 +52,7 @@ GLOB_ARGS = [
     "{a,b,c}.{txt,log}", "{1..5}", "{05..8}", "{a..e}", "{5..1}", "{1..10..3}", "{-2..2}", "x{a,b{c,d}}y",
     "{a}", "{}", "a{b", "{a,b", "{a,{b,c}", "{,a}", "x{,a}", "'{a,b}' \\{a,b}", "{1..a}", "{*,x}.txt",
     "a{1..3}b{x,y}", "{sub,dir1}/*", "{nonexist,dir2}/*", "./*.log", "sub//*", "*/in*", ".h*/*", "*/.h",
-    "*.[lt]*", "***.txt", "-*", "[a-c]*.txt", "[!a-c]*.txt",
+    "*.[lt]*", "***.txt", "-*", "[a-c]*.txt", "[!a-c]*.txt", "*/q", "d*/*",
 ]
 GLOB_ASSIGNED = [
     "x='*.txt'; printf '[%s]\\n' $x", "x='*.txt'; printf '[%s]\\n' \"$x\"", "x='a,b'; printf '[%s]\\n' {$x}",
@@ -187,7 +187,18 @@ if tree(root) != before:
     bad.append("'rm *.log; undo': undo must restore every file the glob removed")
 shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + 3
+SIGILS = {
+    "@sql SELECT '{a,b}' AS v | to json": [{"v": "{a,b}"}],
+    "@sql SELECT 6 * 7 AS n | to json": [{"n": 42}],
+}
+root = glob_scratch()
+for cmd, want in SIGILS.items():
+    out = koa_run(cmd, root, False)
+    if out.returncode != 0 or json.loads(out.stdout or "null") != want:
+        bad.append(f"{cmd!r}: sigil code must reach SQLite as typed, want {want}, koa rc={out.returncode} {out.stdout!r} {out.stderr!r}")
+shutil.rmtree(root)
+
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + len(SIGILS) + 3
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)
