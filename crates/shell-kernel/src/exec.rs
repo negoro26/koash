@@ -259,12 +259,16 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
                 }
             };
             if let Some((pid, code)) = finished {
-                if pid.as_raw() > 0 {
-                    session.finished_jobs.push((job.id, pid, code));
+                if Some(pid) == job.last_pid {
+                    job.last_status = Some(code);
                 }
                 job.pids.retain(|&p| p != pid);
                 if job.pids.is_empty() {
+                    let code = job.last_status.unwrap_or(code);
                     job.state = JobState::Done(code);
+                    if let Some(last) = job.last_pid {
+                        session.finished_jobs.push((job.id, last, code));
+                    }
                     notices.push(format!(
                         "[{}]+ Done ({code})               {}",
                         job.id, job.command

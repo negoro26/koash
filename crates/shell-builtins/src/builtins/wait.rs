@@ -170,19 +170,25 @@ fn wait_for(session: &mut Session, id: usize) -> Outcome {
     let Some(job) = session.jobs.iter().find(|j| j.id == id) else {
         return Outcome::Finished(127);
     };
-    let (pgid, pids) = (job.pgid, job.pids.clone());
+    let (pgid, pids, last_pid) = (job.pgid, job.pids.clone(), job.last_pid);
+    let reaped = last_pid
+        .filter(|last| !pids.contains(last))
+        .and(job.last_status);
     let own_group = pgid != session.shell_pgid;
     if own_group {
         session.kill.track(pgid);
     }
-    let outcome = wait_pids(&pids);
+    let outcome = match wait_pids(&pids) {
+        Outcome::Finished(code) => Outcome::Finished(reaped.unwrap_or(code)),
+        other => other,
+    };
     if own_group {
         session.kill.untrack(pgid);
     }
     match outcome {
         Outcome::Finished(code) => {
             session.jobs.retain(|j| j.id != id);
-            if let Some(&last) = pids.last() {
+            if let Some(last) = last_pid {
                 session.finished_jobs.push((id, last, code));
             }
         }

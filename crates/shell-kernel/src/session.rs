@@ -108,6 +108,8 @@ pub struct Job {
     pub id: usize,
     pub pgid: Pid,
     pub pids: Vec<Pid>,
+    pub last_pid: Option<Pid>,
+    pub last_status: Option<i32>,
     pub command: String,
     pub state: JobState,
 }
@@ -658,6 +660,8 @@ impl Session {
         self.jobs.push(Job {
             id,
             pgid,
+            last_pid: pids.last().copied(),
+            last_status: None,
             pids,
             command,
             state,
