@@ -64,7 +64,6 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
                     names.push(name);
                 }
             }
-            names.sort_unstable();
             next.extend(names.iter().map(|name| join(candidate, name)));
         }
         candidates = next;
@@ -82,6 +81,7 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
             candidate.push('/');
         }
     }
+    candidates.sort_unstable();
     candidates
 }
 
