@@ -1,7 +1,7 @@
 use std::io::{BufWriter, Write};
 
 use crate::RecordBatch;
-use crate::fit::{TableStyle, render_fitted};
+use crate::fit::{TableStyle, plain_cell, render_fitted};
 
 pub fn render_batch_table(
     batch: &RecordBatch,
@@ -15,7 +15,7 @@ pub fn render_batch_table(
         return;
     }
     if let Some(width) = width {
-        render_fitted(batch, writer, color, width, &TableStyle::PLAIN);
+        render_fitted(batch, writer, color, width, &TableStyle::PLAIN, plain_cell);
         return;
     }
 

@@ -1,4 +1,5 @@
 use std::io::{IsTerminal, Write};
+use std::os::fd::AsRawFd;
 
 use serde::Serialize;
 use shell_value::{Datum, RecordBatch, Records, TableStyle, Value, render_fitted};
@@ -37,20 +38,28 @@ struct TspTextFrame<'a> {
     content: &'a str,
 }
 
-pub fn terminal_width() -> Option<usize> {
+const FALLBACK_COLUMNS: usize = 80;
+
+fn stdout_columns() -> Option<usize> {
+    let mut size = nix::libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let fd = std::io::stdout().as_raw_fd();
+    let rc = unsafe { nix::libc::ioctl(fd, nix::libc::TIOCGWINSZ, &mut size) };
+    (rc == 0 && size.ws_col > 0).then_some(usize::from(size.ws_col))
+}
+
+pub fn terminal_width(columns: Option<&str>) -> Option<usize> {
     if !std::io::stdout().is_terminal() {
         return None;
     }
-    std::env::var("COLUMNS")
-        .ok()
+    let from_env = columns
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&w| w > 0)
-        .or_else(|| {
-            crossterm::terminal::size()
-                .ok()
-                .map(|(cols, _)| usize::from(cols))
-                .filter(|&w| w > 0)
-        })
+        .filter(|&w| w > 0);
+    Some(from_env.or_else(stdout_columns).unwrap_or(FALLBACK_COLUMNS))
 }
 
 pub fn render_surface(val: Value, writer: &mut dyn Write, mode: SurfaceMode, width: Option<usize>) {
@@ -103,10 +112,22 @@ fn render_tsp(val: Value, writer: &mut dyn Write, width: Option<usize>) {
 
 fn fitted_preview(batch: &RecordBatch, width: usize) -> String {
     let mut out = Vec::new();
-    render_fitted(batch, &mut out, false, width, &TableStyle::BOX);
+    render_fitted(
+        batch,
+        &mut out,
+        false,
+        width,
+        &TableStyle::BOX,
+        preview_cell,
+    );
     String::from_utf8_lossy(&out)
         .trim_end_matches('\n')
         .to_string()
+}
+
+fn preview_cell<'s>(cell: Datum<'s>, scratch: &'s mut String) -> &'s str {
+    *scratch = preview_text(cell);
+    scratch
 }
 
 fn preview_text(cell: Datum<'_>) -> String {

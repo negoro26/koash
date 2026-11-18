@@ -12,4 +12,4 @@ workspace = true
 shell-value.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-crossterm.workspace = true
+nix.workspace = true

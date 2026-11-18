@@ -606,7 +606,7 @@ dependencies = [
 name = "shell-surface"
 version = "0.4.0"
 dependencies = [
- "crossterm",
+ "nix",
  "serde",
  "serde_json",
  "shell-value",

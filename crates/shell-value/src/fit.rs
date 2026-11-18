@@ -3,7 +3,9 @@ use std::io::{BufWriter, Write};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::RecordBatch;
+use crate::{Datum, RecordBatch};
+
+pub type CellText = for<'s> fn(Datum<'s>, &'s mut String) -> &'s str;
 
 const ELLIPSIS: &str = "…";
 const COLOR_HEADER: &[u8] = b"\x1b[1;36m";
@@ -176,6 +178,7 @@ pub fn render_fitted(
     color: bool,
     width: usize,
     style: &TableStyle,
+    text: CellText,
 ) {
     let ncols = batch.ncols();
     if ncols == 0 || batch.nrows() == 0 {
@@ -189,7 +192,7 @@ pub fn render_fitted(
     let mut scratch = String::new();
     for row in batch.rows() {
         for (c, cell) in row.iter().enumerate() {
-            natural[c] = natural[c].max(clean(cell.text(&mut scratch)).width());
+            natural[c] = natural[c].max(clean(text(cell, &mut scratch)).width());
         }
     }
 
@@ -203,9 +206,10 @@ pub fn render_fitted(
             &natural,
             color,
             style,
+            text,
         );
-    } else if batch.nrows() == 1 && ncols > 1 {
-        write_record(&mut bw, batch, color, width, style);
+    } else if batch.nrows() == 1 && ncols > 1 && width >= gap_width + 3 {
+        write_record(&mut bw, batch, color, width, style, text);
     } else {
         let mut shown: Vec<usize> = (0..ncols).collect();
         if shown.iter().any(|&c| columns[c].is_detail())
@@ -223,7 +227,7 @@ pub fn render_fitted(
         for (&c, &w) in shown.iter().zip(&widths) {
             full[c] = w;
         }
-        write_grid(&mut bw, batch, &shown, &full, color, style);
+        write_grid(&mut bw, batch, &shown, &full, color, style, text);
     }
     let _ = bw.flush();
 }
@@ -235,6 +239,7 @@ fn write_grid<W: Write>(
     widths: &[usize],
     color: bool,
     style: &TableStyle,
+    text: CellText,
 ) {
     let columns = batch.schema().columns();
     let last = shown.last().copied();
@@ -258,7 +263,12 @@ fn write_grid<W: Write>(
             if c != shown[0] {
                 let _ = w.write_all(style.gap.as_bytes());
             }
-            write_cell(w, row.get(c).text(&mut scratch), widths[c], Some(c) != last);
+            write_cell(
+                w,
+                text(row.get(c), &mut scratch),
+                widths[c],
+                Some(c) != last,
+            );
         }
         let _ = w.write_all(b"\n");
     }
@@ -270,6 +280,7 @@ fn write_record<W: Write>(
     color: bool,
     width: usize,
     style: &TableStyle,
+    text: CellText,
 ) {
     let columns = batch.schema().columns();
     let gap_width = style.gap.width();
@@ -278,12 +289,13 @@ fn write_record<W: Write>(
         .map(|c| clean(c.name()).width())
         .max()
         .unwrap_or(1)
-        .min((width / 3).max(1));
-    let value_width = width.saturating_sub(key_width + gap_width).max(1);
+        .min((width / 3).max(1))
+        .min(width.saturating_sub(gap_width + 2));
+    let value_width = width.saturating_sub(key_width + gap_width);
     let mut scratch = String::new();
     for row in batch.rows() {
         for (c, column) in columns.iter().enumerate() {
-            for (n, line) in wrap(row.get(c).text(&mut scratch), value_width)
+            for (n, line) in wrap(text(row.get(c), &mut scratch), value_width)
                 .iter()
                 .enumerate()
             {
@@ -298,4 +310,8 @@ fn write_record<W: Write>(
             }
         }
     }
+}
+
+pub fn plain_cell<'s>(cell: Datum<'s>, scratch: &'s mut String) -> &'s str {
+    cell.text(scratch)
 }

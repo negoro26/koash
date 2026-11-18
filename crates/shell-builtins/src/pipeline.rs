@@ -244,7 +244,7 @@ fn build_stages<'a>(
                         label: name.clone(),
                         argv,
                         display: None,
-                        env: Vec::new(),
+                        env,
                         redirs: &simple.redirections,
                     },
                     (Some(name), None) => {
@@ -311,7 +311,14 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
-                            plan.sink.emit(value);
+                            let columns = stage
+                                .env
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == "COLUMNS")
+                                .map(|(_, value)| value.clone())
+                                .or_else(|| session.env.get("COLUMNS"));
+                            plan.sink.emit(value, columns.as_deref());
                             soft_failure
                         }
                         Err(diag) => {

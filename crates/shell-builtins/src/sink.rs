@@ -28,11 +28,11 @@ impl Sink {
         }
     }
 
-    pub fn emit(&self, value: Value) {
+    pub fn emit(&self, value: Value, columns: Option<&str>) {
         match self {
             Sink::Tty { mode } => {
                 let mut out = std::io::stdout().lock();
-                render_surface(value, &mut out, *mode, terminal_width());
+                render_surface(value, &mut out, *mode, terminal_width(columns));
             }
             Sink::Capture(tx) => match value {
                 Value::Empty => {}
