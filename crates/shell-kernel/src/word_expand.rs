@@ -108,10 +108,11 @@ pub fn expand_word(word: &Word, env: &SessionEnv, last_status: i32) -> String {
 }
 
 pub fn expand_words(words: &[Word], session: &Session) -> Vec<String> {
-    let mut out = Vec::with_capacity(words.len());
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
     for word in words {
         let field = Field::new(word, &session.env, session.last_status);
-        if !field.needs_expansion() {
+        let sigil_code = out.first().is_some_and(|cmd| cmd.starts_with('@'));
+        if sigil_code || !field.needs_expansion() {
             if !field.text.is_empty() || field.keep_empty {
                 out.push(field.text);
             }
