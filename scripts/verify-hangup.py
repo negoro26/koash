@@ -49,6 +49,22 @@ def sigterm(line):
     time.sleep(0.5)
 
 
+def leader_ctrl_c(line):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(work)
+        os.execv(koa, [koa, "-c", line])
+    time.sleep(1.0)
+    os.write(fd, b"\x03")
+    time.sleep(0.5)
+    os.close(fd)
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
+    time.sleep(0.5)
+
+
 def normal_exit(line):
     subprocess.run([koa, "-c", line], cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
@@ -56,16 +72,20 @@ def normal_exit(line):
 
 cases = []
 for job in ("/bin/sleep {t} &", "sleep {t} | ls > x.txt &"):
-    t = tag()
-    cases.append(("terminal closed", close_terminal, f"{koa} -c '{job.format(t=t)} /bin/sleep {tag()}'", t, False))
-    t = tag()
-    cases.append(("SIGTERM to koa -c", sigterm, f"{job.format(t=t)} /bin/sleep {tag()}", t, False))
-t = tag()
-cases.append(("normal exit", normal_exit, f"/bin/sleep {t} &", t, True))
+    for label, run, wrap in (
+        ("terminal closed", close_terminal, lambda s: f"{koa} -c '{s}'"),
+        ("SIGTERM to koa -c", sigterm, lambda s: s),
+        ("Ctrl-C, koa -c leads the session", leader_ctrl_c, lambda s: s),
+    ):
+        t, f = tag(), tag()
+        cases.append((label, run, wrap(f"{job.format(t=t)} /bin/sleep {f}"), t, f, False))
+t, f = tag(), tag()
+cases.append(("normal exit", normal_exit, f"/bin/sleep {t} & /bin/sleep 0.{f.replace('.', '')}", t, f, True))
 
-for label, run, line, t, keep in cases:
+for label, run, line, t, f, keep in cases:
     run(line)
     left = running(t)
+    running(f)
     if bool(left) != keep:
         want = "keep running, as bash -c" if keep else "be ended, as bash does"
         bad.append(f"{label}: {line!r}: the background job must {want}, left running: {left}")

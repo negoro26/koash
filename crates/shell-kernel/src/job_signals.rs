@@ -15,11 +15,16 @@ pub(crate) fn publish(pgids: impl Iterator<Item = i32>) {
 }
 
 extern "C" fn forward(sig: libc::c_int) {
+    let to_jobs = if sig == libc::SIGINT {
+        libc::SIGHUP
+    } else {
+        sig
+    };
     for slot in &GROUPS {
         let pgid = slot.load(Ordering::Relaxed);
         if pgid > 0 {
             unsafe {
-                libc::killpg(pgid, sig);
+                libc::killpg(pgid, to_jobs);
                 libc::killpg(pgid, libc::SIGCONT);
             }
         }
@@ -36,10 +41,11 @@ pub fn forward_to_jobs(interactive: bool) {
         SaFlags::empty(),
         SigSet::empty(),
     );
-    let signals: &[Signal] = if interactive {
-        &[Signal::SIGHUP]
-    } else {
-        &[Signal::SIGHUP, Signal::SIGTERM]
+    let leader = nix::unistd::getsid(None).ok() == Some(nix::unistd::getpid());
+    let signals: &[Signal] = match (interactive, leader) {
+        (true, _) => &[Signal::SIGHUP],
+        (false, false) => &[Signal::SIGHUP, Signal::SIGTERM],
+        (false, true) => &[Signal::SIGHUP, Signal::SIGTERM, Signal::SIGINT],
     };
     for &sig in signals {
         let _ = unsafe { sigaction(sig, &action) };
