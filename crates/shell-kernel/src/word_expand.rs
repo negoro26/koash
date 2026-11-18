@@ -1,4 +1,4 @@
-use shell_syntax::{Word, WordPart};
+use shell_syntax::{Parser, Word, WordPart};
 
 use crate::brace;
 use crate::env::SessionEnv;
@@ -109,10 +109,10 @@ pub fn expand_word(word: &Word, env: &SessionEnv, last_status: i32) -> String {
 
 pub fn expand_words(words: &[Word], session: &Session) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(words.len());
-    for word in words {
+    let sigil = Parser::is_sigil_cmd(words);
+    for (i, word) in words.iter().enumerate() {
         let field = Field::new(word, &session.env, session.last_status);
-        let sigil_code = out.first().is_some_and(|cmd| cmd.starts_with('@'));
-        if sigil_code || !field.needs_expansion() {
+        if (sigil && i > 0) || !field.needs_expansion() {
             if !field.text.is_empty() || field.keep_empty {
                 out.push(field.text);
             }
