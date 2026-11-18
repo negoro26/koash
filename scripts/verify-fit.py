@@ -32,10 +32,12 @@ def width(text):
     return total
 
 
-def spawn(argv, cols, cwd, env_extra):
+def spawn(argv, cols, cwd, env_extra, stdout_fd=None):
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(cwd)
+        if stdout_fd is not None:
+            os.dup2(stdout_fd, 1)
         env = {k: v for k, v in os.environ.items() if k not in ("COLUMNS", "TERM_PROGRAM")}
         env.update({"TERM": "xterm-256color", "HOME": cwd, **env_extra})
         os.execve(argv[0], argv, env)
@@ -79,15 +81,41 @@ def on_tty(script, cols, cwd, env_extra=None):
     return clean(out)
 
 
-def on_tty_repl(script, cols, cwd):
-    pid, fd = spawn([koa], cols, cwd, {})
-    drain(fd, 0.6, 10)
+def on_split_tty(script, control_cols, stdout_cols, cwd):
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, stdout_cols, 0, 0))
+    pid, fd = spawn([koa, "-c", script], control_cols, cwd, {}, stdout_fd=slave)
+    os.close(slave)
+    out, _ = drain(master, 5, 30)
+    reap(pid)
+    os.close(master)
+    os.close(fd)
+    return clean(out)
+
+
+def repl_once(script, cols, cwd, env_extra=None, before=(), resize=None):
+    pid, fd = spawn([koa], cols, cwd, env_extra or {})
+    drain(fd, 1.2, 15)
+    for line in before:
+        os.write(fd, line.encode() + b"\r")
+        drain(fd, 2, 15)
+    if resize:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, resize, 0, 0))
     os.write(fd, script.encode() + b"\r")
-    out, _ = drain(fd, 0.6, 10)
+    out, _ = drain(fd, 1.2, 15)
     reap(pid)
     lines = clean(out).split("\n")
-    typed = max(i for i, line in enumerate(lines) if "koa>" in line and line.rstrip().endswith(script))
+    typed = max((i for i, line in enumerate(lines) if "koa>" in line and line.rstrip().endswith(script)), default=-1)
     return "\n".join(line for line in lines[typed + 1 :] if "koa>" not in line)
+
+
+def on_tty_repl(*args, **kwargs):
+    # a loaded machine can make the line editor answer after the quiet period; only an empty read is retried
+    for _ in range(3):
+        out = repl_once(*args, **kwargs)
+        if out.strip():
+            break
+    return out
 
 
 def piped(script, cwd):
@@ -147,6 +175,36 @@ expect("…" in out and widest(out) <= 80, f"repl at 80 cols: widest line is {wi
 out = on_tty_repl("help", 40, root)
 expect("description" in out and widest(out) <= 40, f"repl at 40 cols: widest line is {widest(out)}")
 
+out = on_tty("export COLUMNS=40; ls", 80, root)
+expect(widest(out) <= 40 and "…" in out, f"export COLUMNS=40 in the session: widest line is {widest(out)}")
+out = on_tty("COLUMNS=40 ls", 80, root)
+expect(widest(out) <= 40 and "…" in out, f"COLUMNS=40 prefix: widest line is {widest(out)}")
+out = on_tty("COLUMNS=40 ls", 80, root, {"COLUMNS": "100"})
+expect(widest(out) <= 40, f"prefix COLUMNS over inherited 100: widest line is {widest(out)}")
+out = on_tty_repl("ls", 80, root, {"COLUMNS": "100"})
+expect(widest(out) <= 100 and widest(out) > 80, f"inherited COLUMNS=100 in the repl: widest line is {widest(out)}")
+out = on_tty_repl("ls", 80, root, {"COLUMNS": "100"}, before=["unset COLUMNS"], resize=40)
+expect(0 < widest(out) <= 40, f"unset COLUMNS then resize to 40: widest line is {widest(out)}")
+
+out = on_split_tty("ls", 100, 40, root)
+expect(0 < widest(out) <= 40 and "…" in out, f"stdout 40 cols, controlling terminal 100: widest line is {widest(out)}")
+out = on_tty("ls", 0, root)
+expect(0 < widest(out) <= 80 and "…" in out, f"terminal reporting 0 columns: widest line is {widest(out)}")
+
+one = tempfile.mkdtemp()
+open(os.path.join(one, CJK), "w").close()
+for cols in [1, 2, 3, 5, 10]:
+    for script, cwd in [("ls", root), ("ls", one), ("help grep", root), ("help", root)]:
+        out = on_tty(script, cols, cwd)
+        expect(out.strip() != "" and widest(out) <= cols, f"{cols} cols {script!r}: widest line is {widest(out)}")
+    out = on_tty("ls", cols, root, {"TERM_PROGRAM": "Tern"})
+    preview = re.sub(r"\x1b\]9001;.*?\x07", "", out)
+    expect(widest(preview) <= cols, f"{cols} cols tern preview: widest line is {widest(preview)}")
+
+out = on_tty("@sql SELECT 1.0 AS x, 2.5 AS y", 80, root, {"TERM_PROGRAM": "Tern"})
+preview = re.sub(r"\x1b\]9001;.*?\x07", "", out)
+expect("1.0" in preview and "2.5" in preview, "tern preview rewrote a float cell")
+
 out = piped("help", root)
 expect("--files-with-matches" in out and widest(out) > 200, "piped help must keep every flag")
 out = piped("ls", root)
@@ -158,6 +216,7 @@ expect(
 )
 
 shutil.rmtree(root)
+shutil.rmtree(one)
 print(f"checked {checks} terminal fit forms")
 for line in bad:
     print(line)
