@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 pub struct SessionEnv {
     overlay: FxHashMap<String, Option<String>>,
     base: Option<BTreeMap<String, String>>,
+    last_background: Option<i32>,
 }
 
 impl Default for SessionEnv {
@@ -19,6 +20,7 @@ impl SessionEnv {
         Self {
             overlay: FxHashMap::default(),
             base: None,
+            last_background: None,
         }
     }
 
@@ -26,10 +28,18 @@ impl SessionEnv {
         Self {
             overlay: FxHashMap::default(),
             base: Some(map),
+            last_background: None,
         }
     }
 
+    pub fn set_last_background(&mut self, pid: i32) {
+        self.last_background = Some(pid);
+    }
+
     pub fn get(&self, key: &str) -> Option<String> {
+        if key == "!" {
+            return self.last_background.map(|pid| pid.to_string());
+        }
         if let Some(entry) = self.overlay.get(key) {
             return entry.clone();
         }

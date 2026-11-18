@@ -389,8 +389,10 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         return (final_status.unwrap_or(0), tracked);
     };
     if plan.background {
+        let last = launched.last_pid.unwrap_or(pgid);
+        session.env.set_last_background(last.as_raw());
         let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
-        plan.sink.stderr_line(&format!("[{id}] {pgid}"));
+        plan.sink.stderr_line(&format!("[{id}] {last}"));
         return (final_status.unwrap_or(0), tracked);
     }
     let watch = last_is_launched.then_some(launched.last_pid).flatten();

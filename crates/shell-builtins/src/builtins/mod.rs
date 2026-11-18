@@ -46,6 +46,7 @@ mod to;
 mod tx_log;
 mod undo;
 mod unset;
+mod wait;
 mod where_;
 mod which;
 
@@ -98,6 +99,7 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &jobs::Jobs,
     &fg::Fg,
     &bg::Bg,
+    &wait::Wait,
 ];
 
 pub fn lookup(name: &str) -> Option<&'static dyn Builtin> {

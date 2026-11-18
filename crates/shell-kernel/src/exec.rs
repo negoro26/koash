@@ -234,6 +234,8 @@ pub fn resume_group(pgid: Pid) {
     let _ = killpg(pgid, Signal::SIGCONT);
 }
 
+const FINISHED_JOBS_KEPT: usize = 64;
+
 pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     let mut notices = Vec::new();
     for job in &mut session.jobs {
@@ -257,6 +259,9 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
                 }
             };
             if let Some((pid, code)) = finished {
+                if pid.as_raw() > 0 {
+                    session.finished_jobs.push((job.id, pid, code));
+                }
                 job.pids.retain(|&p| p != pid);
                 if job.pids.is_empty() {
                     job.state = JobState::Done(code);
@@ -272,5 +277,10 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     session
         .jobs
         .retain(|j| !matches!(j.state, JobState::Done(_)));
+    let excess = session
+        .finished_jobs
+        .len()
+        .saturating_sub(FINISHED_JOBS_KEPT);
+    session.finished_jobs.drain(..excess);
     notices
 }
