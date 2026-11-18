@@ -19,7 +19,7 @@ This document maps the code. Read it before changing the executor or adding a co
   It also spawns and waits for process groups.
 - `shell-builtins` is the executor and every builtin command.
 - `shell-surface` renders a `Value` for a terminal, for TSP frames, and in the compact sigil format.
-  `terminal_width` is `COLUMNS` or the terminal's size, and `None` unless stdout is a terminal.
+  The width is the last stage's own `COLUMNS` assignment, else the session's `COLUMNS`, else the size of stdout's terminal (80 when that reports 0 columns), and `None` unless stdout is a terminal.
 - `shell-rpc` serves NDJSON-RPC and ACP over stdio or a socket. It runs the same executor with a capturing `Sink`.
 - `shell-tui` is the line editor, highlighter, and completer.
 - `shell-cli` is the `koa` binary. It picks a mode and calls into the crates above.
