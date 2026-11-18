@@ -123,7 +123,16 @@ if not os.path.isdir(os.path.join(root, "d")):
     bad.append("'rm -r d; mkdir -p ''; undo': undo must restore d")
 shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + 2
+BACKGROUND = ["/bin/echo hi & wait", "printf 'a\\nb\\n' | /usr/bin/wc -l & wait", "/bin/echo x > bg.txt & wait; /bin/cat bg.txt"]
+for cmd in BACKGROUND:
+    root = tempfile.mkdtemp()
+    want = gnu(cmd, root).stdout
+    got = koa_run(cmd, root, False).stdout
+    if got != want:
+        bad.append(f"{cmd!r}: background output differs, bash {want!r}, koa {got!r}")
+    shutil.rmtree(root)
+
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(BACKGROUND) + 2
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)
