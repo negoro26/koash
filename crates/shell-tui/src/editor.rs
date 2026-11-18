@@ -104,10 +104,7 @@ impl LineEditor {
                         continue;
                     }
                     SearchKey::Run => {
-                        let line = match s.found.and_then(|i| self.history.get(i)) {
-                            Some(e) => e.command.clone(),
-                            None => s.origin,
-                        };
+                        let line = s.shown(&self.history).0.to_string();
                         redraw(&mut stdout, prompt, &line, line.len())?;
                         let _ = write!(stdout, "\r\n");
                         let _ = stdout.flush();
@@ -125,7 +122,7 @@ impl LineEditor {
                                     saved_draft = s.origin;
                                 }
                                 buf = e.command.clone();
-                                cur = buf.find(&s.query).unwrap_or(buf.len());
+                                cur = s.at;
                                 hist_idx = Some(i);
                             }
                             None => {
@@ -329,6 +326,7 @@ enum SearchKey {
 struct Search {
     query: String,
     found: Option<usize>,
+    at: usize,
     failed: bool,
     origin: String,
     origin_cur: usize,
@@ -339,6 +337,7 @@ impl Search {
         Self {
             query: String::new(),
             found: None,
+            at: 0,
             failed: false,
             origin: origin.to_string(),
             origin_cur,
@@ -359,7 +358,6 @@ impl Search {
             KeyCode::Backspace => {
                 if self.query.pop().is_some() {
                     if self.query.is_empty() {
-                        self.found = None;
                         self.failed = false;
                     } else {
                         self.found = None;
@@ -389,27 +387,32 @@ impl Search {
         match history.search_back(&self.query, end, skip) {
             Some(i) => {
                 self.found = Some(i);
+                self.at = history
+                    .get(i)
+                    .and_then(|e| e.command.find(&self.query))
+                    .unwrap_or(0);
                 self.failed = false;
             }
             None => self.failed = true,
         }
     }
 
-    fn text<'a>(&self, history: &'a History) -> &'a str {
-        self.found
-            .and_then(|i| history.get(i))
-            .map_or("", |e| e.command.as_str())
+    fn shown<'a>(&'a self, history: &'a History) -> (&'a str, usize) {
+        match self.found.and_then(|i| history.get(i)) {
+            Some(e) => (e.command.as_str(), self.at),
+            None => (self.origin.as_str(), self.origin_cur),
+        }
     }
 
     fn draw(&self, stdout: &mut io::Stdout, history: &History) -> Result<(), StructuredDiagnostic> {
-        let text = self.text(history);
+        let (text, at) = self.shown(history);
         let label = if self.failed {
             "failed reverse-i-search"
         } else {
             "reverse-i-search"
         };
         let prompt = format!("({label})'{}': ", self.query);
-        redraw(stdout, &prompt, text, text.find(&self.query).unwrap_or(0))
+        redraw(stdout, &prompt, text, at)
     }
 }
 
