@@ -199,7 +199,14 @@ for cmd, want in SIGILS.items():
         bad.append(f"{cmd!r}: sigil code must reach SQLite as typed, want {want}, koa rc={out.returncode} {out.stdout!r} {out.stderr!r}")
 shutil.rmtree(root)
 
-checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + len(SIGILS) + 3
+root = tempfile.mkdtemp()
+open(os.path.join(root, "SELECT 42"), "w").close()
+out = koa_run("@sql *", root, False)
+if out.returncode == 0 or "42" in out.stdout:
+    bad.append(f"'@sql *' next to a file named 'SELECT 42' must reach SQLite as '*', koa rc={out.returncode} {out.stdout!r}")
+shutil.rmtree(root)
+
+checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + len(SIGILS) + 4
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)
