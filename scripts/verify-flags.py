@@ -189,9 +189,10 @@ shutil.rmtree(root)
 
 SIGILS = {
     "@sql SELECT '{a,b}' AS v | to json": [{"v": "{a,b}"}],
-    "@sql SELECT 6 * 7 AS n | to json": [{"n": 42}],
+    "@sql SELECT '*' AS v | to json": [{"v": "*"}],
 }
 root = glob_scratch()
+open(os.path.join(root, "SELECT 'x' AS v"), "w").close()
 for cmd, want in SIGILS.items():
     out = koa_run(cmd, root, False)
     if out.returncode != 0 or json.loads(out.stdout or "null") != want:
