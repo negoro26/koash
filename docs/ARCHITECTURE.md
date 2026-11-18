@@ -50,6 +50,7 @@ External stages are launched in one process group and joined to their neighbours
 Output goes to the `Sink`, either the terminal or an RPC channel.
 A background pipeline with a builtin stage does not run in the shell. `run_pipeline` replaces its stages with one external stage, `koa -c '<pipeline source>'`, built by `detached_stage` from `Program::source`. That stage runs through `launch_external` like any other background process: its own process group when the shell has one, a job in `session.jobs`, and an opaque tx.
 The child sees the session's cwd and environment. Its variable and cwd changes do not come back.
+`wait`, `fg`, `bg`, `jobs` and `kill %N` work on `session.jobs`. `reap_background_jobs` keeps the id, pid and status of finished jobs in `session.finished_jobs`, so `wait` still finds a job the prompt already reported. `$!` is the last background pid, kept in `SessionEnv`.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
 A builtin can also report failures that did not stop it; see Operand failures.
 
