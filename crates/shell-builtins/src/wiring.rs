@@ -293,7 +293,7 @@ pub(crate) fn read_all(fd: OwnedFd) -> io::Result<Vec<u8>> {
 }
 
 fn default_stdout(plan: &Plan, last: bool) -> Result<(Fd, Option<OwnedFd>), LaunchError> {
-    let capture = plan.sink.is_capture() || plan.background;
+    let capture = plan.sink.is_capture();
     if last && (plan.background || !capture) {
         let fd = if capture {
             Fd::Null
@@ -381,7 +381,7 @@ pub(crate) fn launch_external(
     }
 
     // Groups serve the terminal, the kill switch and background jobs; a foreground `koa -c` stays in the shell's group.
-    let grouped = session.interactive || plan.sink.is_capture();
+    let grouped = session.interactive || plan.sink.is_capture() || plan.background;
     let group = match (grouped, launched.pgid) {
         (false, _) => ChildGroup::Shared,
         (true, None) => ChildGroup::Leader,
