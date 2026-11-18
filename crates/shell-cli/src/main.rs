@@ -168,6 +168,7 @@ fn run_oneshot(
             return ExitCode::from(1);
         }
     };
+    shell_kernel::forward_to_jobs(false);
     session.last_status = last_status.unwrap_or(0);
     if let Some(pid) = last_bg {
         session.env.set_last_background(pid);
@@ -202,6 +203,7 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    shell_kernel::forward_to_jobs(session.interactive);
 
     if session.interactive {
         let mut editor = LineEditor::new();

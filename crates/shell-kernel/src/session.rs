@@ -668,7 +668,23 @@ impl Session {
             command,
             state,
         });
+        self.publish_job_groups();
         id
+    }
+
+    pub fn remove_job(&mut self, id: usize) {
+        self.jobs.retain(|j| j.id != id);
+        self.publish_job_groups();
+    }
+
+    pub fn publish_job_groups(&self) {
+        let own = nix::unistd::getpgrp();
+        crate::job_signals::publish(
+            self.jobs
+                .iter()
+                .filter(|j| j.pgid != own)
+                .map(|j| j.pgid.as_raw()),
+        );
     }
 
     pub fn give_terminal(&self, pgid: Pid) {

@@ -281,6 +281,7 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     session
         .jobs
         .retain(|j| !matches!(j.state, JobState::Done(_)));
+    session.publish_job_groups();
     let excess = session
         .finished_jobs
         .len()

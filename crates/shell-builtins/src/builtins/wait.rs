@@ -187,7 +187,7 @@ fn wait_for(session: &mut Session, id: usize) -> Outcome {
     };
     match outcome {
         Outcome::Finished(code) => {
-            session.jobs.retain(|j| j.id != id);
+            session.remove_job(id);
             if let Some(last) = last_pid {
                 session.finished_jobs.push((id, last, code));
             }

@@ -438,7 +438,7 @@ pub(crate) fn finish_foreground(
     let last_status = outcome.watched.or(prior);
     let Some(stopped) = outcome.stopped else {
         if let Some(id) = existing_job {
-            session.jobs.retain(|j| j.id != id);
+            session.remove_job(id);
         }
         return last_status.unwrap_or(0);
     };
