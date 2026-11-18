@@ -48,6 +48,10 @@ pub fn forward_to_jobs(interactive: bool) {
         (false, true) => &[Signal::SIGHUP, Signal::SIGTERM, Signal::SIGINT],
     };
     for &sig in signals {
-        let _ = unsafe { sigaction(sig, &action) };
+        if let Ok(old) = unsafe { sigaction(sig, &action) }
+            && old.handler() == SigHandler::SigIgn
+        {
+            let _ = unsafe { sigaction(sig, &old) };
+        }
     }
 }

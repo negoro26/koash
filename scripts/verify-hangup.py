@@ -70,6 +70,15 @@ def normal_exit(line):
     time.sleep(0.5)
 
 
+def nohup_hangup(line):
+    proc = subprocess.Popen(
+        ["/usr/bin/nohup", koa, "-c", line], cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    time.sleep(0.5)
+    proc.send_signal(signal.SIGHUP)
+    time.sleep(0.5)
+
+
 cases = []
 for job in ("/bin/sleep {t} &", "sleep {t} | ls > x.txt &"):
     for label, run, wrap in (
@@ -81,6 +90,8 @@ for job in ("/bin/sleep {t} &", "sleep {t} | ls > x.txt &"):
         cases.append((label, run, wrap(f"{job.format(t=t)} /bin/sleep {f}"), t, f, False))
 t, f = tag(), tag()
 cases.append(("normal exit", normal_exit, f"/bin/sleep {t} & /bin/sleep 0.{f.replace('.', '')}", t, f, True))
+t, f = tag(), tag()
+cases.append(("SIGHUP under nohup", nohup_hangup, f"/bin/sleep {t} & /bin/sleep {f}", t, f, True))
 
 for label, run, line, t, f, keep in cases:
     run(line)
