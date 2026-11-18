@@ -97,7 +97,7 @@ fn run_pipeline(
             .iter()
             .any(|s| matches!(s.kind, StageKind::Builtin(_)))
     {
-        match detached_stage(pipeline, source, sink) {
+        match detached_stage(session, pipeline, source, sink) {
             Ok(stage) => stages = vec![stage],
             Err(diag) => {
                 sink.diag(&diag);
@@ -125,6 +125,7 @@ fn run_pipeline(
 }
 
 fn detached_stage<'a>(
+    session: &Session,
     pipeline: &Pipeline,
     source: &str,
     sink: &Sink,
@@ -140,6 +141,12 @@ fn detached_stage<'a>(
         }
     ) {
         argv.push("--tsp".to_string());
+    }
+    argv.push("--last-status".to_string());
+    argv.push(session.last_status.to_string());
+    if let Some(pid) = session.env.get("!") {
+        argv.push("--last-bg".to_string());
+        argv.push(pid);
     }
     argv.push("-c".to_string());
     argv.push(text.clone());
@@ -391,7 +398,14 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
     if plan.background {
         let last = launched.last_pid.unwrap_or(pgid);
         session.env.set_last_background(last.as_raw());
-        let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
+        let id = session.add_job(
+            pgid,
+            launched.pids,
+            launched.last_pid,
+            None,
+            summary,
+            JobState::Running,
+        );
         plan.sink.stderr_line(&format!("[{id}] {last}"));
         return (final_status.unwrap_or(0), tracked);
     }

@@ -652,6 +652,8 @@ impl Session {
         &mut self,
         pgid: Pid,
         pids: Vec<Pid>,
+        last_pid: Option<Pid>,
+        last_status: Option<i32>,
         command: String,
         state: JobState,
     ) -> usize {
@@ -660,8 +662,8 @@ impl Session {
         self.jobs.push(Job {
             id,
             pgid,
-            last_pid: pids.last().copied(),
-            last_status: None,
+            last_pid,
+            last_status,
             pids,
             command,
             state,

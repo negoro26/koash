@@ -179,31 +179,31 @@ pub struct Stopped {
 
 #[derive(Debug)]
 pub struct ForegroundOutcome {
-    pub watched_status: i32,
+    pub watched: Option<i32>,
     pub stopped: Option<Stopped>,
 }
 
 /// Waits on `pgid` only, never a bare `waitpid(-1)`, so unrelated children are not reaped.
 pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> ForegroundOutcome {
     let mut alive = pids.to_vec();
-    let mut watched_status = 0;
+    let mut watched = None;
     while !alive.is_empty() {
         match wait_group(pgid, true) {
             Ok(Some(WaitStatus::Exited(pid, code))) => {
                 alive.retain(|&p| p != pid);
                 if Some(pid) == watch {
-                    watched_status = code;
+                    watched = Some(code);
                 }
             }
             Ok(Some(WaitStatus::Signaled(pid, sig, _))) => {
                 alive.retain(|&p| p != pid);
                 if Some(pid) == watch {
-                    watched_status = 128 + sig as i32;
+                    watched = Some(128 + sig as i32);
                 }
             }
             Ok(Some(WaitStatus::Stopped(_, sig))) => {
                 return ForegroundOutcome {
-                    watched_status,
+                    watched,
                     stopped: Some(Stopped {
                         signal: sig as i32,
                         alive,
@@ -215,7 +215,7 @@ pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> Foregroun
         }
     }
     ForegroundOutcome {
-        watched_status,
+        watched,
         stopped: None,
     }
 }

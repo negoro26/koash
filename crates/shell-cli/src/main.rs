@@ -145,13 +145,22 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         let script = args[pos + 1..].join(" ");
-        return run_oneshot(&script, force_tsp);
+        let flag = |name: &str| {
+            let at = args[..pos].iter().position(|a| a == name)?;
+            args.get(at + 1)?.parse::<i32>().ok()
+        };
+        return run_oneshot(&script, force_tsp, flag("--last-status"), flag("--last-bg"));
     }
 
     run_interactive_repl(force_tsp)
 }
 
-fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
+fn run_oneshot(
+    script: &str,
+    force_tsp: bool,
+    last_status: Option<i32>,
+    last_bg: Option<i32>,
+) -> ExitCode {
     let mut session = match Session::new(false) {
         Ok(s) => s,
         Err(diag) => {
@@ -159,6 +168,10 @@ fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    session.last_status = last_status.unwrap_or(0);
+    if let Some(pid) = last_bg {
+        session.env.set_last_background(pid);
+    }
 
     let program = match parse(script) {
         Ok(p) => p,

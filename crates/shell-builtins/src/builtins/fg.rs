@@ -52,7 +52,7 @@ impl Builtin for Fg {
             sink,
             job.pgid,
             &job.pids,
-            job.pids.last().copied(),
+            job.last_pid,
             &job.command,
             Some(job.id),
         );

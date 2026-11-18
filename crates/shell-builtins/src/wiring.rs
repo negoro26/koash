@@ -293,7 +293,7 @@ pub(crate) fn read_all(fd: OwnedFd) -> io::Result<Vec<u8>> {
 }
 
 fn default_stdout(plan: &Plan, last: bool) -> Result<(Fd, Option<OwnedFd>), LaunchError> {
-    let capture = plan.sink.is_capture();
+    let capture = plan.sink.is_capture() || plan.background;
     if last && (plan.background || !capture) {
         let fd = if capture {
             Fd::Null
@@ -380,7 +380,7 @@ pub(crate) fn launch_external(
         drain(plan.scope, plan.sink, reader, Chunk::Stderr)?;
     }
 
-    // Only the terminal and the kill switch need groups; `koa -c` stays in the shell's group like `sh -c`.
+    // Groups serve the terminal, the kill switch and background jobs; a foreground `koa -c` stays in the shell's group.
     let grouped = session.interactive || plan.sink.is_capture();
     let group = match (grouped, launched.pgid) {
         (false, _) => ChildGroup::Shared,
@@ -432,21 +432,33 @@ pub(crate) fn finish_foreground(
 ) -> i32 {
     let outcome = wait_foreground(pgid, pids, watch);
     session.restore_terminal();
+    let prior = existing_job
+        .and_then(|id| session.jobs.iter().find(|j| j.id == id))
+        .and_then(|job| job.last_status);
+    let last_status = outcome.watched.or(prior);
     let Some(stopped) = outcome.stopped else {
         if let Some(id) = existing_job {
             session.jobs.retain(|j| j.id != id);
         }
-        return outcome.watched_status;
+        return last_status.unwrap_or(0);
     };
     let id = match existing_job {
         Some(id) => {
             if let Some(job) = session.jobs.iter_mut().find(|j| j.id == id) {
                 job.state = JobState::Stopped;
                 job.pids = stopped.alive;
+                job.last_status = last_status;
             }
             id
         }
-        None => session.add_job(pgid, stopped.alive, summary.to_string(), JobState::Stopped),
+        None => session.add_job(
+            pgid,
+            stopped.alive,
+            watch,
+            last_status,
+            summary.to_string(),
+            JobState::Stopped,
+        ),
     };
     sink.stderr_line(&format!("\n[{id}]+ Stopped                 {summary}"));
     128 + stopped.signal
