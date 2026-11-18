@@ -35,13 +35,13 @@ def width(text):
 def spawn(argv, cols, cwd, env_extra, stdout_fd=None):
     pid, fd = pty.fork()
     if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, cols, 0, 0))
         os.chdir(cwd)
         if stdout_fd is not None:
             os.dup2(stdout_fd, 1)
         env = {k: v for k, v in os.environ.items() if k not in ("COLUMNS", "TERM_PROGRAM")}
         env.update({"TERM": "xterm-256color", "HOME": cwd, **env_extra})
         os.execve(argv[0], argv, env)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, cols, 0, 0))
     return pid, fd
 
 
@@ -93,29 +93,44 @@ def on_split_tty(script, control_cols, stdout_cols, cwd):
     return clean(out)
 
 
-def repl_once(script, cols, cwd, env_extra=None, before=(), resize=None):
+def read_until(fd, buf, ready, limit=60):
+    end = time.time() + limit
+    while time.time() < end and not ready(buf):
+        if select.select([fd], [], [], 0.5)[0]:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+    return buf
+
+
+def synced(fd, buf, line, mark):
+    start = len(buf)
+    os.write(fd, f"{line}; echo {mark}".encode() + b"\r")
+    pattern = re.compile(rb"\n" + mark.encode() + rb"\r?\n")
+
+    def done(data):
+        found = pattern.search(data, start)
+        return found is not None and b"koa> " in data[found.end() :]
+
+    return read_until(fd, buf, done), start
+
+
+def on_tty_repl(script, cols, cwd, env_extra=None, before=(), resize=None):
     pid, fd = spawn([koa], cols, cwd, env_extra or {})
-    drain(fd, 1.2, 15)
-    for line in before:
-        os.write(fd, line.encode() + b"\r")
-        drain(fd, 2, 15)
+    buf = read_until(fd, b"", lambda data: b"koa> " in data)
+    for n, line in enumerate(before):
+        buf, _ = synced(fd, buf, line, f"before{n}")
     if resize:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, resize, 0, 0))
-    os.write(fd, script.encode() + b"\r")
-    out, _ = drain(fd, 1.2, 15)
+    buf, start = synced(fd, buf, script, "after")
     reap(pid)
-    lines = clean(out).split("\n")
-    typed = max((i for i, line in enumerate(lines) if "koa>" in line and line.rstrip().endswith(script)), default=-1)
-    return "\n".join(line for line in lines[typed + 1 :] if "koa>" not in line)
-
-
-def on_tty_repl(*args, **kwargs):
-    # a loaded machine can make the line editor answer after the quiet period; only an empty read is retried
-    for _ in range(3):
-        out = repl_once(*args, **kwargs)
-        if out.strip():
-            break
-    return out
+    lines = clean(buf[start:]).split("\n")
+    typed = max((i for i, line in enumerate(lines) if "koa>" in line and line.rstrip().endswith("echo after")), default=-1)
+    return "\n".join(line for line in lines[typed + 1 :] if "koa>" not in line and line.strip() != "after")
 
 
 def piped(script, cwd):
@@ -205,6 +220,8 @@ out = on_tty("@sql SELECT 1.0 AS x, 2.5 AS y", 80, root, {"TERM_PROGRAM": "Tern"
 preview = re.sub(r"\x1b\]9001;.*?\x07", "", out)
 expect("1.0" in preview and "2.5" in preview, "tern preview rewrote a float cell")
 
+out = piped("COLUMNS=40 ls", root)
+expect(LONG in out and "…" not in out, "piped ls with COLUMNS=40 must not cut")
 out = piped("help", root)
 expect("--files-with-matches" in out and widest(out) > 200, "piped help must keep every flag")
 out = piped("ls", root)
