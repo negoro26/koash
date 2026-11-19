@@ -86,7 +86,7 @@ fn an_option_ls_lacks_runs_the_real_ls() {
     let s = Scratch::new("ls-1");
     s.write("a", b"");
     s.write("b", b"");
-    let r = run(&s.0, &format!("ls -1 {}", s.q("")));
+    let r = run(&s.0, &format!("ls -X {}", s.q("")));
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(r.stdout, "a\nb\n");
 }
@@ -124,10 +124,10 @@ fn a_bad_value_for_a_known_option_stays_an_args_error() {
 fn without_an_executable_an_unknown_option_stays_an_args_error() {
     let s = Scratch::new("no-exec");
     let empty = Scratch::new("empty-path");
-    let r = run_with_path(&s.0, "ls -1", Some(&empty.0));
+    let r = run_with_path(&s.0, "ls -X", Some(&empty.0));
     assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(r.stderr.contains("E_ARGS"), "{}", r.stderr);
-    assert!(r.stderr.contains("'-1'"), "{}", r.stderr);
+    assert!(r.stderr.contains("'-X'"), "{}", r.stderr);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn a_file_without_the_executable_bit_is_not_a_fallback_target() {
     let s = Scratch::new("not-exec");
     let bin = Scratch::new("bin-not-exec");
     bin.write("ls", b"#!/bin/sh\necho wrong\n");
-    let r = run_with_path(&s.0, "ls -1", Some(&bin.0));
+    let r = run_with_path(&s.0, "ls -X", Some(&bin.0));
     assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(r.stderr.contains("E_ARGS"), "{}", r.stderr);
     assert!(!r.stdout.contains("wrong"), "{}", r.stdout);
@@ -177,7 +177,7 @@ fn the_notice_is_printed_once_per_command_per_session() {
     let r = run(
         &s.0,
         &format!(
-            "ls -1 {0}; ls -1 {0}; ls -h {0}; cp -a {1} {2}",
+            "ls -X {0}; ls -X {0}; ls -v {0}; cp -a {1} {2}",
             s.q(""),
             s.q("a"),
             s.q("b")
@@ -189,7 +189,7 @@ fn the_notice_is_printed_once_per_command_per_session() {
     let lines = notices(&r.stderr);
     assert_eq!(lines.len(), 2, "{}", r.stderr);
     assert!(
-        lines[0].starts_with("koa: ls: '-1' is not built in, running /")
+        lines[0].starts_with("koa: ls: '-X' is not built in, running /")
             && lines[0].ends_with("/ls"),
         "{}",
         lines[0]
@@ -281,13 +281,13 @@ fn over_rpc_the_notice_is_a_stderr_chunk_and_the_output_is_text() {
     rpc.send(serde_json::json!({
         "id": 2,
         "method": "exec",
-        "params": {"session_id": sid, "command": format!("ls -1 {}", s.q(""))}
+        "params": {"session_id": sid, "command": format!("ls -X {}", s.q(""))}
     }));
     let events = rpc.until_completed(2);
     let stderr: String = events.iter().filter_map(|e| e["stderr"].as_str()).collect();
     let stdout: String = events.iter().filter_map(|e| e["stdout"].as_str()).collect();
     assert!(
-        stderr.contains("koa: ls: '-1' is not built in, running /"),
+        stderr.contains("koa: ls: '-X' is not built in, running /"),
         "{events:?}"
     );
     assert_eq!(stdout, "a\n", "{events:?}");
@@ -309,7 +309,7 @@ fn over_rpc_the_notice_arrives_before_the_programs_output() {
     rpc.send(serde_json::json!({
         "id": 2,
         "method": "exec",
-        "params": {"session_id": sid, "command": format!("ls -1 {}", s.q(""))}
+        "params": {"session_id": sid, "command": format!("ls -X {}", s.q(""))}
     }));
     let events = rpc.until_completed(2);
     let notice = events

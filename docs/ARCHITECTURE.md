@@ -15,10 +15,12 @@ This document maps the code. Read it before changing the executor or adding a co
   A builtin writes rows with `Rows` over a `record!` struct, which fixes the columns and their order, or with `DynRows` when the columns are only known at run time.
   `Records` is the one JSON encoder: `to json`, ACP, TSP and RPC records all use it, with sorted keys and no null cells.
   An external stage gets `RecordBatch::write_lines` instead: the column a `record!` field marks `#[text]` (`text` for Hashline rows, `name` for `ls`, `path` for `find`), else a lone column, else tab-separated cells with `\t`, `\n`, `\r` and `\\` escaped. `select` clears the mark, so picked columns arrive as picked. A `>` redirect still writes JSON lines.
+  The builtin `grep` matches a table row against that same text (`Row::write_line`), with a column named `text` standing in when none is marked, and keeps whole matching rows.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
   It also spawns and waits for process groups, and owns `History`, the `~/.koa_history` file the line editor appends to and the `history` builtin lists.
 - `shell-builtins` is the executor and every builtin command.
 - `shell-surface` renders a `Value` for a terminal, for TSP frames, and in the compact sigil format.
+  The width is the last stage's own `COLUMNS` assignment, else the session's `COLUMNS`, else the size of stdout's terminal (80 when that reports 0 columns), and `None` unless stdout is a terminal.
 - `shell-rpc` serves NDJSON-RPC and ACP over stdio or a socket. It runs the same executor with a capturing `Sink`.
 - `shell-tui` is the line editor, highlighter, and completer.
 - `shell-cli` is the `koa` binary. It picks a mode and calls into the crates above.
@@ -54,6 +56,10 @@ The last stage hands its value to the `Sink`.
 External stages are launched in one process group and joined to their neighbours with pipes.
 Output goes to the `Sink`, either the terminal or an RPC channel.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
+On a terminal the table renderer gets that width (`shell-value`'s `fit.rs`) and measures cells in display width, not bytes.
+A table that does not fit first drops its `#[detail]` columns (`help` marks `flags`), then cuts the widest columns with `…`.
+A single row that does not fit prints one `name  value` line per column, wrapped.
+Without a width the renderer is the old byte-width one, so pipes and files see the same bytes as before.
 A builtin can also report failures that did not stop it; see Operand failures.
 
 ## Startup file
@@ -94,6 +100,23 @@ An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to ex
 `Flag::predicate` declares a single-dash long option (`find -name`) and `Flag::numeric` lets `-5` stand for the flag's value (`head -5`, `kill -9`).
 `Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
 `help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
+
+## Word expansion
+
+`word_expand::expand_words` turns a command's words into its argv, in bash's order: brace expansion, then variables and `~`, then pathname expansion.
+`Field` holds one expanded word as text plus runs that record which bytes came from literal text, from an unquoted variable, or from a quote, a backslash escape or `~`.
+Only the first kind opens a brace group, and quoted bytes never act as a pattern.
+A word with no `{`, `*`, `?` or `[` outside quotes skips all of this and costs one string.
+
+`brace` expands `{a,b}`, nested groups, and `{1..5}`, `{05..8}`, `{a..e}`, `{1..10..3}` sequences. A group that is not valid, such as `{a}` or `{`, stays literal.
+`pathname` matches one path segment at a time against a `glob::Pattern` and reads each directory once.
+Names are sorted bytewise within each directory, which is C-locale order, and a name that starts with `.` matches only a segment that starts with a literal `.`.
+`.` and `..` never match. A pattern that matches nothing, or fails to compile, stays as the literal word. A trailing `/` keeps only directories.
+`[` reads `[!x]` and `[^x]` as negation. `?` and a bracket match one Unicode scalar. POSIX classes such as `[[:alpha:]]` are not supported.
+A non-UTF-8 file name is never matched.
+
+The expansion applies to command words only. Assignment values and redirection targets go through `expand_word`, which does neither.
+`command_word` reads the first word without touching the file system, for the ledger summary.
 
 ## Operand failures
 

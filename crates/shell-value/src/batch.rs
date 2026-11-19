@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::cell::Cell;
 use crate::rows::DynRows;
 use crate::{Column, Datum, Schema, StructuredDiagnostic, StructuredRecord, json};
@@ -28,10 +30,30 @@ impl<'a> Row<'a> {
             .enumerate()
             .map(move |(col, cell)| cell.datum(text, columns, col))
     }
+
+    pub fn write_line(&self, cols: Range<usize>, out: &mut Vec<u8>, scratch: &mut String) {
+        if cols.len() == 1 {
+            self.get(cols.start).write_text(out, scratch);
+            return;
+        }
+        for col in cols.clone() {
+            if col != cols.start {
+                out.push(b'\t');
+            }
+            write_tsv_field(out, self.get(col).text(scratch));
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct RowOrder(Vec<usize>);
+
+impl RowOrder {
+    pub fn reverse(mut self) -> Self {
+        self.0.reverse();
+        self
+    }
+}
 
 impl RecordBatch {
     pub fn empty() -> Self {
@@ -122,10 +144,17 @@ impl RecordBatch {
     }
 
     pub fn order_by<'s, K: Ord>(&'s self, mut key: impl FnMut(Row<'s>) -> K) -> RowOrder {
+        self.order_by_index(|_, row| key(row))
+    }
+
+    pub fn order_by_index<'s, K: Ord>(
+        &'s self,
+        mut key: impl FnMut(usize, Row<'s>) -> K,
+    ) -> RowOrder {
         let mut keyed: Vec<(K, usize)> = self
             .rows()
             .enumerate()
-            .map(|(idx, row)| (key(row), idx))
+            .map(|(idx, row)| (key(idx, row), idx))
             .collect();
         keyed.sort_by(|a, b| a.0.cmp(&b.0));
         RowOrder(keyed.into_iter().map(|(_, idx)| idx).collect())
@@ -161,16 +190,7 @@ impl RecordBatch {
         };
         let mut scratch = String::new();
         for row in self.rows() {
-            if cols.len() == 1 {
-                row.get(cols.start).write_text(out, &mut scratch);
-            } else {
-                for col in cols.clone() {
-                    if col != cols.start {
-                        out.push(b'\t');
-                    }
-                    write_tsv_field(out, row.get(col).text(&mut scratch));
-                }
-            }
+            row.write_line(cols.clone(), out, &mut scratch);
             out.push(b'\n');
         }
     }

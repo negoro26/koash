@@ -20,6 +20,7 @@ pub struct Column {
     name: Name,
     ty: ColType,
     text: bool,
+    detail: bool,
 }
 
 impl Column {
@@ -32,6 +33,7 @@ impl Column {
             name: Name::Static(name),
             ty,
             text: false,
+            detail: false,
         }
     }
 
@@ -40,8 +42,17 @@ impl Column {
         self
     }
 
+    pub const fn detail(mut self) -> Self {
+        self.detail = true;
+        self
+    }
+
     pub fn is_text(&self) -> bool {
         self.text
+    }
+
+    pub fn is_detail(&self) -> bool {
+        self.detail
     }
 
     pub fn name(&self) -> &str {
@@ -123,6 +134,7 @@ impl Schema {
                 name: Name::Shared(Arc::from(name.as_ref())),
                 ty: ColType::Any,
                 text: false,
+                detail: false,
             })
             .collect();
         Schema(Columns::Shared(columns))
@@ -161,6 +173,7 @@ impl Schema {
             cols.iter()
                 .map(|&col| Column {
                     text: false,
+                    detail: false,
                     ..columns[col].clone()
                 })
                 .collect(),
