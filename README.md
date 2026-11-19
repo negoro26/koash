@@ -42,6 +42,17 @@ koa -c 'ls | grep -i test | select name size'
 koa -c 'find . | grep -v target'
 ```
 
+When [eza](https://github.com/eza-community/eza) is installed, a bare `ls` or `ls some/dir` typed at a terminal is drawn by eza, as `eza -lh --group-directories-first --icons=auto`. Every other `ls` is koa's table: one with an option, in a pipe, with a redirect, or when the output is not a terminal. Without eza, `ls` is always koa's table.
+
+`KOA_LS_VIEW` picks another program, or turns the view off when it is empty:
+
+```bash
+export KOA_LS_VIEW='eza -l --icons=always'
+export KOA_LS_VIEW=''
+```
+
+The view does not stop `undo`: koa treats it as a program that only reads, so point `KOA_LS_VIEW` only at programs that do not change files.
+
 ## Undo
 
 koa saves a copy of a file before its own commands change it. That covers `rm`, `cp`, `mv`, `mkdir`, `patch`, `rename` and `>` or `>>` redirects.

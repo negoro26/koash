@@ -36,6 +36,7 @@ pub(crate) struct Stage<'a> {
     pub display: Option<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
+    pub read_only: bool,
 }
 
 pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32 {
@@ -158,6 +159,7 @@ fn detached_stage<'a>(
         display: Some(text),
         env: Vec::new(),
         redirs: &[],
+        read_only: false,
     })
 }
 
@@ -250,6 +252,7 @@ fn build_stages<'a>(
                     display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],
+                    read_only: false,
                 }
             }
             Command::Simple(simple) => {
@@ -264,6 +267,9 @@ fn build_stages<'a>(
                         )
                     })
                     .collect();
+                let view = ls_view(session, pipeline, simple, &argv, sink);
+                let read_only = view.is_some();
+                let argv = view.unwrap_or(argv);
                 let builtin = argv
                     .first()
                     .and_then(|name| stage_builtin(name))
@@ -280,6 +286,7 @@ fn build_stages<'a>(
                             display: None,
                             env: Vec::new(),
                             redirs: &simple.redirections,
+                            read_only: false,
                         }
                     }
                     (Some(name), Some(builtin)) => Stage {
@@ -289,6 +296,7 @@ fn build_stages<'a>(
                         display: None,
                         env,
                         redirs: &simple.redirections,
+                        read_only: false,
                     },
                     (Some(name), None) => {
                         if NETWORK_COMMANDS.contains(&name.as_str()) {
@@ -301,6 +309,7 @@ fn build_stages<'a>(
                             display: None,
                             env,
                             redirs: &simple.redirections,
+                            read_only,
                         }
                     }
                 }
@@ -309,6 +318,35 @@ fn build_stages<'a>(
         stages.push(stage);
     }
     stages
+}
+
+const DEFAULT_LS_VIEW: &str = "eza -lh --group-directories-first --icons=auto";
+
+fn ls_view(
+    session: &Session,
+    pipeline: &Pipeline,
+    simple: &SimpleCommand,
+    argv: &[String],
+    sink: &Sink,
+) -> Option<Vec<String>> {
+    let (name, operands) = argv.split_first()?;
+    let bare = name == "ls"
+        && pipeline.commands.len() == 1
+        && simple.redirections.is_empty()
+        && !sink.is_capture()
+        && !operands.iter().any(|a| a.starts_with('-'))
+        && nix::unistd::isatty(1).unwrap_or(false);
+    if !bare {
+        return None;
+    }
+    let view = session
+        .env
+        .get("KOA_LS_VIEW")
+        .unwrap_or_else(|| DEFAULT_LS_VIEW.to_string());
+    let mut view: Vec<String> = view.split_whitespace().map(str::to_string).collect();
+    find_executable(session, view.first()?)?;
+    view.extend(operands.iter().cloned());
+    Some(view)
 }
 
 fn summarize(stages: &[Stage]) -> String {

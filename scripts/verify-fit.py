@@ -40,7 +40,7 @@ def spawn(argv, cols, cwd, env_extra, stdout_fd=None):
         if stdout_fd is not None:
             os.dup2(stdout_fd, 1)
         env = {k: v for k, v in os.environ.items() if k not in ("COLUMNS", "TERM_PROGRAM")}
-        env.update({"TERM": "xterm-256color", "HOME": cwd, **env_extra})
+        env.update({"TERM": "xterm-256color", "HOME": cwd, "KOA_LS_VIEW": "", **env_extra})
         os.execve(argv[0], argv, env)
     return pid, fd
 
