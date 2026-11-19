@@ -50,6 +50,11 @@ cases = [
     ("line typed while a command runs", [(b"/bin/sleep 1\r", 0.3), (b"/usr/bin/touch ahead\r", 2.0)], "ahead"),
     ("two lines typed while a command runs", [(b"/bin/sleep 1\r", 0.3), (b"/usr/bin/touch one\r/usr/bin/touch two\r", 2.0)], "two"),
     ("Ctrl-J ends a line, as in bash", [(b"/usr/bin/touch ctrlj\n", 1.0)], "ctrlj"),
+    (
+        "Ctrl-J ends Ctrl-R search and keeps the line to edit, as in bash",
+        [(b"/usr/bin/touch first\r", 0.6), (b"\x12first", 0.4), (b"\n", 0.3), (b"\x05X\r", 1.0)],
+        "firstX",
+    ),
 ]
 for label, steps, want in cases:
     files = session(steps)

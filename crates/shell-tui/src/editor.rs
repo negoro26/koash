@@ -131,6 +131,9 @@ impl LineEditor {
                             }
                         }
                         redraw(&mut stdout, prompt, &buf, cur)?;
+                        if code == KeyCode::Char('j') && modifiers.contains(KeyModifiers::CONTROL) {
+                            continue;
+                        }
                     }
                 }
             }
@@ -351,7 +354,6 @@ impl Search {
             KeyCode::Char('g') if ctrl => SearchKey::Cancel,
             KeyCode::Char('c') if ctrl => SearchKey::Abort,
             KeyCode::Enter => SearchKey::Run,
-            KeyCode::Char('j') if ctrl => SearchKey::Run,
             KeyCode::Char('r') if ctrl => {
                 self.step(history, self.found, true);
                 SearchKey::Stay
