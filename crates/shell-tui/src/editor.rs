@@ -131,6 +131,9 @@ impl LineEditor {
                             }
                         }
                         redraw(&mut stdout, prompt, &buf, cur)?;
+                        if code == KeyCode::Char('j') && modifiers.contains(KeyModifiers::CONTROL) {
+                            continue;
+                        }
                     }
                 }
             }
@@ -150,7 +153,7 @@ impl LineEditor {
                         return Ok(ReadLineResult::Eof);
                     }
                 }
-                (KeyCode::Enter, _) => {
+                (KeyCode::Enter, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                     let _ = write!(stdout, "\r\n");
                     let _ = stdout.flush();
                     return Ok(ReadLineResult::Line(buf));
