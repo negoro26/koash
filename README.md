@@ -33,10 +33,11 @@ koa -c 'ls | wc -l'
 koa -c 'find . -name "*.log" | xargs rm'
 ```
 
-`grep` is koa's own command and searches lines of text. To filter file names, use `where`:
+`grep` works on tables too. It matches the name for `ls`, the path for `find` and the line for `cat`, and keeps the whole row:
 
 ```bash
-koa -c 'ls | where name =~ test'
+koa -c 'ls | grep -i test | select name size'
+koa -c 'find . | grep -v target'
 ```
 
 ## Undo
