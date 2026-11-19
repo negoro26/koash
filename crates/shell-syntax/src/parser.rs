@@ -176,7 +176,7 @@ impl<'a> Parser<'a> {
             && matches!(first.parts.first(), Some(WordPart::Literal { text, .. }) if text == "where")
     }
 
-    fn is_sigil_cmd(words: &[Word]) -> bool {
+    pub fn is_sigil_cmd(words: &[Word]) -> bool {
         let Some(first) = words.first() else {
             return false;
         };
@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
         let span = first.span.merge(last.span);
         self.pos += len;
         Some(Word {
-            parts: vec![WordPart::Literal {
+            parts: vec![WordPart::SingleQuoted {
                 text: self.src.get(span.start..span.end).unwrap_or("").to_string(),
                 span,
             }],

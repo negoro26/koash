@@ -69,6 +69,7 @@ pub struct Word {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WordPart {
     Literal { text: String, span: Span },
+    Escaped { ch: char, span: Span },
     SingleQuoted { text: String, span: Span },
     DoubleQuoted { parts: Vec<WordPart>, span: Span },
     Var { name: String, span: Span },

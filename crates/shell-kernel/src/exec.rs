@@ -136,6 +136,9 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
     );
 
     let child = command.spawn().map_err(|e| {
+        if spec.claim_terminal {
+            session.restore_terminal();
+        }
         let (status, code, what) = match e.kind() {
             ErrorKind::NotFound if program.contains('/') => {
                 (127, "E_NOT_FOUND", "No such file or directory".to_string())

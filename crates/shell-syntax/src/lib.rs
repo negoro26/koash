@@ -1,13 +1,15 @@
+pub mod alias;
 pub mod ast;
 pub mod lexer;
 pub mod parser;
 pub mod span;
 
+pub use alias::expand_aliases;
 pub use ast::{
     Assignment, Command, ListItem, ListOp, Pipeline, Program, RedirectKind, Redirection,
     SimpleCommand, Word, WordPart,
 };
-pub use lexer::{Lexer, SyntaxError, Token, TokenKind};
+pub use lexer::{Lexer, SyntaxError, Token, TokenKind, line_continues};
 pub use parser::Parser;
 pub use span::Span;
 

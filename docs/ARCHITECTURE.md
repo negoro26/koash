@@ -15,17 +15,24 @@ This document maps the code. Read it before changing the executor or adding a co
   A builtin writes rows with `Rows` over a `record!` struct, which fixes the columns and their order, or with `DynRows` when the columns are only known at run time.
   `Records` is the one JSON encoder: `to json`, ACP, TSP and RPC records all use it, with sorted keys and no null cells.
   An external stage gets `RecordBatch::write_lines` instead: the column a `record!` field marks `#[text]` (`text` for Hashline rows, `name` for `ls`, `path` for `find`), else a lone column, else tab-separated cells with `\t`, `\n`, `\r` and `\\` escaped. `select` clears the mark, so picked columns arrive as picked. A `>` redirect still writes JSON lines.
+  The builtin `grep` matches a table row against that same text (`Row::write_line`), with a column named `text` standing in when none is marked, and keeps whole matching rows.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
-  It also spawns and waits for process groups.
+  It also spawns and waits for process groups, and owns `History`, the `~/.koa_history` file the line editor appends to and the `history` builtin lists.
 - `shell-builtins` is the executor and every builtin command.
 - `shell-surface` renders a `Value` for a terminal, for TSP frames, and in the compact sigil format.
+  The width is the last stage's own `COLUMNS` assignment, else the session's `COLUMNS`, else the size of stdout's terminal (80 when that reports 0 columns), and `None` unless stdout is a terminal.
 - `shell-rpc` serves NDJSON-RPC and ACP over stdio or a socket. It runs the same executor with a capturing `Sink`.
 - `shell-tui` is the line editor, highlighter, and completer.
 - `shell-cli` is the `koa` binary. It picks a mode and calls into the crates above.
 
 ## Executor flow
 
-`parse` turns the script into a `Program`.
+`Session::parse` first expands aliases, then calls `shell_syntax::parse`; the CLI and both RPC servers use it, so a session's aliases apply in every mode.
+`expand_aliases` in `shell-syntax` is a textual pass over the lexer's tokens, as in bash: a word in command position (the start of the line, after `|`, `&&`, `||`, `;`, `&`, a newline, `(`, a keyword such as `then`, an `X=1` prefix or a leading redirect target) that is a bare, unquoted alias name is replaced by its value.
+The value is scanned the same way with that name marked active, which stops recursion, and a value that ends in a blank makes the next word eligible too.
+It stops at the first token the lexer rejects (`$(`, `${x:-y}`) or at a here-document, and leaves the rest of the line as written.
+`Session` holds the table (`aliases`), so a forked session starts with its parent's aliases and each RPC session has its own.
+Then `parse` turns the script into a `Program`.
 `run_program` walks the list items and applies `&&`, `||`, and `;` against the last status.
 `run_pipeline` handles one item.
 If the item is a single foreground simple command whose name has `Placement::SoleStage`, it runs through `Builtin::run_alone` and returns.
@@ -52,7 +59,18 @@ A background pipeline with a builtin stage does not run in the shell. `run_pipel
 The child sees the session's cwd and environment. Its variable and cwd changes do not come back.
 `wait`, `fg`, `bg`, `jobs` and `kill %N` work on `session.jobs`. `reap_background_jobs` keeps the id, pid and status of finished jobs in `session.finished_jobs`, so `wait` still finds a job the prompt already reported. `$!` is the last background pid, kept in `SessionEnv`. A job remembers its last stage's pid and exit status, wherever that stage ended: in `reap_background_jobs`, in `wait`, or in the foreground before a Ctrl-Z. `wait` polls with `WNOHANG` so an RPC timeout, which trips the kill switch, ends only the wait and not the job.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
+On a terminal the table renderer gets that width (`shell-value`'s `fit.rs`) and measures cells in display width, not bytes.
+A table that does not fit first drops its `#[detail]` columns (`help` marks `flags`), then cuts the widest columns with `…`.
+A single row that does not fit prints one `name  value` line per column, wrapped.
+Without a width the renderer is the old byte-width one, so pipes and files see the same bytes as before.
 A builtin can also report failures that did not stop it; see Operand failures.
+
+## Startup file
+
+`shell-cli` runs the startup file only in the interactive branch of the REPL, before the first prompt (`rc.rs`).
+`$KOA_RC` names the file (empty means none), else it is `~/.koarc`; `--norc` skips it. A missing default file is silent, a missing `$KOA_RC` file prints one line.
+Each line, with `\`-continuations joined, goes through `Session::parse` and `run_program` like a typed line, so an `alias` line affects the lines after it and a bash-construct line goes through env capture. A syntax error prints with its file and line number and the next line still runs.
+`koa -c`, the RPC servers and a script piped into `koa` never read it.
 
 ## Registry
 
@@ -85,6 +103,23 @@ An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to ex
 `Flag::predicate` declares a single-dash long option (`find -name`) and `Flag::numeric` lets `-5` stand for the flag's value (`head -5`, `kill -9`).
 `Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
 `help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
+
+## Word expansion
+
+`word_expand::expand_words` turns a command's words into its argv, in bash's order: brace expansion, then variables and `~`, then pathname expansion.
+`Field` holds one expanded word as text plus runs that record which bytes came from literal text, from an unquoted variable, or from a quote, a backslash escape or `~`.
+Only the first kind opens a brace group, and quoted bytes never act as a pattern.
+A word with no `{`, `*`, `?` or `[` outside quotes skips all of this and costs one string.
+
+`brace` expands `{a,b}`, nested groups, and `{1..5}`, `{05..8}`, `{a..e}`, `{1..10..3}` sequences. A group that is not valid, such as `{a}` or `{`, stays literal.
+`pathname` matches one path segment at a time against a `glob::Pattern` and reads each directory once.
+Names are sorted bytewise within each directory, which is C-locale order, and a name that starts with `.` matches only a segment that starts with a literal `.`.
+`.` and `..` never match. A pattern that matches nothing, or fails to compile, stays as the literal word. A trailing `/` keeps only directories.
+`[` reads `[!x]` and `[^x]` as negation. `?` and a bracket match one Unicode scalar. POSIX classes such as `[[:alpha:]]` are not supported.
+A non-UTF-8 file name is never matched.
+
+The expansion applies to command words only. Assignment values and redirection targets go through `expand_word`, which does neither.
+`command_word` reads the first word without touching the file system, for the ledger summary.
 
 ## Operand failures
 

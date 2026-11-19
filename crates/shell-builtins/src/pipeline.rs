@@ -2,7 +2,8 @@ use std::io::Write;
 
 use nix::unistd::Pid;
 use shell_kernel::{
-    JobState, Session, expand_word, expand_words, find_executable, reap_background_jobs,
+    JobState, Session, command_word, expand_word, expand_words, find_executable,
+    reap_background_jobs,
 };
 use shell_surface::SurfaceMode;
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
@@ -162,9 +163,7 @@ fn detached_stage<'a>(
 
 fn command_name(session: &Session, cmd: &Command) -> Option<String> {
     match cmd {
-        Command::Simple(simple) => expand_words(&simple.words, &session.env, session.last_status)
-            .into_iter()
-            .next(),
+        Command::Simple(simple) => command_word(&simple.words, session),
         Command::PosixFallback { .. } => None,
     }
 }
@@ -207,10 +206,12 @@ fn defers_to_executable(
 }
 
 fn run_alone(session: &mut Session, simple: &SimpleCommand, sink: &Sink) -> Option<i32> {
-    let args = expand_words(&simple.words, &session.env, session.last_status);
-    let builtin = lookup(args.first()?)?;
-    (builtin.signature().placement == Placement::SoleStage)
-        .then(|| builtin.run_alone(session, &args[1..], sink))
+    let builtin = lookup(&command_word(&simple.words, session)?)?;
+    if builtin.signature().placement != Placement::SoleStage {
+        return None;
+    }
+    let args = expand_words(&simple.words, session);
+    Some(builtin.run_alone(session, args.get(1..)?, sink))
 }
 
 fn begin_pipeline_tx(session: &mut Session, pipeline: &Pipeline) {
@@ -252,7 +253,7 @@ fn build_stages<'a>(
                 }
             }
             Command::Simple(simple) => {
-                let argv = expand_words(&simple.words, &session.env, session.last_status);
+                let argv = expand_words(&simple.words, session);
                 let env: Vec<(String, String)> = simple
                     .assignments
                     .iter()
@@ -286,7 +287,7 @@ fn build_stages<'a>(
                         label: name.clone(),
                         argv,
                         display: None,
-                        env: Vec::new(),
+                        env,
                         redirs: &simple.redirections,
                     },
                     (Some(name), None) => {
@@ -353,7 +354,14 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
-                            plan.sink.emit(value);
+                            let columns = stage
+                                .env
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == "COLUMNS")
+                                .map(|(_, value)| value.clone())
+                                .or_else(|| session.env.get("COLUMNS"));
+                            plan.sink.emit(value, columns.as_deref());
                             soft_failure
                         }
                         Err(diag) => {

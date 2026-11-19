@@ -2,6 +2,7 @@ pub(crate) mod common;
 mod fs_ops;
 mod slice;
 
+mod alias;
 mod ast;
 mod bg;
 mod cat;
@@ -20,6 +21,7 @@ mod from;
 mod grep;
 mod head;
 mod help;
+mod history;
 mod jobs;
 mod js;
 mod kill;
@@ -44,6 +46,7 @@ mod stat;
 mod tail;
 mod to;
 mod tx_log;
+mod unalias;
 mod undo;
 mod unset;
 mod wait;
@@ -100,6 +103,9 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &fg::Fg,
     &bg::Bg,
     &wait::Wait,
+    &alias::Alias,
+    &unalias::Unalias,
+    &history::HistoryList,
 ];
 
 pub fn lookup(name: &str) -> Option<&'static dyn Builtin> {

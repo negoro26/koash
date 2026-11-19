@@ -1,6 +1,7 @@
 mod batch;
 mod cell;
 mod datum;
+mod fit;
 mod json;
 mod rows;
 mod schema;
@@ -16,6 +17,7 @@ use thiserror::Error;
 
 pub use batch::{RecordBatch, Row, RowOrder};
 pub use datum::Datum;
+pub use fit::{TableStyle, render_fitted};
 pub use json::{Records, StructuredRecord};
 pub use rows::{CellValue, DynRows, Record, RowSink, Rows};
 pub use schema::{ColType, Column, Schema, column_index};
@@ -125,14 +127,14 @@ impl Value {
         }
     }
 
-    pub fn render_tty(self, writer: &mut dyn Write, color: bool) {
+    pub fn render_tty(self, writer: &mut dyn Write, color: bool, width: Option<usize>) {
         match self {
             Value::Empty => {}
             Value::Bytes(bytes) => {
                 let _ = writer.write_all(&bytes);
                 let _ = writer.flush();
             }
-            Value::Batch(batch) => render_batch_table(&batch, writer, color),
+            Value::Batch(batch) => render_batch_table(&batch, writer, color, width),
         }
     }
 }

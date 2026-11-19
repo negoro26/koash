@@ -287,6 +287,7 @@ impl<'a> Lexer<'a> {
                 b'\'' => parts.push(self.lex_single_quoted()?),
                 b'"' => parts.push(self.lex_double_quoted()?),
                 b'$' => parts.push(self.lex_dollar()?),
+                b'\\' => parts.extend(self.lex_escape()),
                 _ => parts.push(self.lex_unquoted_literal()?),
             }
         }
@@ -483,30 +484,32 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn lex_escape(&mut self) -> Option<WordPart> {
+        let start = self.pos;
+        self.pos += 1;
+        if self.peek().is_none() {
+            return Some(WordPart::Literal {
+                text: "\\".to_string(),
+                span: Span::new(start, self.pos),
+            });
+        }
+        let ch = self.next_char();
+        (ch != '\n').then_some(WordPart::Escaped {
+            ch,
+            span: Span::new(start, self.pos),
+        })
+    }
+
     fn lex_unquoted_literal(&mut self) -> Result<WordPart, SyntaxError> {
         let start = self.pos;
-        let mut text = String::new();
         while let Some(b) = self.peek() {
-            if Self::is_word_delimiter(b) || matches!(b, b'\'' | b'"' | b'$') {
+            if Self::is_word_delimiter(b) || matches!(b, b'\'' | b'"' | b'$' | b'\\') {
                 break;
             }
-            if b == b'\\' {
-                self.pos += 1;
-                if self.peek().is_some() {
-                    let ch = self.next_char();
-                    if ch != '\n' {
-                        text.push(ch);
-                    }
-                } else {
-                    text.push('\\');
-                }
-                continue;
-            }
-            let ch = self.next_char();
-            text.push(ch);
+            self.next_char();
         }
         Ok(WordPart::Literal {
-            text,
+            text: self.src.get(start..self.pos).unwrap_or("").to_string(),
             span: Span::new(start, self.pos),
         })
     }
@@ -521,4 +524,30 @@ impl<'a> Lexer<'a> {
             '\0'
         }
     }
+}
+
+pub fn line_continues(line: &str) -> bool {
+    let (mut single, mut double) = (false, false);
+    let mut prev: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => {
+                if chars.next().is_none() {
+                    return true;
+                }
+            }
+            '#' if !single
+                && !double
+                && prev.is_none_or(|p| p.is_whitespace() || ";&|()".contains(p)) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    false
 }
