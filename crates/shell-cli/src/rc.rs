@@ -12,6 +12,32 @@ fn rc_path() -> Option<(PathBuf, bool)> {
     }
 }
 
+fn continues(line: &str) -> bool {
+    let (mut single, mut double) = (false, false);
+    let mut prev: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => {
+                if chars.next().is_none() {
+                    return true;
+                }
+            }
+            '#' if !single
+                && !double
+                && prev.is_none_or(|p| p.is_whitespace() || ";&|()".contains(p)) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    false
+}
+
 pub fn run_startup_file(session: &mut Session, sink: &Sink) -> Option<i32> {
     let (path, explicit) = rc_path()?;
     let text = match std::fs::read_to_string(&path) {
@@ -25,10 +51,10 @@ pub fn run_startup_file(session: &mut Session, sink: &Sink) -> Option<i32> {
     let mut lines = text.lines().enumerate();
     while let Some((index, first)) = lines.next() {
         let mut command = first.to_string();
-        while command.ends_with('\\')
+        while continues(&command)
             && let Some((_, next)) = lines.next()
         {
-            command.push('\n');
+            command.pop();
             command.push_str(next);
         }
         let command = command.trim();
