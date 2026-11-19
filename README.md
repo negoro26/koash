@@ -14,7 +14,7 @@ cargo install --git https://github.com/negoro26/koash
 
 ## Use
 
-Run `koa` for an interactive shell, or `koa -c '...'` to run one line.
+Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the interactive shell, Up and Down step through history, Ctrl-R searches it, and Tab completes commands and paths. The usual readline keys work: Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, Ctrl-W, Alt-B and Alt-F.
 
 ```bash
 koa -c 'ls -t | first 5'
@@ -84,7 +84,7 @@ After such a line, exported variables, unset variables and the current folder ca
 ## Limits
 
 - Wildcards are not expanded yet. `rm *.txt` looks for a file named `*.txt`. Run such lines as `bash -c 'rm *.txt'` for now.
-- There is no `alias`, startup file or `history` command yet, and Ctrl-R does not search history.
+- There is no `alias`, startup file or `history` command yet.
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
 - koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
