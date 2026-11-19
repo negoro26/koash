@@ -24,7 +24,7 @@ jobs:
         run: |
           if ! ls --version | grep -q 'GNU coreutils'; then
             sudo apt-get update
-            sudo apt-get install -y --allow-remove-essential coreutils-from-gnu
+            sudo apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
           fi
           ls --version | head -1
       - run: scripts/check.sh
