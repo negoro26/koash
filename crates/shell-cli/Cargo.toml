@@ -13,7 +13,6 @@ name = "koa"
 path = "src/main.rs"
 
 [dependencies]
-shell-syntax.workspace = true
 shell-kernel.workspace = true
 shell-builtins.workspace = true
 shell-rpc.workspace = true

@@ -579,7 +579,6 @@ dependencies = [
  "shell-kernel",
  "shell-rpc",
  "shell-surface",
- "shell-syntax",
  "shell-tui",
  "tokio",
 ]
@@ -633,9 +632,8 @@ name = "shell-tui"
 version = "0.4.0"
 dependencies = [
  "crossterm",
- "serde",
- "serde_json",
  "shell-builtins",
+ "shell-kernel",
  "shell-syntax",
  "shell-value",
 ]

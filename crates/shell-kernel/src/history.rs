@@ -60,6 +60,10 @@ impl History {
         self.entries.push(entry);
     }
 
+    pub fn entries(&self) -> &[HistoryEntry] {
+        &self.entries
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

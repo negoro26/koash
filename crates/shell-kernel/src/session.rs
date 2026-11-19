@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -183,6 +183,7 @@ pub struct Session {
     pub uid: u64,
     reports: Vec<StructuredDiagnostic>,
     fallback_noticed: HashSet<String>,
+    pub aliases: BTreeMap<String, String>,
 }
 
 impl Session {
@@ -262,6 +263,7 @@ impl Session {
             uid,
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
+            aliases: BTreeMap::new(),
         })
     }
 
@@ -271,6 +273,20 @@ impl Session {
 
     pub fn take_reports(&mut self) -> Vec<StructuredDiagnostic> {
         std::mem::take(&mut self.reports)
+    }
+
+    pub fn parse(&self, src: &str) -> Result<shell_syntax::Program, shell_syntax::SyntaxError> {
+        if self.aliases.is_empty() {
+            return shell_syntax::parse(src);
+        }
+        let expanded = shell_syntax::expand_aliases(src, |name| self.aliases.get(name).cloned());
+        shell_syntax::parse(&expanded).map_err(|mut err| {
+            if expanded != src {
+                err.span = shell_syntax::Span::new(0, src.len());
+                err.message = format!("{} (after alias expansion)", err.message);
+            }
+            err
+        })
     }
 
     pub fn first_fallback(&mut self, command: &str) -> bool {
@@ -306,6 +322,7 @@ impl Session {
             uid,
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
+            aliases: self.aliases.clone(),
         }
     }
 
@@ -371,6 +388,7 @@ impl Session {
             uid,
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
+            aliases: BTreeMap::new(),
         })
     }
 

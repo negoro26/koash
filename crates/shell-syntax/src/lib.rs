@@ -1,8 +1,10 @@
+pub mod alias;
 pub mod ast;
 pub mod lexer;
 pub mod parser;
 pub mod span;
 
+pub use alias::expand_aliases;
 pub use ast::{
     Assignment, Command, ListItem, ListOp, Pipeline, Program, RedirectKind, Redirection,
     SimpleCommand, Word, WordPart,

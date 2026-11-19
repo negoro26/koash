@@ -17,7 +17,7 @@ This document maps the code. Read it before changing the executor or adding a co
   An external stage gets `RecordBatch::write_lines` instead: the column a `record!` field marks `#[text]` (`text` for Hashline rows, `name` for `ls`, `path` for `find`), else a lone column, else tab-separated cells with `\t`, `\n`, `\r` and `\\` escaped. `select` clears the mark, so picked columns arrive as picked. A `>` redirect still writes JSON lines.
   The builtin `grep` matches a table row against that same text (`Row::write_line`), with a column named `text` standing in when none is marked, and keeps whole matching rows.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
-  It also spawns and waits for process groups.
+  It also spawns and waits for process groups, and owns `History`, the `~/.koa_history` file the line editor appends to and the `history` builtin lists.
 - `shell-builtins` is the executor and every builtin command.
 - `shell-surface` renders a `Value` for a terminal, for TSP frames, and in the compact sigil format.
   The width is the last stage's own `COLUMNS` assignment, else the session's `COLUMNS`, else the size of stdout's terminal (80 when that reports 0 columns), and `None` unless stdout is a terminal.
@@ -27,7 +27,12 @@ This document maps the code. Read it before changing the executor or adding a co
 
 ## Executor flow
 
-`parse` turns the script into a `Program`.
+`Session::parse` first expands aliases, then calls `shell_syntax::parse`; the CLI and both RPC servers use it, so a session's aliases apply in every mode.
+`expand_aliases` in `shell-syntax` is a textual pass over the lexer's tokens, as in bash: a word in command position (the start of the line, after `|`, `&&`, `||`, `;`, `&`, a newline, `(`, a keyword such as `then`, an `X=1` prefix or a leading redirect target) that is a bare, unquoted alias name is replaced by its value.
+The value is scanned the same way with that name marked active, which stops recursion, and a value that ends in a blank makes the next word eligible too.
+It stops at the first token the lexer rejects (`$(`, `${x:-y}`) or at a here-document, and leaves the rest of the line as written.
+`Session` holds the table (`aliases`), so a forked session starts with its parent's aliases and each RPC session has its own.
+Then `parse` turns the script into a `Program`.
 `run_program` walks the list items and applies `&&`, `||`, and `;` against the last status.
 `run_pipeline` handles one item.
 If the item is a single foreground simple command whose name has `Placement::SoleStage`, it runs through `Builtin::run_alone` and returns.
@@ -56,6 +61,13 @@ A table that does not fit first drops its `#[detail]` columns (`help` marks `fla
 A single row that does not fit prints one `name  value` line per column, wrapped.
 Without a width the renderer is the old byte-width one, so pipes and files see the same bytes as before.
 A builtin can also report failures that did not stop it; see Operand failures.
+
+## Startup file
+
+`shell-cli` runs the startup file only in the interactive branch of the REPL, before the first prompt (`rc.rs`).
+`$KOA_RC` names the file (empty means none), else it is `~/.koarc`; `--norc` skips it. A missing default file is silent, a missing `$KOA_RC` file prints one line.
+Each line, with `\`-continuations joined, goes through `Session::parse` and `run_program` like a typed line, so an `alias` line affects the lines after it and a bash-construct line goes through env capture. A syntax error prints with its file and line number and the next line still runs.
+`koa -c`, the RPC servers and a script piped into `koa` never read it.
 
 ## Registry
 
