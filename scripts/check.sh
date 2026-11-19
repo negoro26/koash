@@ -29,6 +29,7 @@ koa="$(realpath "${CARGO_TARGET_DIR:-target}")/debug/koa"
 python3 scripts/verify-ls-cells.py "$koa"
 python3 scripts/verify-json.py "$koa"
 python3 scripts/verify-flags.py "$koa"
+python3 scripts/verify-eza-look.py "$koa"
 step "cargo-deny"
 cargo deny --locked check
 step "cargo-machete"
