@@ -51,6 +51,15 @@ Output goes to the `Sink`, either the terminal or an RPC channel.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
 A builtin can also report failures that did not stop it; see Operand failures.
 
+### Terminal view
+
+A builtin can draw its own output for a person at a terminal.
+`Builtin::terminal_view` returns the bytes instead of a `Value`. `run_stages` asks for it only when the stage is the whole foreground pipeline, has no stdout redirect, and `Sink::shows_terminal_view` holds: a `Tty` sink that is not in TSP mode, with stdout a terminal.
+Everything else, including every pipe, redirect, RPC request and `Sink::Capture`, runs `Builtin::run` and gets the table.
+
+Only `ls` implements it. `crates/shell-builtins/src/eza` renders the layout of `eza -lh --group-directories-first --icons=auto` from the same directory walk that fills the table, so the two views cannot disagree about which entries exist.
+`style.rs` holds eza's colour codes and the rule for which escape bytes sit between two styled strings, `theme.rs` the default palette plus `LS_COLORS` and `EZA_COLORS`, `view.rs` the columns, sorting and file names, and `tables.rs` the icon and file-type maps. `scripts/gen-eza-tables.py` regenerates `tables.rs` from an eza checkout, and `scripts/verify-eza-look.py` compares the built `koa` with eza byte for byte in a pty.
+
 ## Registry
 
 Every builtin is a unit struct that implements `Builtin`.

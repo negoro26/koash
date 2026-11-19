@@ -26,6 +26,19 @@ koa -c 'ps | where name == bash | to json'
 
 `ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `sort-by`, `first`, `last` and `to json` work on those tables.
 
+A bare `ls` on a terminal looks like `eza -lh --group-directories-first --icons=auto`. It has the same columns, `24k` sizes, owner names, `12 Nov 21:36` dates, Nerd Font icons, colours and symlink targets, and folders come first:
+
+```text
+Permissions Size User Date Modified Name
+drwxr-xr-x     - alex 12 Nov 21:36  src
+.rw-r--r--  1.5k alex 12 Nov 21:36  Cargo.toml
+lrwxrwxrwx     - alex 12 Nov 21:36  latest -> Cargo.toml
+```
+
+`ls -1` prints one name per line in the same colours. `ls -t`, `-S`, `-r` and `-a` still sort and filter, and folders still come first. koa reads `LS_COLORS`, `EZA_COLORS`, `NO_COLOR`, `EZA_ICON_SPACING` and `COLUMNS` the way eza does. Icons show only when the terminal reports a width.
+
+Everything else about `ls` is unchanged. `ls | where size > 1000`, `ls | to json`, `ls > files.json`, `ls | wc -l` and RPC requests still get the table, with the same columns and the same row order.
+
 Normal programs still work. When a table goes into one, it gets the text bash would send:
 
 ```bash
@@ -88,6 +101,7 @@ After such a line, exported variables, unset variables and the current folder ca
 - koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
 - Undo and the RPC policy do not see inside bash lines.
+- The eza look of `ls` uses eza's default date format and English month names. It does not read `TIME_STYLE`, `LC_TIME` or an eza theme file. Under Tern (`TERM_PROGRAM=Tern`) and `--tsp`, `ls` still sends the table frame.
 - macOS is untested.
 
 ## Development
