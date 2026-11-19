@@ -107,7 +107,6 @@ After such a line, exported variables, unset variables and the current folder ca
 
 ## Limits
 
-
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
 - Undo and the RPC policy do not see inside bash lines.
