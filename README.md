@@ -38,13 +38,14 @@ koa -c 'find . -name "*.log" | xargs rm'
 koa -c 'ls | where name =~ test'
 ```
 
-To see a bare `ls` the way another program draws it, for example eza, set `KOA_LS_VIEW`, in `~/.koarc` or your environment:
+When [eza](https://github.com/eza-community/eza) is installed, a bare `ls` or `ls some/dir` typed at a terminal is drawn by eza, as `eza -lh --group-directories-first --icons=auto`. Every other `ls` is koa's table: one with an option, in a pipe, with a redirect, or when the output is not a terminal. Without eza, `ls` is always koa's table.
+
+`KOA_LS_VIEW` picks another program, or turns the view off when it is empty:
 
 ```bash
-export KOA_LS_VIEW='eza -lh --group-directories-first --icons=auto'
+export KOA_LS_VIEW='eza -l --icons=always'
+export KOA_LS_VIEW=''
 ```
-
-Then `ls` and `ls some/dir` typed at a terminal run that program on the same paths. Everything else is still koa's table: an `ls` with an option, in a pipe, with a redirect, or when the output is not a terminal. If the program is not installed, koa's table is shown.
 
 ## Undo
 

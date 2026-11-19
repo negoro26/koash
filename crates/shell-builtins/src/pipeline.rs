@@ -269,6 +269,8 @@ fn build_stages<'a>(
     stages
 }
 
+const DEFAULT_LS_VIEW: &str = "eza -lh --group-directories-first --icons=auto";
+
 fn ls_view(
     session: &Session,
     pipeline: &Pipeline,
@@ -286,7 +288,10 @@ fn ls_view(
     if !bare {
         return None;
     }
-    let view = session.env.get("KOA_LS_VIEW")?;
+    let view = session
+        .env
+        .get("KOA_LS_VIEW")
+        .unwrap_or_else(|| DEFAULT_LS_VIEW.to_string());
     let mut view: Vec<String> = view.split_whitespace().map(str::to_string).collect();
     find_executable(session, view.first()?)?;
     view.extend(operands.iter().cloned());
