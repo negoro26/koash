@@ -9,7 +9,7 @@ pub use ast::{
     Assignment, Command, ListItem, ListOp, Pipeline, Program, RedirectKind, Redirection,
     SimpleCommand, Word, WordPart,
 };
-pub use lexer::{Lexer, SyntaxError, Token, TokenKind};
+pub use lexer::{Lexer, SyntaxError, Token, TokenKind, line_continues};
 pub use parser::Parser;
 pub use span::Span;
 

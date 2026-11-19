@@ -12,11 +12,6 @@ fn rc_path() -> Option<(PathBuf, bool)> {
     }
 }
 
-fn continues(line: &str) -> bool {
-    !line.trim_start().starts_with('#')
-        && line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
-}
-
 pub fn run_startup_file(session: &mut Session, sink: &Sink) -> Option<i32> {
     let (path, explicit) = rc_path()?;
     let text = match std::fs::read_to_string(&path) {
@@ -30,7 +25,7 @@ pub fn run_startup_file(session: &mut Session, sink: &Sink) -> Option<i32> {
     let mut lines = text.lines().enumerate();
     while let Some((index, first)) = lines.next() {
         let mut command = first.to_string();
-        while continues(&command)
+        while shell_syntax::line_continues(&command)
             && let Some((_, next)) = lines.next()
         {
             command.pop();

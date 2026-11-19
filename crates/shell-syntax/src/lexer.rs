@@ -525,3 +525,29 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+pub fn line_continues(line: &str) -> bool {
+    let (mut single, mut double) = (false, false);
+    let mut prev: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => {
+                if chars.next().is_none() {
+                    return true;
+                }
+            }
+            '#' if !single
+                && !double
+                && prev.is_none_or(|p| p.is_whitespace() || ";&|()".contains(p)) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    false
+}

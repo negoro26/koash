@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import os
+import pty
+import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 koa = os.path.abspath(sys.argv[1])
 
@@ -65,7 +69,58 @@ for name, script in CASES.items():
         )
     shutil.rmtree(root)
 
-print(f"checked {len(CASES)} alias scripts against bash")
+RC_FILES = {
+    "comment line ending in a backslash": "# note \\\necho after-comment\n",
+    "comment after a command ending in a backslash": "echo a # note \\\necho after-inline\n",
+    "real continuation": "echo one \\\ntwo\n",
+    "backslash inside single quotes": "echo 'q\\'\necho after-single\n",
+    "continuation inside double quotes": "echo \"d\\\ne\"\n",
+    "hash inside a word": "echo a#b \\\nc\n",
+    "comment line inside a continued command": "echo one \\\n# two\necho three\n",
+    "alias on a line ending in an escaped backslash": "alias q='echo Q' \\\\\nq after\n",
+}
+
+
+def interactive(rc, home):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(home)
+        os.environ.update({"HOME": home, "KOA_RC": rc, "TERM": "dumb"})
+        os.execv(koa, [koa])
+    out = b""
+    end = time.time() + 1.5
+    while time.time() < end:
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if ready:
+            try:
+                out += os.read(fd, 4096)
+            except OSError:
+                break
+    os.write(fd, b"exit\r")
+    time.sleep(0.3)
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+    os.waitpid(pid, 0)
+    os.close(fd)
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out.decode(errors="replace")).replace("\r", "")
+    lines = text.split("koa>")[0].strip().splitlines()
+    return [line for line in lines if line.strip() != os.path.basename(home) and not line.startswith("koa: ")]
+
+
+for name, text in RC_FILES.items():
+    root = tempfile.mkdtemp()
+    rc = os.path.join(root, "rc")
+    with open(rc, "w") as fh:
+        fh.write(text)
+    want = run(["bash", "-O", "expand_aliases", "-c", f"source {rc}"], "", root).stdout.strip().splitlines()
+    got = interactive(rc, root)
+    if got != want:
+        bad.append(f"rc file, {name}: bash {want!r}, koa {got!r}")
+    shutil.rmtree(root)
+
+print(f"checked {len(CASES)} alias scripts and {len(RC_FILES)} startup files against bash")
 for line in bad:
     print(line)
 sys.exit(1 if bad else 0)

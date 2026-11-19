@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 shell-kernel.workspace = true
+shell-syntax.workspace = true
 shell-builtins.workspace = true
 shell-rpc.workspace = true
 shell-surface.workspace = true
