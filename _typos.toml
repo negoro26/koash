@@ -1,0 +1,9 @@
+[files]
+extend-exclude = [
+  "crates/shell-builtins/src/eza/tables.rs",
+  "scripts/gen-eza-tables.py",
+]
+
+[default.extend-words]
+ue = "ue"
+styl = "styl"

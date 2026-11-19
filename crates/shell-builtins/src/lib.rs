@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod builtins;
 pub mod code_intel;
 mod env_capture;
+mod eza;
 pub mod lsp;
 pub mod pipeline;
 pub mod sink;
