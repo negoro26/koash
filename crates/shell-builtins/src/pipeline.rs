@@ -159,6 +159,7 @@ fn detached_stage<'a>(
         display: Some(text),
         env: Vec::new(),
         redirs: &[],
+        read_only: false,
     })
 }
 
