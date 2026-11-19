@@ -60,6 +60,10 @@ impl History {
         self.entries.push(entry);
     }
 
+    pub fn entries(&self) -> &[HistoryEntry] {
+        &self.entries
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -70,5 +74,12 @@ impl History {
 
     pub fn get(&self, idx: usize) -> Option<&HistoryEntry> {
         self.entries.get(idx)
+    }
+
+    pub fn search_back(&self, query: &str, end: usize, skip: Option<&str>) -> Option<usize> {
+        let end = end.min(self.entries.len());
+        self.entries[..end]
+            .iter()
+            .rposition(|e| skip != Some(e.command.as_str()) && e.command.contains(query))
     }
 }

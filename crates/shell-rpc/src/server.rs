@@ -601,7 +601,7 @@ fn admit(sessions: &Sessions, slots: &mut HashMap<String, Slot>, params: &ExecPa
         session.mutated_files.clear();
         session.taint = TaintLevel::TrustedLocal;
         session.should_exit = None;
-        let program = match shell_syntax::parse(&params.command) {
+        let program = match session.parse(&params.command) {
             Ok(p) => p,
             Err(err) => return Admission::Reject(err.into()),
         };
@@ -664,7 +664,7 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
                 }
                 Command::PosixFallback { .. } => continue,
             };
-            let args = expand_words(&simple.words, &session.env, session.last_status);
+            let args = expand_words(&simple.words, session);
             let prog = args.first().map(|s| s.as_str()).unwrap_or("");
 
             if !policy.allow_network && network_cmds.contains(&prog) {

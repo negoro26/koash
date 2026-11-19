@@ -6,8 +6,9 @@ use shell_builtins::{Sink, run_program};
 use shell_kernel::{CowWorkspace, Session, reap_background_jobs};
 use shell_rpc::RpcServer;
 use shell_surface::SurfaceMode;
-use shell_syntax::parse;
 use shell_tui::{LineEditor, ReadLineResult};
+
+mod rc;
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
     tokio::runtime::Builder::new_current_thread()
@@ -21,6 +22,7 @@ fn print_help() {
 
 USAGE:
   koa                         Interactive TUI shell (or read script from stdin)
+  koa --norc                  Interactive shell without reading the startup file
   koa -c <script>             Execute command string and exit (-lc/-ic also supported)
   koa --rpc | --acp           Run headless NDJSON-RPC or ACP server on stdio
   koa --socket <path>         Run headless NDJSON-RPC server on Unix socket
@@ -37,6 +39,8 @@ BASH TRANSITION QUICK GUIDE:
   * Table verbs: where <col op val>, select <cols...>, sort-by [--desc] <col>,
     first [N], last [N], from json, to json|compact.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
+  * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
+  * Shell state: alias/unalias, history [N], export, unset.
   * Sub-kernels & discovery: @sql \"...\", @py \"...\", @js \"...\", discover \"<intent>\".",
         env!("CARGO_PKG_VERSION")
     );
@@ -145,13 +149,23 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         let script = args[pos + 1..].join(" ");
-        return run_oneshot(&script, force_tsp);
+        let flag = |name: &str| {
+            let at = args[..pos].iter().position(|a| a == name)?;
+            args.get(at + 1)?.parse::<i32>().ok()
+        };
+        return run_oneshot(&script, force_tsp, flag("--last-status"), flag("--last-bg"));
     }
 
-    run_interactive_repl(force_tsp)
+    let read_rc = !args.iter().any(|a| a == "--norc");
+    run_interactive_repl(force_tsp, read_rc)
 }
 
-fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
+fn run_oneshot(
+    script: &str,
+    force_tsp: bool,
+    last_status: Option<i32>,
+    last_bg: Option<i32>,
+) -> ExitCode {
     let mut session = match Session::new(false) {
         Ok(s) => s,
         Err(diag) => {
@@ -159,8 +173,13 @@ fn run_oneshot(script: &str, force_tsp: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    shell_kernel::forward_to_jobs(false);
+    session.last_status = last_status.unwrap_or(0);
+    if let Some(pid) = last_bg {
+        session.env.set_last_background(pid);
+    }
 
-    let program = match parse(script) {
+    let program = match session.parse(script) {
         Ok(p) => p,
         Err(err) => {
             eprintln!("koa: syntax error ({}): {}", err.code, err.message);
@@ -181,7 +200,7 @@ fn report_finished_jobs(session: &mut Session) {
     }
 }
 
-fn run_interactive_repl(force_tsp: bool) -> ExitCode {
+fn run_interactive_repl(force_tsp: bool, read_rc: bool) -> ExitCode {
     let mut session = match Session::new(true) {
         Ok(s) => s,
         Err(diag) => {
@@ -189,12 +208,16 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    shell_kernel::forward_to_jobs(session.interactive);
 
     if session.interactive {
         let mut editor = LineEditor::new();
         let sink = Sink::Tty {
             mode: SurfaceMode::detect(force_tsp, true),
         };
+        if read_rc && let Some(code) = rc::run_startup_file(&mut session, &sink) {
+            return ExitCode::from((code & 0xff) as u8);
+        }
         loop {
             report_finished_jobs(&mut session);
             let prompt = format!(
@@ -212,7 +235,7 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let code = match parse(trimmed) {
+                    let code = match session.parse(trimmed) {
                         Ok(program) => run_program(&mut session, &program, &sink),
                         Err(err) => {
                             eprintln!("koa: syntax error ({}): {}", err.code, err.message);
@@ -252,7 +275,7 @@ fn run_interactive_repl(force_tsp: bool) -> ExitCode {
                 if trimmed.is_empty() {
                     continue;
                 }
-                session.last_status = match parse(trimmed) {
+                session.last_status = match session.parse(trimmed) {
                     Ok(program) => run_program(&mut session, &program, &sink),
                     Err(err) => {
                         eprintln!("koa: syntax error ({}): {}", err.code, err.message);

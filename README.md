@@ -14,9 +14,10 @@ cargo install --git https://github.com/negoro26/koash
 
 ## Use
 
-Run `koa` for an interactive shell, or `koa -c '...'` to run one line.
+Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the interactive shell, Up and Down step through history, Ctrl-R searches it, and Tab completes commands and paths. The usual readline keys work: Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, Ctrl-W, Alt-B and Alt-F.
 
 ```bash
+koa -c 'ls -t | first 5'
 koa -c 'ls | where size > 1000 | sort-by size | select name size'
 koa -c 'find src | where ext == rs | first 5'
 koa -c 'cat notes.txt | where text =~ todo'
@@ -32,10 +33,13 @@ koa -c 'ls | wc -l'
 koa -c 'find . -name "*.log" | xargs rm'
 ```
 
-`grep` is koa's own command and searches lines of text. To filter file names, use `where`:
+Wildcards and braces expand as in bash: `rm *.log`, `cat src/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
+
+`grep` works on tables too. It matches the name for `ls`, the path for `find` and the line for `cat`, and keeps the whole row:
 
 ```bash
-koa -c 'ls | where name =~ test'
+koa -c 'ls | grep -i test | select name size'
+koa -c 'find . | grep -v target'
 ```
 
 When [eza](https://github.com/eza-community/eza) is installed, a bare `ls` or `ls some/dir` typed at a terminal is drawn by eza, as `eza -lh --group-directories-first --icons=auto`. Every other `ls` is koa's table: one with an option, in a pipe, with a redirect, or when the output is not a terminal. Without eza, `ls` is always koa's table.
@@ -68,13 +72,35 @@ koa -c 'cat main.rs'
 koa -c 'patch main.rs 12:4c7 "let x = 2;"'
 ```
 
+## Background jobs
+
+End a line with `&` to run it in the background. `jobs` lists the jobs, `fg` and `bg` bring one to the front or resume it, `kill %1` ends job 1, `wait` waits for them and Ctrl-Z stops the job in front. `$!` is the process id of the last background job, and `wait $!` or `wait %1` returns its exit status.
+
+```bash
+koa -c 'find . | where size > 1000000 | select path > big.txt &'
+```
+
+koa's own commands live inside the shell, so a background pipeline that uses one runs in a child `koa -c`. Like `&` in bash, variable and folder changes made there do not come back. `undo` refuses afterwards, as it does after any normal program. Output goes to the terminal, and over RPC it is dropped. Ctrl-Z cannot stop a koa command that runs in front, so start it with `&` if you may want it back.
+
 ## Other commands
 
 - `@sql SELECT 1 + 1` runs SQL in an SQLite database that lives as long as the session.
 - `@py` and `@js` send code to a Python or Node process that stays running, so variables persist between lines.
 - `refs NAME` finds every line that uses `NAME` as a whole word.
 - `discover "undo a change"` suggests commands for a task.
-- `help` lists every command, its options and its columns.
+- `help` lists every command and its columns. `help ls` shows one command in full, with every option.
+
+On a terminal a table never runs past the screen. The widest columns are cut first and a cut cell ends in `…`. koa reads the width from the terminal, or from `COLUMNS` when that is set. A table with one row that does not fit is printed as one `name  value` line per column, wrapped. Pipes, files, `to json` and RPC get the full table.
+
+## Aliases and startup file
+
+`alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases are not expanded inside `$(...)` or backticks, and Tab completion does not know alias names yet.
+
+The interactive shell runs `~/.koarc` when it starts. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c`, piped scripts, `--rpc`, `--socket` and `--acp` never read it.
+
+koa runs the file one line at a time, so put each `alias`, `export` or `source` on its own line. A multi-line `if` or function does not work there; write it on one line, or put it in a file and `source` it. A koa syntax error in the file prints `.koarc:LINE:` and the rest of the file still runs. Other errors print without the line number.
+
+`history` lists the commands you typed in the interactive shell, and `history 5` the last five. There is no `history -c` yet.
 
 ## For agents
 
@@ -88,15 +114,12 @@ Each session keeps its own folder, variables and undo history. An `exec` request
 
 koa passes lines it does not handle itself to bash. That includes `if`, `for`, `while`, `$(...)`, here-docs, `source`, `.` and `eval`.
 
-After such a line, exported variables, unset variables and the current folder carry over to the next line, so `source .venv/bin/activate` works. Functions, aliases and unexported variables do not carry over.
+After such a line, exported variables, unset variables and the current folder carry over to the next line, so `source .venv/bin/activate` works. Functions, unexported variables and bash aliases defined inside such a line do not carry over.
 
 ## Limits
 
-- Wildcards are not expanded yet. `rm *.txt` looks for a file named `*.txt`. Run such lines as `bash -c 'rm *.txt'` for now.
-- There is no `alias`, startup file or `history` command yet, and Ctrl-R does not search history.
-- `ls` does not support `-t`, `-S` or `-r` yet. Those options run the system `ls` and return plain text.
+
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
-- koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
 - Undo and the RPC policy do not see inside bash lines.
 - macOS is untested.

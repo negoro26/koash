@@ -1,11 +1,21 @@
 use std::io::{BufWriter, Write};
 
 use crate::RecordBatch;
+use crate::fit::{TableStyle, plain_cell, render_fitted};
 
-pub fn render_batch_table(batch: &RecordBatch, writer: &mut dyn Write, color: bool) {
+pub fn render_batch_table(
+    batch: &RecordBatch,
+    writer: &mut dyn Write,
+    color: bool,
+    width: Option<usize>,
+) {
     let ncols = batch.ncols();
     let nrows = batch.nrows();
     if ncols == 0 || nrows == 0 {
+        return;
+    }
+    if let Some(width) = width {
+        render_fitted(batch, writer, color, width, &TableStyle::PLAIN, plain_cell);
         return;
     }
 

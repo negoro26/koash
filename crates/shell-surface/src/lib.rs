@@ -1,7 +1,8 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
+use std::os::fd::AsRawFd;
 
 use serde::Serialize;
-use shell_value::{Datum, RecordBatch, Records, Value};
+use shell_value::{Datum, RecordBatch, Records, TableStyle, Value, render_fitted};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceMode {
@@ -37,15 +38,39 @@ struct TspTextFrame<'a> {
     content: &'a str,
 }
 
-pub fn render_surface(val: Value, writer: &mut dyn Write, mode: SurfaceMode) {
+const FALLBACK_COLUMNS: usize = 80;
+
+fn stdout_columns() -> Option<usize> {
+    let mut size = nix::libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let fd = std::io::stdout().as_raw_fd();
+    let rc = unsafe { nix::libc::ioctl(fd, nix::libc::TIOCGWINSZ, &mut size) };
+    (rc == 0 && size.ws_col > 0).then_some(usize::from(size.ws_col))
+}
+
+pub fn terminal_width(columns: Option<&str>) -> Option<usize> {
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    let from_env = columns
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&w| w > 0);
+    Some(from_env.or_else(stdout_columns).unwrap_or(FALLBACK_COLUMNS))
+}
+
+pub fn render_surface(val: Value, writer: &mut dyn Write, mode: SurfaceMode, width: Option<usize>) {
     match mode {
-        SurfaceMode::AnsiTty => val.render_tty(writer, true),
-        SurfaceMode::Plain => val.render_tty(writer, false),
-        SurfaceMode::TernSurfaceProtocol => render_tsp(val, writer),
+        SurfaceMode::AnsiTty => val.render_tty(writer, true, width),
+        SurfaceMode::Plain => val.render_tty(writer, false, width),
+        SurfaceMode::TernSurfaceProtocol => render_tsp(val, writer, width),
     }
 }
 
-fn render_tsp(val: Value, writer: &mut dyn Write) {
+fn render_tsp(val: Value, writer: &mut dyn Write, width: Option<usize>) {
     match val {
         Value::Empty => {}
         Value::Batch(batch) => {
@@ -61,7 +86,11 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
             };
             if let Ok(json) = serde_json::to_string(&frame) {
                 let _ = write!(writer, "\x1b]9001;{json}\x07");
-                let _ = writeln!(writer, "{}", render_unicode_preview(&columns, &batch));
+                let preview = match width {
+                    Some(width) => fitted_preview(&batch, width),
+                    None => render_unicode_preview(&columns, &batch),
+                };
+                let _ = writeln!(writer, "{preview}");
                 let _ = writer.flush();
             }
         }
@@ -79,6 +108,26 @@ fn render_tsp(val: Value, writer: &mut dyn Write) {
             let _ = writer.flush();
         }
     }
+}
+
+fn fitted_preview(batch: &RecordBatch, width: usize) -> String {
+    let mut out = Vec::new();
+    render_fitted(
+        batch,
+        &mut out,
+        false,
+        width,
+        &TableStyle::BOX,
+        preview_cell,
+    );
+    String::from_utf8_lossy(&out)
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+fn preview_cell<'s>(cell: Datum<'s>, scratch: &'s mut String) -> &'s str {
+    *scratch = preview_text(cell);
+    scratch
 }
 
 fn preview_text(cell: Datum<'_>) -> String {

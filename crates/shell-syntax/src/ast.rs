@@ -5,6 +5,7 @@ use crate::span::Span;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Program {
     pub items: Vec<ListItem>,
+    pub source: String,
     pub span: Span,
 }
 
@@ -68,6 +69,7 @@ pub struct Word {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WordPart {
     Literal { text: String, span: Span },
+    Escaped { ch: char, span: Span },
     SingleQuoted { text: String, span: Span },
     DoubleQuoted { parts: Vec<WordPart>, span: Span },
     Var { name: String, span: Span },

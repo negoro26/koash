@@ -136,6 +136,9 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
     );
 
     let child = command.spawn().map_err(|e| {
+        if spec.claim_terminal {
+            session.restore_terminal();
+        }
         let (status, code, what) = match e.kind() {
             ErrorKind::NotFound if program.contains('/') => {
                 (127, "E_NOT_FOUND", "No such file or directory".to_string())
@@ -179,31 +182,31 @@ pub struct Stopped {
 
 #[derive(Debug)]
 pub struct ForegroundOutcome {
-    pub watched_status: i32,
+    pub watched: Option<i32>,
     pub stopped: Option<Stopped>,
 }
 
 /// Waits on `pgid` only, never a bare `waitpid(-1)`, so unrelated children are not reaped.
 pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> ForegroundOutcome {
     let mut alive = pids.to_vec();
-    let mut watched_status = 0;
+    let mut watched = None;
     while !alive.is_empty() {
         match wait_group(pgid, true) {
             Ok(Some(WaitStatus::Exited(pid, code))) => {
                 alive.retain(|&p| p != pid);
                 if Some(pid) == watch {
-                    watched_status = code;
+                    watched = Some(code);
                 }
             }
             Ok(Some(WaitStatus::Signaled(pid, sig, _))) => {
                 alive.retain(|&p| p != pid);
                 if Some(pid) == watch {
-                    watched_status = 128 + sig as i32;
+                    watched = Some(128 + sig as i32);
                 }
             }
             Ok(Some(WaitStatus::Stopped(_, sig))) => {
                 return ForegroundOutcome {
-                    watched_status,
+                    watched,
                     stopped: Some(Stopped {
                         signal: sig as i32,
                         alive,
@@ -215,7 +218,7 @@ pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> Foregroun
         }
     }
     ForegroundOutcome {
-        watched_status,
+        watched,
         stopped: None,
     }
 }
@@ -233,6 +236,8 @@ pub fn group_stopped(pgid: Pid) -> bool {
 pub fn resume_group(pgid: Pid) {
     let _ = killpg(pgid, Signal::SIGCONT);
 }
+
+const FINISHED_JOBS_KEPT: usize = 64;
 
 pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     let mut notices = Vec::new();
@@ -257,9 +262,16 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
                 }
             };
             if let Some((pid, code)) = finished {
+                if Some(pid) == job.last_pid {
+                    job.last_status = Some(code);
+                }
                 job.pids.retain(|&p| p != pid);
                 if job.pids.is_empty() {
+                    let code = job.last_status.unwrap_or(code);
                     job.state = JobState::Done(code);
+                    if let Some(last) = job.last_pid {
+                        session.finished_jobs.push((job.id, last, code));
+                    }
                     notices.push(format!(
                         "[{}]+ Done ({code})               {}",
                         job.id, job.command
@@ -272,5 +284,11 @@ pub fn reap_background_jobs(session: &mut Session) -> Vec<String> {
     session
         .jobs
         .retain(|j| !matches!(j.state, JobState::Done(_)));
+    session.publish_job_groups();
+    let excess = session
+        .finished_jobs
+        .len()
+        .saturating_sub(FINISHED_JOBS_KEPT);
+    session.finished_jobs.drain(..excess);
     notices
 }
