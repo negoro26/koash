@@ -66,6 +66,13 @@ cases = [
     ),
     ("unset without eza keeps koa's ls", "ls", None, empty, lambda o: "a.txt" in o and "EZA" not in o),
     ("an empty setting turns the view off", "ls", "", fake, lambda o: "a.txt" in o and "EZA" not in o),
+    (
+        "undo still works after a bare ls",
+        "rm a.txt; ls; undo",
+        None,
+        fake,
+        lambda o: "EZA" in o and "E_TX_OPAQUE" not in o and "restored_files" in o,
+    ),
 ]
 for label, line, view, path, ok in cases:
     out = terminal(line, view, path)

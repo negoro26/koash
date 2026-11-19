@@ -47,6 +47,8 @@ export KOA_LS_VIEW='eza -l --icons=always'
 export KOA_LS_VIEW=''
 ```
 
+The view does not stop `undo`: koa treats it as a program that only reads, so point `KOA_LS_VIEW` only at programs that do not change files.
+
 ## Undo
 
 koa saves a copy of a file before its own commands change it. That covers `rm`, `cp`, `mv`, `mkdir`, `patch`, `rename` and `>` or `>>` redirects.

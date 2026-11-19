@@ -34,6 +34,7 @@ pub(crate) struct Stage<'a> {
     pub display: Option<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
+    pub read_only: bool,
 }
 
 pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32 {
@@ -207,6 +208,7 @@ fn build_stages<'a>(
                     display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],
+                    read_only: false,
                 }
             }
             Command::Simple(simple) => {
@@ -221,7 +223,9 @@ fn build_stages<'a>(
                         )
                     })
                     .collect();
-                let argv = ls_view(session, pipeline, simple, &argv, sink).unwrap_or(argv);
+                let view = ls_view(session, pipeline, simple, &argv, sink);
+                let read_only = view.is_some();
+                let argv = view.unwrap_or(argv);
                 let builtin = argv
                     .first()
                     .and_then(|name| stage_builtin(name))
@@ -238,6 +242,7 @@ fn build_stages<'a>(
                             display: None,
                             env: Vec::new(),
                             redirs: &simple.redirections,
+                            read_only: false,
                         }
                     }
                     (Some(name), Some(builtin)) => Stage {
@@ -247,6 +252,7 @@ fn build_stages<'a>(
                         display: None,
                         env: Vec::new(),
                         redirs: &simple.redirections,
+                        read_only: false,
                     },
                     (Some(name), None) => {
                         if NETWORK_COMMANDS.contains(&name.as_str()) {
@@ -259,6 +265,7 @@ fn build_stages<'a>(
                             display: None,
                             env,
                             redirs: &simple.redirections,
+                            read_only,
                         }
                     }
                 }
