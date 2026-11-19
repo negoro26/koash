@@ -29,7 +29,7 @@ def close_terminal(line):
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(work)
-        os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
+        os.execvpe("bash", ["bash", "--norc", "--noprofile", "-i"], {**os.environ, "HOME": work, "HISTFILE": "/dev/null"})
     time.sleep(0.5)
     os.write(fd, (line + "\r").encode())
     time.sleep(1.0)
