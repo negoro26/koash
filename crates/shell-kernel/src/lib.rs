@@ -1,8 +1,10 @@
+mod brace;
 pub mod cow;
 pub mod env;
 pub mod exec;
 mod fs_util;
 pub mod kill;
+mod pathname;
 pub mod session;
 mod undo_store;
 pub mod word_expand;
@@ -17,4 +19,4 @@ pub use exec::{
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Preimage, Session, TxRecord};
 pub use undo_store::Snapshot;
-pub use word_expand::{expand_word, expand_words};
+pub use word_expand::{command_word, expand_word, expand_words};

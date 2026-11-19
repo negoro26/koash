@@ -1,14 +1,15 @@
 use std::path::Path;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use grep_regex::RegexMatcherBuilder;
+use grep_matcher::Matcher;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{Searcher, SearcherBuilder};
 use ignore::WalkBuilder;
+use rustc_hash::FxHashSet;
 use shell_kernel::Session;
 use shell_value::{
-    Datum, DynRows, Record, RecordBatch, Rows, Schema, StructuredDiagnostic, Value, hashline_bytes,
-    record,
+    Column, Datum, DynRows, RecordBatch, Rows, Schema, StructuredDiagnostic, Value, record,
 };
 
 use super::common::{
@@ -59,7 +60,7 @@ static SIGNATURE: Signature = Signature {
         Flag::switch(
             'n',
             "line-number",
-            "accepted; every row already carries its line number",
+            "number input rows that carry no line column",
         ),
         Flag::switch(
             'r',
@@ -137,106 +138,7 @@ impl Builtin for Grep {
         let mut searcher = SearcherBuilder::new().invert_match(opts.invert).build();
         if opts.positional.len() == 1 && !(opts.recursive && matches!(input, Value::Empty)) {
             match input {
-                Value::Batch(in_batch) => {
-                    let text_col = in_batch.col_index("text");
-                    let file_col = in_batch
-                        .col_index("file")
-                        .or_else(|| in_batch.col_index("path"));
-                    let line_col = in_batch.col_index("line");
-                    let hash_col = in_batch.col_index("hash");
-
-                    if let Some(t_idx) = text_col {
-                        let columns = if opts.files_only {
-                            <FileRow<'static> as Record>::COLUMNS
-                        } else {
-                            HASHLINE_COLUMNS
-                        };
-                        let mut rows = DynRows::new(Schema::of(columns));
-                        let mut seen_files = std::collections::HashSet::new();
-                        let mut count: u64 = 0;
-                        for (r, row) in in_batch.rows().enumerate() {
-                            let Some(text) = row.get(t_idx).as_str() else {
-                                continue;
-                            };
-                            let mut matched = false;
-                            let _ = searcher.search_slice(
-                                &matcher,
-                                text.as_bytes(),
-                                UTF8(|_, _| {
-                                    matched = true;
-                                    Ok(false)
-                                }),
-                            );
-                            if !matched {
-                                continue;
-                            }
-                            if opts.count_only {
-                                count += 1;
-                                continue;
-                            }
-                            let file = file_col
-                                .map(|f_idx| row.get(f_idx))
-                                .unwrap_or(Datum::Str("<input>"));
-                            if opts.files_only {
-                                let label = file.as_str().unwrap_or("<input>");
-                                if seen_files.insert(label) {
-                                    rows.push_with(|out| out.put(file));
-                                }
-                                continue;
-                            }
-                            rows.push_with(|out| {
-                                out.put(file);
-                                out.put(match line_col {
-                                    Some(l_idx) => row.get(l_idx),
-                                    None => Datum::UInt((r + 1) as u64),
-                                });
-                                match hash_col {
-                                    Some(h_idx) => out.put(row.get(h_idx)),
-                                    None => out.put_str(
-                                        std::str::from_utf8(&hashline_bytes(text.as_bytes()))
-                                            .unwrap_or(""),
-                                    ),
-                                }
-                                out.put_str(text);
-                            });
-                        }
-                        if opts.count_only {
-                            let mut counts = Rows::<CountRow<'static>>::new();
-                            counts.push(&CountRow {
-                                file: "<input>",
-                                count,
-                            });
-                            return Ok(Value::from_batch(counts.finish()?));
-                        }
-                        return Ok(Value::from_batch(rows.finish()?));
-                    }
-                    if let Some(p_idx) = file_col {
-                        let mut seen = std::collections::HashSet::new();
-                        let mut found = Found::new(&opts);
-                        for row in in_batch.rows() {
-                            if let Some(p_str) = row.get(p_idx).as_str()
-                                && seen.insert(p_str)
-                            {
-                                let target = resolve_path(session, p_str);
-                                if target.is_file() && path_matches_filters(&opts, &target) {
-                                    search_target_file(
-                                        &mut searcher,
-                                        &matcher,
-                                        &target,
-                                        p_str,
-                                        &mut found,
-                                    );
-                                }
-                            }
-                        }
-                        return Ok(Value::from_batch(found.finish()?));
-                    }
-                    return Ok(Value::from_batch(if opts.files_only {
-                        Rows::<FileRow<'static>>::new().finish()?
-                    } else {
-                        HashlineRows::new().finish()?
-                    }));
-                }
+                Value::Batch(batch) => return grep_table(&opts, &matcher, batch),
                 _ => {
                     let bytes = input.into_raw_bytes();
                     if opts.count_only {
@@ -336,6 +238,7 @@ struct GrepOpts {
     invert: bool,
     files_only: bool,
     count_only: bool,
+    line_numbers: bool,
     recursive: bool,
     no_messages: bool,
     includes: Option<GlobSet>,
@@ -369,6 +272,7 @@ fn parse_grep_opts(args: &[String]) -> Result<GrepOpts, StructuredDiagnostic> {
         invert: args.has("invert-match"),
         files_only: args.has("files-with-matches"),
         count_only: args.has("count"),
+        line_numbers: args.has("line-number"),
         recursive: args.has("recursive") || args.has("R"),
         no_messages: args.has("no-messages"),
         includes: build_globset(&patterns("include"))?,
@@ -431,4 +335,74 @@ fn search_target_file(
         }
         Found::Lines(rows) => search_file_with_hashline(searcher, matcher, path, label, rows),
     }
+}
+
+fn grep_table(
+    opts: &GrepOpts,
+    matcher: &RegexMatcher,
+    mut batch: RecordBatch,
+) -> Result<Value, StructuredDiagnostic> {
+    let cols = batch
+        .schema()
+        .text_column()
+        .or_else(|| batch.col_index("text"))
+        .map_or(0..batch.ncols(), |col| col..col + 1);
+    let mut line = Vec::new();
+    let mut scratch = String::new();
+    let mut seen = 0u64;
+    let mut numbers = Vec::new();
+    batch.retain_rows(|row| {
+        seen += 1;
+        let bytes = match (cols.len(), row.get(cols.start)) {
+            (1, Datum::Str(text)) => text.as_bytes(),
+            _ => {
+                line.clear();
+                row.write_line(cols.clone(), &mut line, &mut scratch);
+                &line
+            }
+        };
+        let kept = matcher.is_match(bytes).is_ok_and(|hit| hit) != opts.invert;
+        if kept && opts.line_numbers {
+            numbers.push(seen);
+        }
+        kept
+    });
+
+    if opts.count_only {
+        let mut counts = Rows::<CountRow<'static>>::new();
+        counts.push(&CountRow {
+            file: "<input>",
+            count: batch.nrows() as u64,
+        });
+        return Ok(Value::from_batch(counts.finish()?));
+    }
+    if opts.files_only {
+        let file_col = batch.col_index("file");
+        let mut files = Rows::<FileRow<'static>>::new();
+        let mut named = FxHashSet::default();
+        for row in batch.rows() {
+            let file = file_col.and_then(|col| row.get(col).as_str());
+            if named.insert(file) {
+                files.push(&FileRow {
+                    file: file.unwrap_or("<input>"),
+                });
+            }
+        }
+        return Ok(Value::from_batch(files.finish()?));
+    }
+    if opts.line_numbers && batch.col_index("line").is_none() {
+        let mut columns = vec![Column::new("line")];
+        columns.extend(batch.schema().columns().iter().cloned());
+        let mut rows = DynRows::new(Schema::from(columns));
+        for (row, number) in batch.rows().zip(numbers) {
+            rows.push_with(|out| {
+                out.put(Datum::UInt(number));
+                for cell in row.iter() {
+                    out.put(cell);
+                }
+            });
+        }
+        return Ok(Value::from_batch(rows.finish()?));
+    }
+    Ok(Value::from_batch(batch))
 }

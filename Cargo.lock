@@ -170,6 +170,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "globset"
 version = "0.4.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -545,6 +551,7 @@ name = "shell-builtins"
 version = "0.4.0"
 dependencies = [
  "globset",
+ "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
@@ -581,6 +588,7 @@ dependencies = [
 name = "shell-kernel"
 version = "0.4.0"
 dependencies = [
+ "glob",
  "nix",
  "rustc-hash",
  "serde",

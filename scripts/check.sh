@@ -30,6 +30,7 @@ python3 scripts/verify-ls-cells.py "$koa"
 python3 scripts/verify-json.py "$koa"
 python3 scripts/verify-flags.py "$koa"
 python3 scripts/verify-fit.py "$koa"
+python3 scripts/verify-typeahead.py "$koa"
 step "cargo-deny"
 cargo deny --locked check
 step "cargo-machete"

@@ -15,6 +15,7 @@ This document maps the code. Read it before changing the executor or adding a co
   A builtin writes rows with `Rows` over a `record!` struct, which fixes the columns and their order, or with `DynRows` when the columns are only known at run time.
   `Records` is the one JSON encoder: `to json`, ACP, TSP and RPC records all use it, with sorted keys and no null cells.
   An external stage gets `RecordBatch::write_lines` instead: the column a `record!` field marks `#[text]` (`text` for Hashline rows, `name` for `ls`, `path` for `find`), else a lone column, else tab-separated cells with `\t`, `\n`, `\r` and `\\` escaped. `select` clears the mark, so picked columns arrive as picked. A `>` redirect still writes JSON lines.
+  The builtin `grep` matches a table row against that same text (`Row::write_line`), with a column named `text` standing in when none is marked, and keeps whole matching rows.
 - `shell-kernel` owns `Session`: cwd, environment, jobs, the kill switch, the tx ledger, and the copy-on-write overlay.
   It also spawns and waits for process groups.
 - `shell-builtins` is the executor and every builtin command.
@@ -87,6 +88,23 @@ An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to ex
 `Flag::predicate` declares a single-dash long option (`find -name`) and `Flag::numeric` lets `-5` stand for the flag's value (`head -5`, `kill -9`).
 `Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
 `help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
+
+## Word expansion
+
+`word_expand::expand_words` turns a command's words into its argv, in bash's order: brace expansion, then variables and `~`, then pathname expansion.
+`Field` holds one expanded word as text plus runs that record which bytes came from literal text, from an unquoted variable, or from a quote, a backslash escape or `~`.
+Only the first kind opens a brace group, and quoted bytes never act as a pattern.
+A word with no `{`, `*`, `?` or `[` outside quotes skips all of this and costs one string.
+
+`brace` expands `{a,b}`, nested groups, and `{1..5}`, `{05..8}`, `{a..e}`, `{1..10..3}` sequences. A group that is not valid, such as `{a}` or `{`, stays literal.
+`pathname` matches one path segment at a time against a `glob::Pattern` and reads each directory once.
+Names are sorted bytewise within each directory, which is C-locale order, and a name that starts with `.` matches only a segment that starts with a literal `.`.
+`.` and `..` never match. A pattern that matches nothing, or fails to compile, stays as the literal word. A trailing `/` keeps only directories.
+`[` reads `[!x]` and `[^x]` as negation. `?` and a bracket match one Unicode scalar. POSIX classes such as `[[:alpha:]]` are not supported.
+A non-UTF-8 file name is never matched.
+
+The expansion applies to command words only. Assignment values and redirection targets go through `expand_word`, which does neither.
+`command_word` reads the first word without touching the file system, for the ledger summary.
 
 ## Operand failures
 
