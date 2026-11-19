@@ -33,6 +33,8 @@ koa -c 'ls | wc -l'
 koa -c 'find . -name "*.log" | xargs rm'
 ```
 
+Wildcards and braces expand as in bash: `rm *.log`, `cat src/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
+
 `grep` works on tables too. It matches the name for `ls`, the path for `find` and the line for `cat`, and keeps the whole row:
 
 ```bash
@@ -83,7 +85,6 @@ After such a line, exported variables, unset variables and the current folder ca
 
 ## Limits
 
-- Wildcards are not expanded yet. `rm *.txt` looks for a file named `*.txt`. Run such lines as `bash -c 'rm *.txt'` for now.
 - There is no `alias`, startup file or `history` command yet.
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
 - koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.

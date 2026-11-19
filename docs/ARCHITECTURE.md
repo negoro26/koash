@@ -84,6 +84,23 @@ An unknown option or a missing value is `E_ARGS`, which `diag_status` maps to ex
 `Args::parse_leading` is the `echo` variant: options only before the first operand, and a dash word it does not know is text.
 `help`, `discover`, the RPC `session.schemas` method, and Tab completion render the same list with `flag_spellings`.
 
+## Word expansion
+
+`word_expand::expand_words` turns a command's words into its argv, in bash's order: brace expansion, then variables and `~`, then pathname expansion.
+`Field` holds one expanded word as text plus runs that record which bytes came from literal text, from an unquoted variable, or from a quote, a backslash escape or `~`.
+Only the first kind opens a brace group, and quoted bytes never act as a pattern.
+A word with no `{`, `*`, `?` or `[` outside quotes skips all of this and costs one string.
+
+`brace` expands `{a,b}`, nested groups, and `{1..5}`, `{05..8}`, `{a..e}`, `{1..10..3}` sequences. A group that is not valid, such as `{a}` or `{`, stays literal.
+`pathname` matches one path segment at a time against a `glob::Pattern` and reads each directory once.
+Names are sorted bytewise within each directory, which is C-locale order, and a name that starts with `.` matches only a segment that starts with a literal `.`.
+`.` and `..` never match. A pattern that matches nothing, or fails to compile, stays as the literal word. A trailing `/` keeps only directories.
+`[` reads `[!x]` and `[^x]` as negation. `?` and a bracket match one Unicode scalar. POSIX classes such as `[[:alpha:]]` are not supported.
+A non-UTF-8 file name is never matched.
+
+The expansion applies to command words only. Assignment values and redirection targets go through `expand_word`, which does neither.
+`command_word` reads the first word without touching the file system, for the ledger summary.
+
 ## Operand failures
 
 A command that takes many operands (`rm`, `cp`, `mv`, `mkdir`, `cat`, `head`, `tail`, `stat`, `ls`, `grep`, `kill`) does not stop at the first failure.
