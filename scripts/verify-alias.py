@@ -76,6 +76,8 @@ RC_FILES = {
     "backslash inside single quotes": "echo 'q\\'\necho after-single\n",
     "continuation inside double quotes": "echo \"d\\\ne\"\n",
     "hash inside a word": "echo a#b \\\nc\n",
+    "comment line inside a continued command": "echo one \\\n# two\necho three\n",
+    "alias on a line ending in an escaped backslash": "alias q='echo Q' \\\\\nq after\n",
 }
 
 
@@ -104,7 +106,7 @@ def interactive(rc, home):
     os.close(fd)
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out.decode(errors="replace")).replace("\r", "")
     lines = text.split("koa>")[0].strip().splitlines()
-    return [line for line in lines if line.strip() != os.path.basename(home)]
+    return [line for line in lines if line.strip() != os.path.basename(home) and not line.startswith("koa: ")]
 
 
 for name, text in RC_FILES.items():
@@ -112,7 +114,7 @@ for name, text in RC_FILES.items():
     rc = os.path.join(root, "rc")
     with open(rc, "w") as fh:
         fh.write(text)
-    want = run(["bash", "-c", f"source {rc}"], "", root).stdout.strip().splitlines()
+    want = run(["bash", "-O", "expand_aliases", "-c", f"source {rc}"], "", root).stdout.strip().splitlines()
     got = interactive(rc, root)
     if got != want:
         bad.append(f"rc file, {name}: bash {want!r}, koa {got!r}")

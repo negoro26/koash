@@ -572,6 +572,7 @@ dependencies = [
  "shell-kernel",
  "shell-rpc",
  "shell-surface",
+ "shell-syntax",
  "shell-tui",
  "tokio",
 ]
