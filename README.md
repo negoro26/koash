@@ -67,7 +67,9 @@ koa -c 'patch main.rs 12:4c7 "let x = 2;"'
 - `@py` and `@js` send code to a Python or Node process that stays running, so variables persist between lines.
 - `refs NAME` finds every line that uses `NAME` as a whole word.
 - `discover "undo a change"` suggests commands for a task.
-- `help` lists every command, its options and its columns.
+- `help` lists every command and its columns. `help ls` shows one command in full, with every option.
+
+On a terminal a table never runs past the screen. The widest columns are cut first and a cut cell ends in `…`. koa reads the width from the terminal, or from `COLUMNS` when that is set. A table with one row that does not fit is printed as one `name  value` line per column, wrapped. Pipes, files, `to json` and RPC get the full table.
 
 ## For agents
 

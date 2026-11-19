@@ -9,6 +9,7 @@ pub(super) struct Help;
 record! {
     struct HelpRow<'a> {
         command: &'a str,
+        #[detail]
         flags: &'a str,
         columns: &'a str,
         description: &'a str,
@@ -39,10 +40,15 @@ impl Builtin for Help {
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         let filter = args.first().map(|s| s.as_str());
+        let exact = filter
+            .filter(|q| catalog().any(|s| s.name.eq_ignore_ascii_case(q) || s.aliases.contains(q)));
         let mut rows = Rows::<HelpRow<'static>>::with_capacity(catalog().count());
         for schema in catalog() {
-            if let Some(q) = filter
-                && !schema.name.eq_ignore_ascii_case(q)
+            if let Some(q) = exact {
+                if !schema.name.eq_ignore_ascii_case(q) && !schema.aliases.contains(&q) {
+                    continue;
+                }
+            } else if let Some(q) = filter
                 && !schema.name.contains(q)
                 && !schema.description.contains(q)
             {

@@ -20,6 +20,7 @@ This document maps the code. Read it before changing the executor or adding a co
   It also spawns and waits for process groups.
 - `shell-builtins` is the executor and every builtin command.
 - `shell-surface` renders a `Value` for a terminal, for TSP frames, and in the compact sigil format.
+  The width is the last stage's own `COLUMNS` assignment, else the session's `COLUMNS`, else the size of stdout's terminal (80 when that reports 0 columns), and `None` unless stdout is a terminal.
 - `shell-rpc` serves NDJSON-RPC and ACP over stdio or a socket. It runs the same executor with a capturing `Sink`.
 - `shell-tui` is the line editor, highlighter, and completer.
 - `shell-cli` is the `koa` binary. It picks a mode and calls into the crates above.
@@ -50,6 +51,10 @@ The last stage hands its value to the `Sink`.
 External stages are launched in one process group and joined to their neighbours with pipes.
 Output goes to the `Sink`, either the terminal or an RPC channel.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
+On a terminal the table renderer gets that width (`shell-value`'s `fit.rs`) and measures cells in display width, not bytes.
+A table that does not fit first drops its `#[detail]` columns (`help` marks `flags`), then cuts the widest columns with `…`.
+A single row that does not fit prints one `name  value` line per column, wrapped.
+Without a width the renderer is the old byte-width one, so pipes and files see the same bytes as before.
 A builtin can also report failures that did not stop it; see Operand failures.
 
 ## Registry
