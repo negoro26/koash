@@ -331,6 +331,15 @@ if not os.path.isdir(os.path.join(root, "d")):
     bad.append("'rm -r d; mkdir -p ''; undo': undo must restore d")
 shutil.rmtree(root)
 
+BACKGROUND = ["/bin/echo hi & wait", "printf 'a\\nb\\n' | /usr/bin/wc -l & wait", "/bin/echo x > bg.txt & wait; /bin/cat bg.txt"]
+for cmd in BACKGROUND:
+    root = tempfile.mkdtemp()
+    want = gnu(cmd, root).stdout
+    got = koa_run(cmd, root, False).stdout
+    if got != want:
+        bad.append(f"{cmd!r}: background output differs, bash {want!r}, koa {got!r}")
+    shutil.rmtree(root)
+
 root = glob_scratch()
 before = tree(root)
 koa_run("rm *.log; undo", root, False)
@@ -358,7 +367,8 @@ if out.returncode == 0 or "42" in out.stdout:
 shutil.rmtree(root)
 
 checked = len(READS) + len(FAILS) + len(USAGE) + len(TREES) + len(RAW) + len(FINDS) + TABLE_FORMS
-checked += len(LS_ORDERS) + len(LS_FALLBACKS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + len(SIGILS) + 4
+checked += len(LS_ORDERS) + len(LS_FALLBACKS) + len(GLOB_ARGS) + len(GLOB_ASSIGNED) + len(GLOB_TREES) + len(SIGILS)
+checked += len(BACKGROUND) + 4
 print(f"checked {checked} flag forms against GNU")
 for line in bad:
     print(line)

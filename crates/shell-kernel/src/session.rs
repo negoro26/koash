@@ -108,6 +108,8 @@ pub struct Job {
     pub id: usize,
     pub pgid: Pid,
     pub pids: Vec<Pid>,
+    pub last_pid: Option<Pid>,
+    pub last_status: Option<i32>,
     pub command: String,
     pub state: JobState,
 }
@@ -165,6 +167,7 @@ pub struct Session {
     pub saved_termios: Mutex<Option<Termios>>,
     pub tty: Option<OwnedFd>,
     pub jobs: Vec<Job>,
+    pub finished_jobs: Vec<(usize, Pid, i32)>,
     pub next_job_id: usize,
     pub should_exit: Option<i32>,
     pub mutated_files: Vec<String>,
@@ -245,6 +248,7 @@ impl Session {
             saved_termios: Mutex::new(saved_termios),
             tty,
             jobs: Vec::new(),
+            finished_jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
             mutated_files: Vec::new(),
@@ -304,6 +308,7 @@ impl Session {
             saved_termios: Mutex::new(None),
             tty: None,
             jobs: Vec::new(),
+            finished_jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
             mutated_files: Vec::new(),
@@ -370,6 +375,7 @@ impl Session {
             saved_termios: Mutex::new(None),
             tty: None,
             jobs: Vec::new(),
+            finished_jobs: Vec::new(),
             next_job_id: 1,
             should_exit: None,
             mutated_files: snap.mutated_files,
@@ -664,6 +670,8 @@ impl Session {
         &mut self,
         pgid: Pid,
         pids: Vec<Pid>,
+        last_pid: Option<Pid>,
+        last_status: Option<i32>,
         command: String,
         state: JobState,
     ) -> usize {
@@ -672,11 +680,29 @@ impl Session {
         self.jobs.push(Job {
             id,
             pgid,
+            last_pid,
+            last_status,
             pids,
             command,
             state,
         });
+        self.publish_job_groups();
         id
+    }
+
+    pub fn remove_job(&mut self, id: usize) {
+        self.jobs.retain(|j| j.id != id);
+        self.publish_job_groups();
+    }
+
+    pub fn publish_job_groups(&self) {
+        let own = nix::unistd::getpgrp();
+        crate::job_signals::publish(
+            self.jobs
+                .iter()
+                .filter(|j| j.pgid != own)
+                .map(|j| j.pgid.as_raw()),
+        );
     }
 
     pub fn give_terminal(&self, pgid: Pid) {

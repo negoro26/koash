@@ -55,6 +55,9 @@ A builtin produces a `Value` for the next stage.
 The last stage hands its value to the `Sink`.
 External stages are launched in one process group and joined to their neighbours with pipes.
 Output goes to the `Sink`, either the terminal or an RPC channel.
+A background pipeline with a builtin stage does not run in the shell. `run_pipeline` replaces its stages with one external stage, `koa -c '<pipeline source>'`, built by `detached_stage` from `Program::source`. That stage runs through `launch_external` like any other background process: its own process group (every background job has one, also under `koa -c`, so jobs never collect each other's exit status), a job in `session.jobs`, and an opaque tx. `detached_stage` passes `--last-status` and `--last-bg` so `$?` and `$!` in the line keep the parent's values.
+The child sees the session's cwd and environment. Its variable and cwd changes do not come back.
+`wait`, `fg`, `bg`, `jobs` and `kill %N` work on `session.jobs`. `reap_background_jobs` keeps the id, pid and status of finished jobs in `session.finished_jobs`, so `wait` still finds a job the prompt already reported. `$!` is the last background pid, kept in `SessionEnv`. A job remembers its last stage's pid and exit status, wherever that stage ended: in `reap_background_jobs`, in `wait`, or in the foreground before a Ctrl-Z. `wait` polls with `WNOHANG` so an RPC timeout, which trips the kill switch, ends only the wait and not the job.
 Errors are `StructuredDiagnostic`s. The sink prints them, and `diag_status` maps them to an exit code.
 On a terminal the table renderer gets that width (`shell-value`'s `fit.rs`) and measures cells in display width, not bytes.
 A table that does not fit first drops its `#[detail]` columns (`help` marks `flags`), then cuts the widest columns with `…`.

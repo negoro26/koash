@@ -1,6 +1,6 @@
-use nix::sys::signal::{Signal, kill as nix_kill};
+use nix::sys::signal::{Signal, kill as nix_kill, killpg};
 use nix::unistd::Pid;
-use shell_kernel::Session;
+use shell_kernel::{JobState, Session};
 use shell_value::{StructuredDiagnostic, Value};
 
 use super::common::usage_error;
@@ -13,7 +13,7 @@ pub(super) struct Kill;
 static SIGNATURE: Signature = Signature {
     name: "kill",
     aliases: &[],
-    description: "Send signal to process",
+    description: "Send a signal to a process or a job (%N)",
     flags: &[Flag::valued(
         's',
         "signal",
@@ -43,32 +43,68 @@ impl Builtin for Kill {
             Some(name) => parse_signal(name)?,
             None => Signal::SIGTERM,
         };
-        let pids = args
+        let targets = args
             .operands
             .iter()
-            .map(|operand| {
-                operand.parse::<i32>().map(Pid::from_raw).map_err(|_| {
-                    usage_error(
-                        format!("kill: invalid process id '{operand}'"),
-                        "kill [-s SIGNAL | -N] PID...",
-                    )
-                })
-            })
+            .map(|operand| parse_target(operand))
             .collect::<Result<Vec<_>, _>>()?;
-        if pids.is_empty() {
-            return Err(usage_error(
-                "kill requires at least one PID",
-                "kill [-s SIGNAL | -N] PID...",
-            ));
+        if targets.is_empty() {
+            return Err(usage_error("kill requires at least one PID or %JOB", USAGE));
         }
 
-        for pid in pids {
-            if let Err(e) = nix_kill(pid, sig) {
-                fail(session, "E_KILL", format!("kill: ({pid}): {}", e.desc()));
+        for (operand, target) in args.operands.iter().zip(targets) {
+            if let Err(what) = deliver(session, target, sig) {
+                fail(session, "E_KILL", format!("kill: ({operand}): {what}"));
             }
         }
         Ok(Value::Empty)
     }
+}
+
+const USAGE: &str = "kill [-s SIGNAL | -N] PID|%JOB...";
+
+enum Target {
+    Process(Pid),
+    Job(usize),
+}
+
+fn parse_target(operand: &str) -> Result<Target, StructuredDiagnostic> {
+    let invalid = || {
+        usage_error(
+            format!("kill: invalid process id or job '{operand}'"),
+            USAGE,
+        )
+    };
+    match operand.strip_prefix('%') {
+        Some(id) => id.parse().map(Target::Job).map_err(|_| invalid()),
+        None => operand
+            .parse()
+            .map(|pid| Target::Process(Pid::from_raw(pid)))
+            .map_err(|_| invalid()),
+    }
+}
+
+fn deliver(session: &Session, target: Target, sig: Signal) -> Result<(), &'static str> {
+    let id = match target {
+        Target::Process(pid) => return nix_kill(pid, sig).map_err(|e| e.desc()),
+        Target::Job(id) => id,
+    };
+    let job = session
+        .jobs
+        .iter()
+        .find(|j| j.id == id)
+        .ok_or("no such job")?;
+    let send = |sig: Signal| {
+        if job.pgid != session.shell_pgid {
+            return killpg(job.pgid, sig);
+        }
+        job.pids.iter().try_for_each(|&pid| nix_kill(pid, sig))
+    };
+    send(sig).map_err(|e| e.desc())?;
+    if job.state == JobState::Stopped && !matches!(sig, Signal::SIGCONT | Signal::SIGKILL) {
+        let _ = send(Signal::SIGCONT);
+    }
+    Ok(())
 }
 
 fn parse_signal(name: &str) -> Result<Signal, StructuredDiagnostic> {

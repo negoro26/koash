@@ -5,6 +5,7 @@ use shell_kernel::{
     JobState, Session, command_word, expand_word, expand_words, find_executable,
     reap_background_jobs,
 };
+use shell_surface::SurfaceMode;
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
 use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
@@ -57,7 +58,7 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
                 return KILLED_STATUS;
             }
             let background = matches!(item.op, Some(ListOp::Background));
-            status = run_pipeline(session, &item.pipeline, background, sink);
+            status = run_pipeline(session, &item.pipeline, background, &program.source, sink);
             session.last_status = status;
             if session.should_exit.is_some() {
                 break;
@@ -69,7 +70,13 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
     status
 }
 
-fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, sink: &Sink) -> i32 {
+fn run_pipeline(
+    session: &mut Session,
+    pipeline: &Pipeline,
+    background: bool,
+    source: &str,
+    sink: &Sink,
+) -> i32 {
     if pipeline.commands.is_empty() {
         return 0;
     }
@@ -85,38 +92,73 @@ fn run_pipeline(session: &mut Session, pipeline: &Pipeline, background: bool, si
         [Command::PosixFallback { .. }] if !background => EnvCapture::create(session),
         _ => None,
     };
-    let stages = build_stages(session, pipeline, sink, capture.as_ref());
-    let status = if background
+    let mut stages = build_stages(session, pipeline, sink, capture.as_ref());
+    if background
         && stages
             .iter()
             .any(|s| matches!(s.kind, StageKind::Builtin(_)))
     {
-        sink.diag(&StructuredDiagnostic::new(
-            "E_BG_BUILTIN",
-            "builtins cannot run in the background yet",
-            Some(pipeline.span),
-            None,
-        ));
-        2
-    } else {
-        let (status, tracked) = std::thread::scope(|scope| {
-            let plan = Plan {
-                sink,
-                scope,
-                background,
-            };
-            run_stages(session, &stages, &plan)
-        });
-        if let Some(pgid) = tracked {
-            session.kill.untrack(pgid);
+        match detached_stage(session, pipeline, source, sink) {
+            Ok(stage) => stages = vec![stage],
+            Err(diag) => {
+                sink.diag(&diag);
+                session.finish_tx();
+                return 1;
+            }
         }
-        status
-    };
+    }
+    let (status, tracked) = std::thread::scope(|scope| {
+        let plan = Plan {
+            sink,
+            scope,
+            background,
+        };
+        run_stages(session, &stages, &plan)
+    });
+    if let Some(pgid) = tracked {
+        session.kill.untrack(pgid);
+    }
     session.finish_tx();
     if let Some(capture) = capture {
         capture.apply(session);
     }
     status
+}
+
+fn detached_stage<'a>(
+    session: &Session,
+    pipeline: &Pipeline,
+    source: &str,
+    sink: &Sink,
+) -> Result<Stage<'a>, StructuredDiagnostic> {
+    let exe = std::env::current_exe()
+        .map_err(|e| StructuredDiagnostic::from_io("E_SPAWN", &e, Some(pipeline.span)))?;
+    let text = pipeline.span.slice(source).to_string();
+    let mut argv = vec![exe.to_string_lossy().into_owned()];
+    if matches!(
+        sink,
+        Sink::Tty {
+            mode: SurfaceMode::TernSurfaceProtocol
+        }
+    ) {
+        argv.push("--tsp".to_string());
+    }
+    argv.push("--last-status".to_string());
+    argv.push(session.last_status.to_string());
+    if let Some(pid) = session.env.get("!") {
+        argv.push("--last-bg".to_string());
+        argv.push(pid);
+    }
+    argv.push("-c".to_string());
+    argv.push(text.clone());
+    Ok(Stage {
+        kind: StageKind::External,
+        label: text.clone(),
+        argv,
+        display: Some(text),
+        env: Vec::new(),
+        redirs: &[],
+    })
 }
 
 fn command_name(session: &Session, cmd: &Command) -> Option<String> {
@@ -362,8 +404,17 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         return (final_status.unwrap_or(0), tracked);
     };
     if plan.background {
-        let id = session.add_job(pgid, launched.pids, summary, JobState::Running);
-        plan.sink.stderr_line(&format!("[{id}] {pgid}"));
+        let last = launched.last_pid.unwrap_or(pgid);
+        session.env.set_last_background(last.as_raw());
+        let id = session.add_job(
+            pgid,
+            launched.pids,
+            launched.last_pid,
+            None,
+            summary,
+            JobState::Running,
+        );
+        plan.sink.stderr_line(&format!("[{id}] {last}"));
         return (final_status.unwrap_or(0), tracked);
     }
     let watch = last_is_launched.then_some(launched.last_pid).flatten();

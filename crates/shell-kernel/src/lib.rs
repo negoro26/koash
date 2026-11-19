@@ -4,6 +4,7 @@ pub mod env;
 pub mod exec;
 mod fs_util;
 pub mod history;
+mod job_signals;
 pub mod kill;
 mod pathname;
 pub mod session;
@@ -18,6 +19,7 @@ pub use exec::{
     wait_foreground,
 };
 pub use history::{History, HistoryEntry};
+pub use job_signals::forward_to_jobs;
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Preimage, Session, TxRecord};
 pub use undo_store::Snapshot;

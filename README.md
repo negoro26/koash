@@ -61,6 +61,16 @@ koa -c 'cat main.rs'
 koa -c 'patch main.rs 12:4c7 "let x = 2;"'
 ```
 
+## Background jobs
+
+End a line with `&` to run it in the background. `jobs` lists the jobs, `fg` and `bg` bring one to the front or resume it, `kill %1` ends job 1, `wait` waits for them and Ctrl-Z stops the job in front. `$!` is the process id of the last background job, and `wait $!` or `wait %1` returns its exit status.
+
+```bash
+koa -c 'find . | where size > 1000000 | select path > big.txt &'
+```
+
+koa's own commands live inside the shell, so a background pipeline that uses one runs in a child `koa -c`. Like `&` in bash, variable and folder changes made there do not come back. `undo` refuses afterwards, as it does after any normal program. Output goes to the terminal, and over RPC it is dropped. Ctrl-Z cannot stop a koa command that runs in front, so start it with `&` if you may want it back.
+
 ## Other commands
 
 - `@sql SELECT 1 + 1` runs SQL in an SQLite database that lives as long as the session.
@@ -99,7 +109,6 @@ After such a line, exported variables, unset variables and the current folder ca
 
 
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
-- koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
 - Undo and the RPC policy do not see inside bash lines.
 - macOS is untested.

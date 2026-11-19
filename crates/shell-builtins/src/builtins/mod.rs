@@ -49,6 +49,7 @@ mod tx_log;
 mod unalias;
 mod undo;
 mod unset;
+mod wait;
 mod where_;
 mod which;
 
@@ -101,6 +102,7 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &jobs::Jobs,
     &fg::Fg,
     &bg::Bg,
+    &wait::Wait,
     &alias::Alias,
     &unalias::Unalias,
     &history::HistoryList,
