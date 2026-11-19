@@ -664,7 +664,7 @@ fn check_policy(session: &Session, program: &Program, policy: &PolicyConfig) -> 
                 }
                 Command::PosixFallback { .. } => continue,
             };
-            let args = expand_words(&simple.words, &session.env, session.last_status);
+            let args = expand_words(&simple.words, session);
             let prog = args.first().map(|s| s.as_str()).unwrap_or("");
 
             if !policy.allow_network && network_cmds.contains(&prog) {

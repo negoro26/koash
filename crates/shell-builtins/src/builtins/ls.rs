@@ -1,4 +1,5 @@
-use std::os::unix::fs::PermissionsExt;
+use std::fs::Metadata;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use shell_kernel::Session;
@@ -24,6 +25,45 @@ record! {
 
 const NAME: usize = column_index(<LsRow<'static> as Record>::COLUMNS, "name");
 
+#[derive(Clone, Copy)]
+enum SortBy {
+    Name,
+    Time,
+    Size,
+}
+
+impl SortBy {
+    fn key(self, meta: &Metadata) -> i128 {
+        match self {
+            Self::Name => 0,
+            Self::Time => {
+                -(i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()))
+            }
+            Self::Size => -i128::from(meta.len()),
+        }
+    }
+}
+
+struct Listing {
+    rows: Rows<LsRow<'static>>,
+    keys: Vec<i128>,
+    sort: SortBy,
+}
+
+impl Listing {
+    fn push(&mut self, name: &str, path: &Path, meta: &Metadata) {
+        self.keys.push(self.sort.key(meta));
+        self.rows.push(&LsRow {
+            ext: path.extension().and_then(|e| e.to_str()).unwrap_or(""),
+            kind: kind_of(meta),
+            modified: OrBlank(UnixTime::from_system(meta.modified())),
+            name,
+            permissions: FileMode(meta.permissions().mode() & 0o7777),
+            size: meta.len(),
+        });
+    }
+}
+
 pub(super) struct Ls;
 
 static SIGNATURE: Signature = Signature {
@@ -40,6 +80,15 @@ static SIGNATURE: Signature = Signature {
         Flag::short_switch(
             'l',
             "long listing; every record already carries size, time, and mode",
+        ),
+        Flag::short_switch('1', "one entry per line; every record is already one row"),
+        Flag::short_switch('t', "newest modification time first, ties by name"),
+        Flag::short_switch('S', "largest size first, ties by name"),
+        Flag::switch('r', "reverse", "reverse the order"),
+        Flag::switch(
+            'h',
+            "human-readable",
+            "accepted; size stays a number of bytes so it can be sorted and compared",
         ),
     ],
     columns: crate::builtin::columns!["name", "ext", "kind", "size", "modified", "permissions"],
@@ -68,15 +117,24 @@ impl Builtin for Ls {
             args.operands.clone()
         };
 
-        let mut rows = Rows::<LsRow<'static>>::new();
+        let sort = match args.last_of(&["t", "S"]) {
+            Some("t") => SortBy::Time,
+            Some("S") => SortBy::Size,
+            _ => SortBy::Name,
+        };
+        let mut listing = Listing {
+            rows: Rows::new(),
+            keys: Vec::new(),
+            sort,
+        };
         for target in targets {
             let resolved = resolve_path(session, target);
             if std::fs::metadata(&resolved).is_ok_and(|m| m.is_dir()) {
-                list_dir(session, &resolved, target, show_all, &mut rows);
+                list_dir(session, &resolved, target, show_all, &mut listing);
                 continue;
             }
             match std::fs::symlink_metadata(&resolved) {
-                Ok(meta) => push_ls_row(&mut rows, target, &resolved, &meta),
+                Ok(meta) => listing.push(target, &resolved, &meta),
                 Err(e) => {
                     fail(
                         session,
@@ -87,20 +145,19 @@ impl Builtin for Ls {
             }
         }
 
+        let Listing { rows, keys, .. } = listing;
         let mut batch = rows.finish_or_empty()?;
-        let order = batch.order_by(|row| row.get(NAME).as_str().unwrap_or(""));
+        let mut order =
+            batch.order_by_index(|i, row| (keys[i], row.get(NAME).as_str().unwrap_or("")));
+        if args.has("reverse") {
+            order = order.reverse();
+        }
         batch.take_rows(order);
         Ok(Value::from_batch(batch))
     }
 }
 
-fn list_dir(
-    session: &mut Session,
-    dir: &Path,
-    label: &str,
-    show_all: bool,
-    rows: &mut Rows<LsRow<'static>>,
-) {
+fn list_dir(session: &mut Session, dir: &Path, label: &str, show_all: bool, listing: &mut Listing) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -130,7 +187,7 @@ fn list_dir(
             continue;
         }
         match entry.metadata() {
-            Ok(meta) => push_ls_row(rows, &name, Path::new(&file_name), &meta),
+            Ok(meta) => listing.push(&name, Path::new(&file_name), &meta),
             Err(e) => {
                 fail(
                     session,
@@ -140,15 +197,4 @@ fn list_dir(
             }
         }
     }
-}
-
-fn push_ls_row(rows: &mut Rows<LsRow<'static>>, name: &str, path: &Path, meta: &std::fs::Metadata) {
-    rows.push(&LsRow {
-        ext: path.extension().and_then(|e| e.to_str()).unwrap_or(""),
-        kind: kind_of(meta),
-        modified: OrBlank(UnixTime::from_system(meta.modified())),
-        name,
-        permissions: FileMode(meta.permissions().mode() & 0o7777),
-        size: meta.len(),
-    });
 }

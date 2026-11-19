@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::sync::mpsc::SyncSender;
 
-use shell_surface::{SurfaceMode, render_surface};
+use shell_surface::{SurfaceMode, render_surface, terminal_width};
 use shell_value::{RecordBatch, StructuredDiagnostic, Value};
 
 #[derive(Debug)]
@@ -28,11 +28,11 @@ impl Sink {
         }
     }
 
-    pub fn emit(&self, value: Value) {
+    pub fn emit(&self, value: Value, columns: Option<&str>) {
         match self {
             Sink::Tty { mode } => {
                 let mut out = std::io::stdout().lock();
-                render_surface(value, &mut out, *mode);
+                render_surface(value, &mut out, *mode, terminal_width(columns));
             }
             Sink::Capture(tx) => match value {
                 Value::Empty => {}
