@@ -150,7 +150,7 @@ impl LineEditor {
                         return Ok(ReadLineResult::Eof);
                     }
                 }
-                (KeyCode::Enter, _) => {
+                (KeyCode::Enter, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                     let _ = write!(stdout, "\r\n");
                     let _ = stdout.flush();
                     return Ok(ReadLineResult::Line(buf));
@@ -351,6 +351,7 @@ impl Search {
             KeyCode::Char('g') if ctrl => SearchKey::Cancel,
             KeyCode::Char('c') if ctrl => SearchKey::Abort,
             KeyCode::Enter => SearchKey::Run,
+            KeyCode::Char('j') if ctrl => SearchKey::Run,
             KeyCode::Char('r') if ctrl => {
                 self.step(history, self.found, true);
                 SearchKey::Stay
