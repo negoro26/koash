@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::mpsc::SyncSender;
 
 use shell_surface::{SurfaceMode, render_surface};
@@ -20,6 +20,11 @@ pub enum Sink {
 impl Sink {
     pub fn is_capture(&self) -> bool {
         matches!(self, Sink::Capture(_))
+    }
+
+    pub(crate) fn shows_terminal_view(&self) -> bool {
+        matches!(self, Sink::Tty { mode } if *mode != SurfaceMode::TernSurfaceProtocol)
+            && std::io::stdout().is_terminal()
     }
 
     pub(crate) fn chunk(&self, chunk: Chunk) {

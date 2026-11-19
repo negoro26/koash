@@ -301,8 +301,17 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                 });
             }
             StageKind::Builtin(builtin) => {
-                let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
-                let result = input.and_then(|value| builtin.run(session, &stage.argv[1..], value));
+                let viewed = (last && idx == 0 && shows_terminal_view(stage, plan))
+                    .then(|| builtin.terminal_view(session, &stage.argv[1..]))
+                    .flatten();
+                let result = match viewed {
+                    Some(view) => view.map(Value::Bytes),
+                    None => {
+                        let input =
+                            take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
+                        input.and_then(|value| builtin.run(session, &stage.argv[1..], value))
+                    }
+                };
                 let reports = session.take_reports();
                 for report in &reports {
                     plan.sink.diag(report);
@@ -407,6 +416,16 @@ fn take_builtin_input(
         .map(Value::Bytes)
         .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
     }
+}
+
+fn shows_terminal_view(stage: &Stage, plan: &Plan) -> bool {
+    plan.sink.shows_terminal_view()
+        && !stage.redirs.iter().any(|r| {
+            matches!(
+                r.kind,
+                RedirectKind::StdoutTrunc | RedirectKind::StdoutAppend
+            )
+        })
 }
 
 fn reads_shell_stdin(builtin: &dyn Builtin, stage: &Stage, plan: &Plan) -> bool {

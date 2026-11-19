@@ -146,6 +146,14 @@ pub trait Builtin: Sync {
         input: Value,
     ) -> Result<Value, StructuredDiagnostic>;
 
+    fn terminal_view(
+        &self,
+        _session: &mut Session,
+        _args: &[String],
+    ) -> Option<Result<Vec<u8>, StructuredDiagnostic>> {
+        None
+    }
+
     fn run_alone(&self, _session: &mut Session, _args: &[String], _sink: &Sink) -> i32 {
         2
     }
