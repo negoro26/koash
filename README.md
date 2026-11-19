@@ -14,9 +14,10 @@ cargo install --git https://github.com/negoro26/koash
 
 ## Use
 
-Run `koa` for an interactive shell, or `koa -c '...'` to run one line.
+Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the interactive shell, Up and Down step through history, Ctrl-R searches it, and Tab completes commands and paths. The usual readline keys work: Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, Ctrl-W, Alt-B and Alt-F.
 
 ```bash
+koa -c 'ls -t | first 5'
 koa -c 'ls | where size > 1000 | sort-by size | select name size'
 koa -c 'find src | where ext == rs | first 5'
 koa -c 'cat notes.txt | where text =~ todo'
@@ -34,10 +35,11 @@ koa -c 'find . -name "*.log" | xargs rm'
 
 Wildcards and braces expand as in bash: `rm *.log`, `cat src/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
 
-`grep` is koa's own command and searches lines of text. To filter file names, use `where`:
+`grep` works on tables too. It matches the name for `ls`, the path for `find` and the line for `cat`, and keeps the whole row:
 
 ```bash
-koa -c 'ls | where name =~ test'
+koa -c 'ls | grep -i test | select name size'
+koa -c 'find . | grep -v target'
 ```
 
 ## Undo
@@ -83,8 +85,7 @@ After such a line, exported variables, unset variables and the current folder ca
 
 ## Limits
 
-- There is no `alias`, startup file or `history` command yet, and Ctrl-R does not search history.
-- `ls` does not support `-t`, `-S` or `-r` yet. Those options run the system `ls` and return plain text.
+- There is no `alias`, startup file or `history` command yet.
 - Commands hold a whole table in memory before passing it on. They do not stream yet.
 - koa's own commands cannot run in the background. `ls &` fails with `E_BG_BUILTIN`.
 - The RPC `policy` blocks commands by name only. A full path such as `/usr/bin/touch` gets past it, so it is not a sandbox.
