@@ -7,6 +7,9 @@ import sys
 import tempfile
 
 koa = os.path.abspath(sys.argv[1])
+gnu_ls = subprocess.run(["ls", "--version"], capture_output=True, text=True).stdout
+if "GNU coreutils" not in gnu_ls:
+    sys.exit(f"verify-flags.py compares koa with GNU coreutils, but ls is: {gnu_ls.splitlines()[:1]}")
 TEXT = "".join(f"line {i}\n" for i in range(1, 21))
 
 READS = [

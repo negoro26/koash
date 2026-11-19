@@ -20,6 +20,13 @@ jobs:
         with:
           tool: cargo-nextest,cargo-deny,cargo-machete,taplo-cli,typos-cli
       - uses: Swatinem/rust-cache@v2
+      - name: Use GNU coreutils, which scripts/verify-flags.py compares against
+        run: |
+          if ! ls --version | grep -q 'GNU coreutils'; then
+            sudo apt-get update
+            sudo apt-get install -y --allow-remove-essential coreutils-from-gnu
+          fi
+          ls --version | head -1
       - run: scripts/check.sh
       - name: Mount a btrfs volume
         run: |
