@@ -38,6 +38,14 @@ koa -c 'find . -name "*.log" | xargs rm'
 koa -c 'ls | where name =~ test'
 ```
 
+To see a bare `ls` the way another program draws it, for example eza, set `KOA_LS_VIEW`, in `~/.koarc` or your environment:
+
+```bash
+export KOA_LS_VIEW='eza -lh --group-directories-first --icons=auto'
+```
+
+Then `ls` and `ls some/dir` typed at a terminal run that program on the same paths. Everything else is still koa's table: an `ls` with an option, in a pipe, with a redirect, or when the output is not a terminal. If the program is not installed, koa's table is shown.
+
 ## Undo
 
 koa saves a copy of a file before its own commands change it. That covers `rm`, `cp`, `mv`, `mkdir`, `patch`, `rename` and `>` or `>>` redirects.

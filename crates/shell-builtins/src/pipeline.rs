@@ -221,6 +221,7 @@ fn build_stages<'a>(
                         )
                     })
                     .collect();
+                let argv = ls_view(session, pipeline, simple, &argv, sink).unwrap_or(argv);
                 let builtin = argv
                     .first()
                     .and_then(|name| stage_builtin(name))
@@ -266,6 +267,30 @@ fn build_stages<'a>(
         stages.push(stage);
     }
     stages
+}
+
+fn ls_view(
+    session: &Session,
+    pipeline: &Pipeline,
+    simple: &SimpleCommand,
+    argv: &[String],
+    sink: &Sink,
+) -> Option<Vec<String>> {
+    let (name, operands) = argv.split_first()?;
+    let bare = name == "ls"
+        && pipeline.commands.len() == 1
+        && simple.redirections.is_empty()
+        && !sink.is_capture()
+        && !operands.iter().any(|a| a.starts_with('-'))
+        && nix::unistd::isatty(1).unwrap_or(false);
+    if !bare {
+        return None;
+    }
+    let view = session.env.get("KOA_LS_VIEW")?;
+    let mut view: Vec<String> = view.split_whitespace().map(str::to_string).collect();
+    find_executable(session, view.first()?)?;
+    view.extend(operands.iter().cloned());
+    Some(view)
 }
 
 fn summarize(stages: &[Stage]) -> String {
