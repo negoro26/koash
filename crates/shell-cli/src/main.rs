@@ -139,10 +139,6 @@ fn main() -> ExitCode {
 
     let force_tsp = args.iter().any(|a| a == "--tsp");
 
-    if let Ok(cwd) = std::env::current_dir() {
-        CowWorkspace::sweep_orphans(&cwd);
-    }
-
     if let Some(pos) = find_command_flag(&args) {
         if pos + 1 >= args.len() {
             eprintln!("koa: -c requires a command string");
@@ -173,6 +169,7 @@ fn run_oneshot(
             return ExitCode::from(1);
         }
     };
+    CowWorkspace::sweep_orphans(&session.cwd);
     shell_kernel::forward_to_jobs(false);
     session.last_status = last_status.unwrap_or(0);
     if let Some(pid) = last_bg {
@@ -208,6 +205,7 @@ fn run_interactive_repl(force_tsp: bool, read_rc: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    CowWorkspace::sweep_orphans(&session.cwd);
     shell_kernel::forward_to_jobs(session.interactive);
 
     if session.interactive {

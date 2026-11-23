@@ -141,6 +141,10 @@ impl CowWorkspace {
     }
 
     pub fn sweep_orphans(root: &Path) -> usize {
+        let state = root.join(".koa");
+        if !std::fs::symlink_metadata(&state).is_ok_and(|m| m.file_type().is_dir()) {
+            return 0;
+        }
         ["sessions", "undo"]
             .into_iter()
             .filter_map(|child| state_subdir(root, child))
