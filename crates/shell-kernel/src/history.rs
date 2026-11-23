@@ -82,4 +82,15 @@ impl History {
             .iter()
             .rposition(|e| skip != Some(e.command.as_str()) && e.command.contains(query))
     }
+
+    pub fn suggest_prefix(&self, prefix: &str) -> Option<&str> {
+        if prefix.is_empty() {
+            return None;
+        }
+        self.entries.iter().rev().find_map(|e| {
+            e.command
+                .strip_prefix(prefix)
+                .filter(|rest| !rest.is_empty())
+        })
+    }
 }

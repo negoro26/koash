@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Once;
@@ -9,8 +10,8 @@ use crossterm::queue;
 use crossterm::terminal::{self, Clear, ClearType};
 use shell_value::StructuredDiagnostic;
 
-use crate::complete::complete_line;
-use crate::highlight::highlight_line;
+use crate::complete::complete_line_with_aliases;
+use crate::highlight::highlight_line_with_aliases;
 use shell_kernel::History;
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -65,6 +66,16 @@ impl LineEditor {
         prompt: &str,
         cwd: &Path,
     ) -> Result<ReadLineResult, StructuredDiagnostic> {
+        let empty = BTreeMap::new();
+        self.read_line_with_aliases(prompt, cwd, &empty)
+    }
+
+    pub fn read_line_with_aliases(
+        &mut self,
+        prompt: &str,
+        cwd: &Path,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<ReadLineResult, StructuredDiagnostic> {
         let _guard = RawModeGuard::enter()?;
         let mut stdout = io::stdout();
         let mut buf = String::new();
@@ -73,7 +84,7 @@ impl LineEditor {
         let mut saved_draft = String::new();
         let mut search: Option<Search> = None;
 
-        redraw(&mut stdout, prompt, &buf, cur)?;
+        redraw_prompt(&mut stdout, prompt, &buf, cur, None, aliases)?;
 
         loop {
             if !event::poll(Duration::from_millis(16))
@@ -93,19 +104,20 @@ impl LineEditor {
             if let Some(mut s) = search.take() {
                 match s.key(&self.history, code, modifiers) {
                     SearchKey::Stay => {
-                        s.draw(&mut stdout, &self.history)?;
+                        s.draw(&mut stdout, &self.history, aliases)?;
                         search = Some(s);
                         continue;
                     }
                     SearchKey::Cancel => {
                         buf = s.origin;
                         cur = s.origin_cur;
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                         continue;
                     }
                     SearchKey::Run => {
                         let line = s.shown(&self.history).0.to_string();
-                        redraw(&mut stdout, prompt, &line, line.len())?;
+                        redraw_prompt(&mut stdout, prompt, &line, line.len(), None, aliases)?;
                         let _ = write!(stdout, "\r\n");
                         let _ = stdout.flush();
                         return Ok(ReadLineResult::Line(line));
@@ -113,7 +125,8 @@ impl LineEditor {
                     SearchKey::Abort => {
                         buf = s.origin;
                         cur = s.origin_cur;
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                     SearchKey::Leave => {
                         match s.found.and_then(|i| self.history.get(i).map(|e| (i, e))) {
@@ -130,7 +143,8 @@ impl LineEditor {
                                 cur = s.origin_cur;
                             }
                         }
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                         if code == KeyCode::Char('j') && modifiers.contains(KeyModifiers::CONTROL) {
                             continue;
                         }
@@ -144,7 +158,7 @@ impl LineEditor {
                     cur = 0;
                     hist_idx = None;
                     let _ = write!(stdout, "^C\r\n");
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, None, aliases)?;
                 }
                 (KeyCode::Char('d'), m) if m.contains(KeyModifiers::CONTROL) => {
                     if buf.is_empty() {
@@ -154,6 +168,7 @@ impl LineEditor {
                     }
                 }
                 (KeyCode::Enter, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, None, aliases)?;
                     let _ = write!(stdout, "\r\n");
                     let _ = stdout.flush();
                     return Ok(ReadLineResult::Line(buf));
@@ -163,35 +178,50 @@ impl LineEditor {
                         let prev = prev_char_boundary(&buf, cur);
                         buf.drain(prev..cur);
                         cur = prev;
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                 }
                 (KeyCode::Delete, _) => {
                     if cur < buf.len() {
                         let next = next_char_boundary(&buf, cur);
                         buf.drain(cur..next);
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                 }
                 (KeyCode::Left, _) => {
                     if cur > 0 {
                         cur = prev_char_boundary(&buf, cur);
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                 }
                 (KeyCode::Right, _) => {
                     if cur < buf.len() {
                         cur = next_char_boundary(&buf, cur);
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
+                    } else if let Some(suffix) = ghost_for(&self.history, &buf, cur) {
+                        buf.push_str(suffix);
+                        cur = buf.len();
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, None, aliases)?;
                     }
                 }
                 (KeyCode::Home, _) => {
                     cur = 0;
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::End, _) => {
-                    cur = buf.len();
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    if cur < buf.len() {
+                        cur = buf.len();
+                    } else if let Some(suffix) = ghost_for(&self.history, &buf, cur) {
+                        buf.push_str(suffix);
+                        cur = buf.len();
+                    }
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Up, _) => {
                     if !self.history.is_empty() {
@@ -206,7 +236,7 @@ impl LineEditor {
                         if let Some(entry) = self.history.get(next_idx) {
                             buf = entry.command.clone();
                             cur = buf.len();
-                            redraw(&mut stdout, prompt, &buf, cur)?;
+                            redraw_prompt(&mut stdout, prompt, &buf, cur, None, aliases)?;
                         }
                     }
                 }
@@ -224,14 +254,16 @@ impl LineEditor {
                             buf = saved_draft.clone();
                             cur = buf.len();
                         }
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                 }
                 (KeyCode::Tab, _) => {
-                    let candidates = complete_line(&buf, cur, cwd);
+                    let candidates = complete_line_with_aliases(&buf, cur, cwd, aliases);
                     if candidates.len() == 1 {
                         apply_completion(&mut buf, &mut cur, &candidates[0], false);
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     } else if candidates.len() > 1 {
                         let lcp = longest_common_prefix(&candidates);
                         let token_start = current_token_start(&buf, cur);
@@ -241,49 +273,69 @@ impl LineEditor {
                         } else {
                             let _ = write!(stdout, "\r\n{}\r\n", candidates.join("  "));
                         }
-                        redraw(&mut stdout, prompt, &buf, cur)?;
+                        let ghost = ghost_for(&self.history, &buf, cur);
+                        redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                     }
                 }
                 (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
                     let s = Search::new(&buf, cur);
-                    s.draw(&mut stdout, &self.history)?;
+                    s.draw(&mut stdout, &self.history, aliases)?;
                     search = Some(s);
                 }
                 (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
                     cur = 0;
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    cur = buf.len();
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    if cur < buf.len() {
+                        cur = buf.len();
+                    } else if let Some(suffix) = ghost_for(&self.history, &buf, cur) {
+                        buf.push_str(suffix);
+                        cur = buf.len();
+                    }
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
                     buf.drain(..cur);
                     cur = 0;
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('k'), m) if m.contains(KeyModifiers::CONTROL) => {
                     buf.truncate(cur);
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
                     let start = word_back(&buf, cur, char::is_whitespace);
                     buf.drain(start..cur);
                     cur = start;
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('b'), m) if m.contains(KeyModifiers::ALT) => {
                     cur = word_back(&buf, cur, not_alnum);
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char('f'), m) if m.contains(KeyModifiers::ALT) => {
-                    cur = word_forward(&buf, cur, not_alnum);
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    if cur < buf.len() {
+                        cur = word_forward(&buf, cur, not_alnum);
+                    } else if let Some(suffix) = ghost_for(&self.history, &buf, cur) {
+                        let end = word_forward(suffix, 0, not_alnum);
+                        buf.push_str(&suffix[..end]);
+                        cur = buf.len();
+                    }
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
                     buf.insert(cur, c);
                     cur += c.len_utf8();
-                    redraw(&mut stdout, prompt, &buf, cur)?;
+                    let ghost = ghost_for(&self.history, &buf, cur);
+                    redraw_prompt(&mut stdout, prompt, &buf, cur, ghost, aliases)?;
                 }
                 _ => {}
             }
@@ -291,13 +343,21 @@ impl LineEditor {
     }
 }
 
-fn redraw(
+fn ghost_for<'a>(history: &'a History, buf: &str, cur: usize) -> Option<&'a str> {
+    (cur == buf.len() && !buf.is_empty())
+        .then(|| history.suggest_prefix(buf))
+        .flatten()
+}
+
+fn redraw_prompt(
     stdout: &mut io::Stdout,
     prompt: &str,
     buf: &str,
     cur: usize,
+    ghost: Option<&str>,
+    aliases: &BTreeMap<String, String>,
 ) -> Result<(), StructuredDiagnostic> {
-    let highlighted = highlight_line(buf);
+    let highlighted = highlight_line_with_aliases(buf, aliases);
     let char_offset = buf.get(..cur).map(|s| s.chars().count()).unwrap_or(0);
     let prompt_chars = prompt.chars().count();
     let target_col = (prompt_chars + char_offset) as u16;
@@ -310,6 +370,10 @@ fn redraw(
     .map_err(|e| StructuredDiagnostic::from_io("E_TERM_WRITE", &e, None))?;
     write!(stdout, "{prompt}{highlighted}")
         .map_err(|e| StructuredDiagnostic::from_io("E_TERM_WRITE", &e, None))?;
+    if let Some(suffix) = ghost {
+        write!(stdout, "\x1b[90m{suffix}\x1b[0m")
+            .map_err(|e| StructuredDiagnostic::from_io("E_TERM_WRITE", &e, None))?;
+    }
     queue!(stdout, cursor::MoveToColumn(target_col))
         .map_err(|e| StructuredDiagnostic::from_io("E_TERM_WRITE", &e, None))?;
     stdout
@@ -407,7 +471,12 @@ impl Search {
         }
     }
 
-    fn draw(&self, stdout: &mut io::Stdout, history: &History) -> Result<(), StructuredDiagnostic> {
+    fn draw(
+        &self,
+        stdout: &mut io::Stdout,
+        history: &History,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), StructuredDiagnostic> {
         let (text, at) = self.shown(history);
         let label = if self.failed {
             "failed reverse-i-search"
@@ -415,7 +484,7 @@ impl Search {
             "reverse-i-search"
         };
         let prompt = format!("({label})'{}': ", self.query);
-        redraw(stdout, &prompt, text, at)
+        redraw_prompt(stdout, &prompt, text, at, None, aliases)
     }
 }
 
