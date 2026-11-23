@@ -103,6 +103,15 @@ impl Builtin for Ls {
         &SIGNATURE
     }
 
+    fn terminal_view(
+        &self,
+        session: &mut Session,
+        args: &[String],
+        columns: Option<&str>,
+    ) -> Option<Result<Vec<u8>, StructuredDiagnostic>> {
+        Some(super::ls_view::render(&SIGNATURE, session, args, columns))
+    }
+
     fn run(
         &self,
         session: &mut Session,

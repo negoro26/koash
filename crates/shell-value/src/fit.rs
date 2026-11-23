@@ -31,6 +31,10 @@ impl TableStyle {
     };
 }
 
+pub fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
 fn clean(text: &str) -> Cow<'_, str> {
     if text.chars().any(char::is_control) {
         Cow::Owned(

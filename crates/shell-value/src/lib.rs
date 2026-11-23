@@ -17,7 +17,7 @@ use thiserror::Error;
 
 pub use batch::{RecordBatch, Row, RowOrder};
 pub use datum::Datum;
-pub use fit::{TableStyle, render_fitted};
+pub use fit::{TableStyle, display_width, render_fitted};
 pub use json::{Records, StructuredRecord};
 pub use rows::{CellValue, DynRows, Record, RowSink, Rows};
 pub use schema::{ColType, Column, Schema, column_index};

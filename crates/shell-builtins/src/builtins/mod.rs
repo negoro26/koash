@@ -27,6 +27,7 @@ mod js;
 mod kill;
 mod last;
 mod ls;
+mod ls_view;
 mod mkdir;
 mod mv;
 mod patch;

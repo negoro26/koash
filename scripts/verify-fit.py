@@ -161,7 +161,7 @@ flags = grep_row["flags"].split()
 description_words = grep_row["description"].split()
 
 for cols in WIDTHS:
-    for script in ["help", "help grep", "ls", "ps", "env", "help | select command flags"]:
+    for script in ["help", "help grep", "ls | sort-by name", "ps", "env", "help | select command flags"]:
         out = on_tty(script, cols, root)
         expect(out.strip() != "", f"{cols} cols {script!r}: no output")
         expect(widest(out) <= cols, f"{cols} cols {script!r}: widest line is {widest(out)}")
@@ -175,41 +175,41 @@ for cols in WIDTHS:
     for word in [*flags, *description_words]:
         expect(word in tokens, f"{cols} cols 'help grep': {word!r} missing")
 
-    out = on_tty("ls", cols, root)
-    expect("…" in out, f"{cols} cols 'ls': no cut cell")
-    expect("a.txt" in out and "b.txt" in out, f"{cols} cols 'ls': short names cut")
-    expect(LONG not in out and CJK not in out, f"{cols} cols 'ls': long names not cut")
+    out = on_tty("ls | sort-by name", cols, root)
+    expect("…" in out, f"{cols} cols 'ls | sort-by name': no cut cell")
+    expect("a.txt" in out and "b.txt" in out, f"{cols} cols 'ls | sort-by name': short names cut")
+    expect(LONG not in out and CJK not in out, f"{cols} cols 'ls | sort-by name': long names not cut")
 
-out = on_tty("ls", 120, root, {"COLUMNS": "60"})
+out = on_tty("ls | sort-by name", 120, root, {"COLUMNS": "60"})
 expect(widest(out) <= 60, f"COLUMNS=60 on 120 cols: widest line is {widest(out)}")
-out = on_tty("ls", 80, root, {"COLUMNS": "200"})
+out = on_tty("ls | sort-by name", 80, root, {"COLUMNS": "200"})
 expect(80 < widest(out) <= 200 and LONG in out, f"COLUMNS=200 on 80 cols: widest line is {widest(out)}")
 
-out = on_tty_repl("ls", 80, root)
+out = on_tty_repl("ls | sort-by name", 80, root)
 expect("…" in out and widest(out) <= 80, f"repl at 80 cols: widest line is {widest(out)}")
 out = on_tty_repl("help", 40, root)
 expect("description" in out and widest(out) <= 40, f"repl at 40 cols: widest line is {widest(out)}")
 
-out = on_tty("export COLUMNS=40; ls", 80, root)
+out = on_tty("export COLUMNS=40; ls | sort-by name", 80, root)
 expect(widest(out) <= 40 and "…" in out, f"export COLUMNS=40 in the session: widest line is {widest(out)}")
-out = on_tty("COLUMNS=40 ls", 80, root)
+out = on_tty("ls | COLUMNS=40 sort-by name", 80, root)
 expect(widest(out) <= 40 and "…" in out, f"COLUMNS=40 prefix: widest line is {widest(out)}")
-out = on_tty("COLUMNS=40 ls", 80, root, {"COLUMNS": "100"})
+out = on_tty("ls | COLUMNS=40 sort-by name", 80, root, {"COLUMNS": "100"})
 expect(widest(out) <= 40, f"prefix COLUMNS over inherited 100: widest line is {widest(out)}")
-out = on_tty_repl("ls", 80, root, {"COLUMNS": "100"})
+out = on_tty_repl("ls | sort-by name", 80, root, {"COLUMNS": "100"})
 expect(widest(out) <= 100 and widest(out) > 80, f"inherited COLUMNS=100 in the repl: widest line is {widest(out)}")
-out = on_tty_repl("ls", 80, root, {"COLUMNS": "100"}, before=["unset COLUMNS"], resize=40)
+out = on_tty_repl("ls | sort-by name", 80, root, {"COLUMNS": "100"}, before=["unset COLUMNS"], resize=40)
 expect(0 < widest(out) <= 40, f"unset COLUMNS then resize to 40: widest line is {widest(out)}")
 
-out = on_split_tty("ls", 100, 40, root)
+out = on_split_tty("ls | sort-by name", 100, 40, root)
 expect(0 < widest(out) <= 40 and "…" in out, f"stdout 40 cols, controlling terminal 100: widest line is {widest(out)}")
-out = on_tty("ls", 0, root)
+out = on_tty("ls | sort-by name", 0, root)
 expect(0 < widest(out) <= 80 and "…" in out, f"terminal reporting 0 columns: widest line is {widest(out)}")
 
 one = tempfile.mkdtemp()
 open(os.path.join(one, CJK), "w").close()
 for cols in [1, 2, 3, 5, 10]:
-    for script, cwd in [("ls", root), ("ls", one), ("help grep", root), ("help", root)]:
+    for script, cwd in [("ls | sort-by name", root), ("ls | sort-by name", one), ("help grep", root), ("help", root)]:
         out = on_tty(script, cols, cwd)
         expect(out.strip() != "" and widest(out) <= cols, f"{cols} cols {script!r}: widest line is {widest(out)}")
     out = on_tty("ls", cols, root, {"TERM_PROGRAM": "Tern"})
