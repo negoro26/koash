@@ -24,7 +24,7 @@ koa -c 'cat notes.txt | where text =~ todo'
 koa -c 'ps | where name == bash | to json'
 ```
 
-`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `sort-by`, `first`, `last` and `to json` work on those tables.
+`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. On a terminal without a pipe or redirect, `ls` draws a native GNU-style view (multi-column `-C` fitting the terminal width, `-1`, `-l`, `-lh`, `LS_COLORS`, `NO_COLOR`, and symlink targets), while pipes, redirects, `to json`, TSP and RPC still get the full structured table. `where`, `select`, `sort-by`, `first`, `last` and `to json` work on those tables.
 
 Normal programs still work. When a table goes into one, it gets the text bash would send:
 
