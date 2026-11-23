@@ -9,6 +9,7 @@ mod cat;
 mod cd;
 mod cp;
 mod diag;
+mod dirstack;
 mod discover;
 mod echo;
 mod env;
@@ -46,6 +47,7 @@ mod stat;
 mod tail;
 mod to;
 mod tx_log;
+mod type_;
 mod unalias;
 mod undo;
 mod unset;
@@ -57,6 +59,9 @@ use crate::builtin::{Builtin, Placement, Signature};
 
 pub static REGISTRY: &[&dyn Builtin] = &[
     &cd::Cd,
+    &dirstack::Pushd,
+    &dirstack::Popd,
+    &dirstack::Dirs,
     &pwd::Pwd,
     &export::Export,
     &env::Env,
@@ -74,6 +79,7 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &ps::Ps,
     &kill::Kill,
     &which::Which,
+    &type_::TypeCmd,
     &mkdir::Mkdir,
     &rm::Rm,
     &cp::Cp,

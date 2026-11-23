@@ -187,6 +187,7 @@ pub struct Session {
     reports: Vec<StructuredDiagnostic>,
     fallback_noticed: HashSet<String>,
     pub aliases: BTreeMap<String, String>,
+    pub dir_stack: Vec<PathBuf>,
 }
 
 impl Session {
@@ -268,6 +269,7 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
+            dir_stack: Vec::new(),
         })
     }
 
@@ -328,6 +330,7 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: self.aliases.clone(),
+            dir_stack: self.dir_stack.clone(),
         }
     }
 
@@ -395,6 +398,7 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
+            dir_stack: Vec::new(),
         })
     }
 
