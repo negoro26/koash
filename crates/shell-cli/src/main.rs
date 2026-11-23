@@ -40,7 +40,7 @@ BASH TRANSITION QUICK GUIDE:
     first [N], last [N], from json, to json|compact.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
-  * Shell state: alias/unalias, history [N], export, unset.
+  * Shell state: alias/unalias, history [N], export, unset, set [-e|+e] [-o|+o pipefail].
   * Sub-kernels & discovery: @sql \"...\", @py \"...\", @js \"...\", discover \"<intent>\".",
         env!("CARGO_PKG_VERSION")
     );

@@ -187,6 +187,9 @@ pub struct Session {
     reports: Vec<StructuredDiagnostic>,
     fallback_noticed: HashSet<String>,
     pub aliases: BTreeMap<String, String>,
+    pub errexit: bool,
+    pub pipefail: bool,
+    pub noglob: bool,
 }
 
 impl Session {
@@ -268,6 +271,9 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
+            errexit: false,
+            pipefail: false,
+            noglob: false,
         })
     }
 
@@ -328,6 +334,9 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: self.aliases.clone(),
+            errexit: self.errexit,
+            pipefail: self.pipefail,
+            noglob: self.noglob,
         }
     }
 
@@ -395,6 +404,9 @@ impl Session {
             reports: Vec::new(),
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
+            errexit: false,
+            pipefail: false,
+            noglob: false,
         })
     }
 

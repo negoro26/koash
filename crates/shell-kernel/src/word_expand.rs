@@ -139,7 +139,7 @@ pub fn command_word(words: &[Word], session: &Session) -> Option<String> {
 }
 
 fn push_pathname(syms: &[Sym], keep_empty: bool, session: &Session, out: &mut Vec<String>) {
-    if pathname::has_meta(syms) {
+    if !session.noglob && pathname::has_meta(syms) {
         let matches = pathname::expand(syms, &session.cwd);
         if !matches.is_empty() {
             out.extend(matches);
