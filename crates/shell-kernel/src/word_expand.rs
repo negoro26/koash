@@ -1,4 +1,4 @@
-use shell_syntax::{Parser, Word, WordPart};
+use shell_syntax::{ParamOp, Parser, Word, WordPart};
 
 use crate::brace;
 use crate::env::SessionEnv;
@@ -62,12 +62,40 @@ impl Field {
             }
             WordPart::Var { name, .. } => {
                 let kind = unquoted(Kind::Value);
-                match name.as_str() {
-                    "?" => self.push(&last_status.to_string(), kind),
-                    "$" => self.push(&std::process::id().to_string(), kind),
-                    _ => {
-                        if let Some(val) = env.get(name) {
-                            self.push(&val, kind);
+                if let Some(val) = lookup_var(name, env, last_status) {
+                    self.push(&val, kind);
+                }
+            }
+            WordPart::ParamExp { name, op, word, .. } => {
+                let kind = unquoted(Kind::Value);
+                let val = lookup_var(name, env, last_status);
+                match op {
+                    ParamOp::Len => {
+                        let len = val.as_deref().map_or(0, |s| s.chars().count());
+                        self.push(&len.to_string(), kind);
+                    }
+                    ParamOp::Default { colon } => {
+                        let use_default = match val.as_deref() {
+                            None => true,
+                            Some("") if *colon => true,
+                            _ => false,
+                        };
+                        if use_default {
+                            if let Some(w) = word {
+                                self.push(w, kind);
+                            }
+                        } else if let Some(v) = val {
+                            self.push(&v, kind);
+                        }
+                    }
+                    ParamOp::Alt { colon } => {
+                        let use_alt = match val.as_deref() {
+                            None => false,
+                            Some("") if *colon => false,
+                            _ => true,
+                        };
+                        if use_alt && let Some(w) = word {
+                            self.push(w, kind);
                         }
                     }
                 }
@@ -149,6 +177,14 @@ fn push_pathname(syms: &[Sym], keep_empty: bool, session: &Session, out: &mut Ve
     let text: String = syms.iter().map(|s| s.ch).collect();
     if !text.is_empty() || keep_empty {
         out.push(text);
+    }
+}
+
+fn lookup_var(name: &str, env: &SessionEnv, last_status: i32) -> Option<String> {
+    match name {
+        "?" => Some(last_status.to_string()),
+        "$" => Some(std::process::id().to_string()),
+        _ => env.get(name),
     }
 }
 

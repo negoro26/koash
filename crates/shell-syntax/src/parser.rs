@@ -51,6 +51,7 @@ impl<'a> Parser<'a> {
                         raw: src.to_string(),
                         span,
                     }],
+                    pipe_both: vec![false],
                     span,
                 },
                 op: None,
@@ -194,6 +195,7 @@ impl<'a> Parser<'a> {
             kind => matches!(
                 kind,
                 TokenKind::Pipe
+                    | TokenKind::PipeBoth
                     | TokenKind::Semi
                     | TokenKind::AndIf
                     | TokenKind::Amp
@@ -261,8 +263,12 @@ impl<'a> Parser<'a> {
         let first = self.parse_command()?;
         let mut span = first.span();
         let mut commands = vec![first];
+        let mut pipe_both = vec![false];
 
-        while matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Pipe)) {
+        while let Some(kind @ (TokenKind::Pipe | TokenKind::PipeBoth)) =
+            self.peek().map(|t| &t.kind)
+        {
+            let both = *kind == TokenKind::PipeBoth;
             let pipe_span = self.peek().map(|t| t.span).unwrap_or(span);
             self.advance();
             self.skip_newlines();
@@ -271,6 +277,7 @@ impl<'a> Parser<'a> {
                     self.peek().map(|t| &t.kind),
                     Some(
                         TokenKind::Pipe
+                            | TokenKind::PipeBoth
                             | TokenKind::Semi
                             | TokenKind::AndIf
                             | TokenKind::OrIf
@@ -285,12 +292,20 @@ impl<'a> Parser<'a> {
                     Some("provide a command on the right-hand side of `|`".to_string()),
                 ));
             }
+            if let Some(last_flag) = pipe_both.last_mut() {
+                *last_flag = both;
+            }
             let next_cmd = self.parse_command()?;
             span = span.merge(next_cmd.span());
             commands.push(next_cmd);
+            pipe_both.push(false);
         }
 
-        Ok(Pipeline { commands, span })
+        Ok(Pipeline {
+            commands,
+            pipe_both,
+            span,
+        })
     }
 
     fn parse_command(&mut self) -> Result<Command, SyntaxError> {

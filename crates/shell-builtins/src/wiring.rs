@@ -196,16 +196,19 @@ pub(crate) fn resolve_redirs(
                 resolved.out = OutTarget::File(file);
             }
             RedirectKind::StderrToStdout => {
-                resolved.err = match &resolved.out {
-                    OutTarget::Default => ErrTarget::ToOut,
-                    OutTarget::File(file) => ErrTarget::File(file.try_clone().map_err(|e| {
-                        StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span))
-                    })?),
-                };
+                resolved.err = stderr_follows_stdout(&resolved.out)
+                    .map_err(|e| StructuredDiagnostic::from_io("E_REDIR", &e, Some(redir.span)))?;
             }
         }
     }
     Ok(resolved)
+}
+
+fn stderr_follows_stdout(out: &OutTarget) -> io::Result<ErrTarget> {
+    Ok(match out {
+        OutTarget::Default => ErrTarget::ToOut,
+        OutTarget::File(file) => ErrTarget::File(file.try_clone()?),
+    })
 }
 
 fn pipe() -> Result<(OwnedFd, OwnedFd), LaunchError> {
@@ -328,7 +331,11 @@ pub(crate) fn launch_external(
     last: bool,
     launched: &mut Launched,
 ) -> Result<(), LaunchError> {
-    let redirs = resolve_redirs(session, stage.redirs)?;
+    let mut redirs = resolve_redirs(session, stage.redirs)?;
+    if stage.pipe_both && !last {
+        redirs.err = stderr_follows_stdout(&redirs.out)
+            .map_err(|e| io_error("E_REDIR", "dup stdout", &e))?;
+    }
 
     let stdin = match redirs.stdin {
         Some(file) => {

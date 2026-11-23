@@ -6,7 +6,7 @@ pub mod span;
 
 pub use alias::expand_aliases;
 pub use ast::{
-    Assignment, Command, ListItem, ListOp, Pipeline, Program, RedirectKind, Redirection,
+    Assignment, Command, ListItem, ListOp, ParamOp, Pipeline, Program, RedirectKind, Redirection,
     SimpleCommand, Word, WordPart,
 };
 pub use lexer::{Lexer, SyntaxError, Token, TokenKind, line_continues};

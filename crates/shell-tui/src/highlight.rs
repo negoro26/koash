@@ -24,6 +24,7 @@ pub fn highlight_line(input: &str) -> String {
         let slice = tok.span.slice(input);
         match &tok.kind {
             TokenKind::Pipe
+            | TokenKind::PipeBoth
             | TokenKind::AndIf
             | TokenKind::OrIf
             | TokenKind::Semi
