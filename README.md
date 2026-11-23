@@ -33,7 +33,7 @@ koa -c 'ls | wc -l'
 koa -c 'find . -name "*.log" | xargs rm'
 ```
 
-Wildcards and braces expand as in bash: `rm *.log`, `cat src/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
+Wildcards, recursive `**` globs and braces expand as in zsh and bash: `rm *.log`, `cat crates/**/*.rs`, `mkdir -p app/{src,test}`. A pattern that matches nothing stays as typed.
 
 `grep` works on tables too. It matches the name for `ls`, the path for `find` and the line for `cat`, and keeps the whole row:
 
