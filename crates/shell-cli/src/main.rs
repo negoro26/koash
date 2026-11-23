@@ -37,7 +37,7 @@ BASH TRANSITION QUICK GUIDE:
   * Standard bash flags work: grep -rn -i -F -w -l -c --include, find -type/-name,
     head/tail -n N [file], ls -la, mkdir -p, rm -rf, cd -, cat --raw.
   * Table verbs: where <col op val>, select <cols...>, sort-by [--desc] <col>,
-    first [N], last [N], from json, to json|compact.
+    first [N], last [N], from json|csv|tsv|lines, to json|compact|csv|tsv|md.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
   * Shell state: alias/unalias, history [N], export, unset.
