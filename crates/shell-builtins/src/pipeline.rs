@@ -240,13 +240,17 @@ fn build_stages<'a>(
                 } else {
                     "sh"
                 };
+                let mut argv = match capture {
+                    Some(capture) => capture.argv(shell, raw),
+                    None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
+                };
+                if shell == "bash" {
+                    argv.splice(1..1, ["-O".to_string(), "globstar".to_string()]);
+                }
                 Stage {
                     kind: StageKind::External,
                     label: raw.clone(),
-                    argv: match capture {
-                        Some(capture) => capture.argv(shell, raw),
-                        None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
-                    },
+                    argv,
                     display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],

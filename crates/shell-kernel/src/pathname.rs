@@ -32,8 +32,29 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
 
     let mut candidates = vec![String::from(if absolute { "/" } else { "" })];
     let mut tail_is_literal = false;
+    let mut prefix_literal = true;
     let last = segments.len().saturating_sub(1);
     for (i, segment) in segments.iter().enumerate() {
+        if is_globstar(segment) {
+            tail_is_literal = false;
+            if i != last && is_globstar(segments[i + 1]) {
+                continue;
+            }
+            let mut next = Vec::new();
+            for candidate in &candidates {
+                if i == last {
+                    globstar_tail(cwd, candidate, dir_only, prefix_literal, &mut next);
+                } else {
+                    globstar_dirs(cwd, candidate, !candidate.is_empty(), &mut next);
+                }
+            }
+            candidates = next;
+            prefix_literal = false;
+            if candidates.is_empty() {
+                return candidates;
+            }
+            continue;
+        }
         let Some(pattern) = compile(segment) else {
             let literal: String = segment.iter().map(|s| s.ch).collect();
             for candidate in &mut candidates {
@@ -43,6 +64,7 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
             continue;
         };
         tail_is_literal = false;
+        prefix_literal = false;
         let needs_dir = i != last || dir_only;
         let mut next = Vec::new();
         for candidate in &candidates {
@@ -82,7 +104,80 @@ pub(crate) fn expand(syms: &[Sym], cwd: &Path) -> Vec<String> {
         }
     }
     candidates.sort_unstable();
+    candidates.dedup();
     candidates
+}
+
+fn is_globstar(segment: &[Sym]) -> bool {
+    segment.len() == 2
+        && segment
+            .iter()
+            .all(|s| s.kind != Kind::Quoted && s.ch == '*')
+}
+
+fn globstar_dirs(cwd: &Path, base: &str, symlink_leaves: bool, out: &mut Vec<String>) {
+    let start = cwd.join(if base.is_empty() { "." } else { base });
+    if !fs::metadata(&start).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
+    let mut stack = vec![base.to_string()];
+    while let Some(dir) = stack.pop() {
+        out.push(dir.clone());
+        let dir_path = cwd.join(if dir.is_empty() { "." } else { &dir });
+        let Ok(entries) = fs::read_dir(&dir_path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str().filter(|n| !n.starts_with('.')) else {
+                continue;
+            };
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(join(&dir, name)),
+                Ok(ft) if ft.is_symlink() && symlink_leaves && is_dir(&entry, &dir_path) => {
+                    out.push(join(&dir, name));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn globstar_tail(
+    cwd: &Path,
+    base: &str,
+    dir_only: bool,
+    prefix_literal: bool,
+    out: &mut Vec<String>,
+) {
+    let mut dirs = Vec::new();
+    globstar_dirs(cwd, base, dir_only, &mut dirs);
+    if dir_only {
+        out.extend(
+            dirs.into_iter()
+                .filter(|dir| !dir.is_empty())
+                .map(|dir| if dir == "/" { dir } else { format!("{dir}/") }),
+        );
+        return;
+    }
+    if !dirs.is_empty() && !base.is_empty() {
+        out.push(if prefix_literal && base != "/" {
+            format!("{base}/")
+        } else {
+            base.to_string()
+        });
+    }
+    for dir in &dirs {
+        let dir_path = cwd.join(if dir.is_empty() { "." } else { dir });
+        let Ok(entries) = fs::read_dir(&dir_path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str().filter(|n| !n.starts_with('.')) {
+                out.push(join(dir, name));
+            }
+        }
+    }
 }
 
 fn is_dir(entry: &fs::DirEntry, dir: &Path) -> bool {
