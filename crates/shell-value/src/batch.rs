@@ -110,6 +110,26 @@ impl RecordBatch {
         }
     }
 
+    pub fn skip_rows(&mut self, n: usize) {
+        let drop_rows = n.min(self.nrows());
+        if drop_rows > 0 {
+            self.cells.drain(..drop_rows * self.schema.len());
+        }
+    }
+
+    pub fn reverse_rows(&mut self) {
+        let ncols = self.schema.len();
+        let nrows = self.nrows();
+        if ncols == 0 || nrows < 2 {
+            return;
+        }
+        for i in 0..nrows / 2 {
+            let j = nrows - 1 - i;
+            let (head, tail) = self.cells.split_at_mut(j * ncols);
+            head[i * ncols..(i + 1) * ncols].swap_with_slice(&mut tail[..ncols]);
+        }
+    }
+
     pub fn rows(&self) -> impl ExactSizeIterator<Item = Row<'_>> {
         let text = self.text.as_str();
         let columns = self.schema.columns();
