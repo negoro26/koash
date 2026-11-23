@@ -33,6 +33,7 @@ python3 scripts/verify-hangup.py "$koa"
 python3 scripts/verify-alias.py "$koa"
 python3 scripts/verify-fit.py "$koa"
 python3 scripts/verify-typeahead.py "$koa"
+python3 scripts/verify-posix-params.py "$koa"
 step "cargo-deny"
 cargo deny --locked check
 step "cargo-machete"

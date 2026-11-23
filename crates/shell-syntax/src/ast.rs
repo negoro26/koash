@@ -27,6 +27,7 @@ pub enum ListOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pipeline {
     pub commands: Vec<Command>,
+    pub pipe_both: Vec<bool>,
     pub span: Span,
 }
 
@@ -66,14 +67,44 @@ pub struct Word {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParamOp {
+    Len,
+    Default { colon: bool },
+    Alt { colon: bool },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WordPart {
-    Literal { text: String, span: Span },
-    Escaped { ch: char, span: Span },
-    SingleQuoted { text: String, span: Span },
-    DoubleQuoted { parts: Vec<WordPart>, span: Span },
-    Var { name: String, span: Span },
-    Tilde { span: Span },
+    Literal {
+        text: String,
+        span: Span,
+    },
+    Escaped {
+        ch: char,
+        span: Span,
+    },
+    SingleQuoted {
+        text: String,
+        span: Span,
+    },
+    DoubleQuoted {
+        parts: Vec<WordPart>,
+        span: Span,
+    },
+    Var {
+        name: String,
+        span: Span,
+    },
+    ParamExp {
+        name: String,
+        op: ParamOp,
+        word: Option<String>,
+        span: Span,
+    },
+    Tilde {
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

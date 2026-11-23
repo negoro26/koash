@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::ast::{Word, WordPart};
+use crate::ast::{ParamOp, Word, WordPart};
 use crate::span::Span;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +33,7 @@ impl SyntaxError {
 pub enum TokenKind {
     Word(Word),
     Pipe,
+    PipeBoth,
     AndIf,
     OrIf,
     Semi,
@@ -180,6 +181,13 @@ impl<'a> Lexer<'a> {
                 span: Span::new(start, self.pos),
             });
         }
+        if self.starts_with("|&") {
+            self.pos += 2;
+            return Ok(Token {
+                kind: TokenKind::PipeBoth,
+                span: Span::new(start, self.pos),
+            });
+        }
         if self.starts_with(">>") {
             self.pos += 2;
             return Ok(Token {
@@ -286,6 +294,7 @@ impl<'a> Lexer<'a> {
             match b {
                 b'\'' => parts.push(self.lex_single_quoted()?),
                 b'"' => parts.push(self.lex_double_quoted()?),
+                b'$' if self.peek_at(1) == Some(b'\'') => parts.push(self.lex_ansi_c_quoted()?),
                 b'$' => parts.push(self.lex_dollar()?),
                 b'\\' => parts.extend(self.lex_escape()),
                 _ => parts.push(self.lex_unquoted_literal()?),
@@ -323,6 +332,150 @@ impl<'a> Lexer<'a> {
             Span::new(start, self.pos),
             Some("add a closing `'`".to_string()),
         ))
+    }
+
+    fn lex_ansi_c_quoted(&mut self) -> Result<WordPart, SyntaxError> {
+        let start = self.pos;
+        self.pos += 2;
+        let mut text = String::new();
+        while let Some(b) = self.peek() {
+            if b == b'\'' {
+                self.pos += 1;
+                return Ok(WordPart::SingleQuoted {
+                    text,
+                    span: Span::new(start, self.pos),
+                });
+            }
+            if b != b'\\' {
+                text.push(self.next_char());
+                continue;
+            }
+            self.pos += 1;
+            let Some(esc) = self.peek() else {
+                break;
+            };
+            match esc {
+                b'a' => {
+                    text.push('\x07');
+                    self.pos += 1;
+                }
+                b'b' => {
+                    text.push('\x08');
+                    self.pos += 1;
+                }
+                b'e' | b'E' => {
+                    text.push('\x1b');
+                    self.pos += 1;
+                }
+                b'f' => {
+                    text.push('\x0c');
+                    self.pos += 1;
+                }
+                b'n' => {
+                    text.push('\n');
+                    self.pos += 1;
+                }
+                b'r' => {
+                    text.push('\r');
+                    self.pos += 1;
+                }
+                b't' => {
+                    text.push('\t');
+                    self.pos += 1;
+                }
+                b'v' => {
+                    text.push('\x0b');
+                    self.pos += 1;
+                }
+                b'\\' | b'\'' | b'"' | b'?' => {
+                    text.push(esc as char);
+                    self.pos += 1;
+                }
+                b'0'..=b'7' => {
+                    let mut val = 0u32;
+                    for _ in 0..3 {
+                        if let Some(d @ b'0'..=b'7') = self.peek() {
+                            val = (val << 3) | u32::from(d - b'0');
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(ch) = char::from_u32(val & 0xff) {
+                        text.push(ch);
+                    }
+                }
+                b'c' => {
+                    self.pos += 1;
+                    match self.peek() {
+                        Some(ctl) if ctl.is_ascii() && ctl != b'\'' => {
+                            self.pos += 1;
+                            if ctl == b'\\' && self.peek() == Some(b'\\') {
+                                self.pos += 1;
+                            }
+                            text.push(if ctl == b'?' {
+                                '\x7f'
+                            } else {
+                                char::from(ctl & 0x1f)
+                            });
+                        }
+                        _ => text.push_str("\\c"),
+                    }
+                }
+                b'x' => {
+                    self.pos += 1;
+                    let (val, count) = self.take_hex(2);
+                    if count > 0 {
+                        if let Some(ch) = char::from_u32(val) {
+                            text.push(ch);
+                        }
+                    } else {
+                        text.push_str("\\x");
+                    }
+                }
+                b'u' | b'U' => {
+                    let max_digits = if esc == b'u' { 4 } else { 8 };
+                    self.pos += 1;
+                    let (val, count) = self.take_hex(max_digits);
+                    if count > 0
+                        && let Some(ch) = char::from_u32(val)
+                    {
+                        text.push(ch);
+                    } else {
+                        text.push('\\');
+                        text.push(esc as char);
+                    }
+                }
+                _ => {
+                    text.push('\\');
+                    text.push(self.next_char());
+                }
+            }
+        }
+        Err(SyntaxError::new(
+            "E_UNCLOSED_SINGLE_QUOTE",
+            "unterminated `$'...'` string",
+            Span::new(start, self.pos),
+            Some("add a closing `'`".to_string()),
+        ))
+    }
+
+    fn take_hex(&mut self, max_digits: usize) -> (u32, usize) {
+        let mut val = 0u32;
+        let mut count = 0usize;
+        while count < max_digits {
+            let Some(b) = self.peek() else { break };
+            let digit = match b {
+                b'0'..=b'9' => u32::from(b - b'0'),
+                b'a'..=b'f' => u32::from(b - b'a' + 10),
+                b'A'..=b'F' => u32::from(b - b'A' + 10),
+                _ => break,
+            };
+            val = (val << 4) | digit;
+            count += 1;
+            self.pos += 1;
+        }
+        (val, count)
     }
 
     fn lex_double_quoted(&mut self) -> Result<WordPart, SyntaxError> {
@@ -417,27 +570,21 @@ impl<'a> Lexer<'a> {
             )),
             Some(b'{') => {
                 self.pos += 1;
-                let name_start = self.pos;
+                let inner_start = self.pos;
                 while let Some(b) = self.peek() {
                     if b == b'}' {
-                        let name = self.src.get(name_start..self.pos).unwrap_or("").to_string();
+                        let inner = self.src.get(inner_start..self.pos).unwrap_or("");
                         self.pos += 1;
-                        if name.is_empty()
-                            || !name.bytes().all(|c| {
-                                c.is_ascii_alphanumeric() || c == b'_' || c == b'?' || c == b'$'
-                            })
-                        {
-                            return Err(SyntaxError::new(
-                                "E_POSIX_PARAM_EXP",
-                                "complex parameter expansion requires POSIX fallback",
-                                Span::new(start, self.pos),
-                                None,
-                            ));
+                        let span = Span::new(start, self.pos);
+                        if let Some(part) = parse_brace_param(inner, span) {
+                            return Ok(part);
                         }
-                        return Ok(WordPart::Var {
-                            name,
-                            span: Span::new(start, self.pos),
-                        });
+                        return Err(SyntaxError::new(
+                            "E_POSIX_PARAM_EXP",
+                            "complex parameter expansion requires POSIX fallback",
+                            span,
+                            None,
+                        ));
                     }
                     self.pos += 1;
                 }
@@ -524,6 +671,60 @@ impl<'a> Lexer<'a> {
             '\0'
         }
     }
+}
+
+fn is_valid_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'?' || c == b'$')
+}
+
+fn parse_brace_param(inner: &str, span: Span) -> Option<WordPart> {
+    if is_valid_var_name(inner) {
+        return Some(WordPart::Var {
+            name: inner.to_string(),
+            span,
+        });
+    }
+    if let Some(rest) = inner.strip_prefix('#')
+        && is_valid_var_name(rest)
+    {
+        return Some(WordPart::ParamExp {
+            name: rest.to_string(),
+            op: ParamOp::Len,
+            word: None,
+            span,
+        });
+    }
+    let name_end = inner
+        .bytes()
+        .position(|b| !(b.is_ascii_alphanumeric() || b == b'_' || b == b'?' || b == b'$'))?;
+    let name = &inner[..name_end];
+    if name.is_empty() {
+        return None;
+    }
+    let rest = &inner[name_end..];
+    let (op, word) = if let Some(w) = rest.strip_prefix(":-") {
+        (ParamOp::Default { colon: true }, w)
+    } else if let Some(w) = rest.strip_prefix('-') {
+        (ParamOp::Default { colon: false }, w)
+    } else if let Some(w) = rest.strip_prefix(":+") {
+        (ParamOp::Alt { colon: true }, w)
+    } else {
+        let w = rest.strip_prefix('+')?;
+        (ParamOp::Alt { colon: false }, w)
+    };
+    let plain = !word.contains(['$', '`', '\\', '\'', '"']) && !word.starts_with('~');
+    if !plain {
+        return None;
+    }
+    Some(WordPart::ParamExp {
+        name: name.to_string(),
+        op,
+        word: Some(word.to_string()),
+        span,
+    })
 }
 
 pub fn line_continues(line: &str) -> bool {

@@ -61,6 +61,7 @@ impl<L: Fn(&str) -> Option<String>> Expander<L> {
             match token.kind {
                 TokenKind::Eof => break,
                 TokenKind::Pipe
+                | TokenKind::PipeBoth
                 | TokenKind::AndIf
                 | TokenKind::OrIf
                 | TokenKind::Semi

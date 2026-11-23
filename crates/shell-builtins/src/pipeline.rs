@@ -36,6 +36,7 @@ pub(crate) struct Stage<'a> {
     pub display: Option<String>,
     pub env: Vec<(String, String)>,
     pub redirs: &'a [Redirection],
+    pub pipe_both: bool,
 }
 
 pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32 {
@@ -158,6 +159,7 @@ fn detached_stage<'a>(
         display: Some(text),
         env: Vec::new(),
         redirs: &[],
+        pipe_both: false,
     })
 }
 
@@ -232,7 +234,8 @@ fn build_stages<'a>(
     capture: Option<&EnvCapture>,
 ) -> Vec<Stage<'a>> {
     let mut stages = Vec::with_capacity(pipeline.commands.len());
-    for cmd in &pipeline.commands {
+    for (idx, cmd) in pipeline.commands.iter().enumerate() {
+        let pipe_both = pipeline.pipe_both.get(idx).copied().unwrap_or(false);
         let stage = match cmd {
             Command::PosixFallback { raw, .. } => {
                 let shell = if find_executable(session, "bash").is_some() {
@@ -250,6 +253,7 @@ fn build_stages<'a>(
                     display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],
+                    pipe_both,
                 }
             }
             Command::Simple(simple) => {
@@ -280,6 +284,7 @@ fn build_stages<'a>(
                             display: None,
                             env: Vec::new(),
                             redirs: &simple.redirections,
+                            pipe_both,
                         }
                     }
                     (Some(name), Some(builtin)) => Stage {
@@ -289,6 +294,7 @@ fn build_stages<'a>(
                         display: None,
                         env,
                         redirs: &simple.redirections,
+                        pipe_both,
                     },
                     (Some(name), None) => {
                         if NETWORK_COMMANDS.contains(&name.as_str()) {
@@ -301,6 +307,7 @@ fn build_stages<'a>(
                             display: None,
                             env,
                             redirs: &simple.redirections,
+                            pipe_both,
                         }
                     }
                 }
