@@ -11,6 +11,7 @@ use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
 use crate::args::Args;
 use crate::builtin::{Builtin, Placement, TxPolicy};
+use crate::builtins::common::resolve_path;
 use crate::builtins::lookup;
 use crate::env_capture::EnvCapture;
 use crate::sink::{Sink, diag_status};
@@ -308,6 +309,7 @@ fn build_stages<'a>(
         };
         stages.push(stage);
     }
+    fuse_cat_slice(session, &mut stages);
     stages
 }
 
@@ -465,6 +467,48 @@ fn take_builtin_input(
         }
         .map(Value::Bytes)
         .map_err(|e| StructuredDiagnostic::from_io("E_PIPE", &e, None)),
+    }
+}
+
+fn fuse_cat_slice(session: &Session, stages: &mut Vec<Stage<'_>>) {
+    let mut i = 0;
+    while i + 1 < stages.len() {
+        let can_fuse = matches!(stages[i].kind, StageKind::Builtin(_))
+            && matches!(stages[i + 1].kind, StageKind::Builtin(_))
+            && stages[i].label == "cat"
+            && stages[i].redirs.is_empty()
+            && stages[i].argv.len() == 2
+            && !stages[i].argv[1].starts_with('-')
+            && matches!(stages[i + 1].label.as_str(), "first" | "last")
+            && std::fs::File::open(resolve_path(session, &stages[i].argv[1]))
+                .and_then(|file| file.metadata())
+                .is_ok_and(|meta| meta.is_file());
+        if !can_fuse {
+            i += 1;
+            continue;
+        }
+        let target = if stages[i + 1].label == "first" {
+            "head"
+        } else {
+            "tail"
+        };
+        let Some(replacement) = stage_builtin(target) else {
+            i += 1;
+            continue;
+        };
+        let n = stages[i + 1]
+            .argv
+            .get(1)
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1);
+        let file = stages[i].argv[1].clone();
+        let next = stages.remove(i + 1);
+        let shown = format!("{} | {}", stages[i].argv.join(" "), next.argv.join(" "));
+        stages[i].kind = StageKind::Builtin(replacement);
+        stages[i].label = target.to_string();
+        stages[i].argv = vec![target.to_string(), "-n".to_string(), n.to_string(), file];
+        stages[i].display = Some(shown);
+        stages[i].redirs = next.redirs;
     }
 }
 
