@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -31,6 +32,16 @@ fn cached_path_executables() -> &'static [String] {
 }
 
 pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
+    let empty = BTreeMap::new();
+    complete_line_with_aliases(input, cursor, cwd, &empty)
+}
+
+pub fn complete_line_with_aliases(
+    input: &str,
+    cursor: usize,
+    cwd: &Path,
+    aliases: &BTreeMap<String, String>,
+) -> Vec<String> {
     let prefix = input.get(..cursor).unwrap_or(input);
     let last_segment = prefix.rsplit('|').next().unwrap_or(prefix);
     let ends_with_space = last_segment.ends_with(char::is_whitespace);
@@ -49,7 +60,7 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
     };
 
     if cmd_pos {
-        return complete_commands(current_word);
+        return complete_commands(current_word, aliases);
     }
 
     let cmd_name = words.first().copied().unwrap_or("");
@@ -69,7 +80,19 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
         }
     }
 
-    if matches!(cmd_name, "select" | "where") {
+    if matches!(
+        cmd_name,
+        "select"
+            | "reject"
+            | "where"
+            | "sort-by"
+            | "sort_by"
+            | "group-by"
+            | "group_by"
+            | "uniq"
+            | "stats"
+            | "measure"
+    ) {
         let upstream_cmd = prefix
             .rsplit('|')
             .nth(1)
@@ -94,8 +117,13 @@ pub fn complete_line(input: &str, cursor: usize, cwd: &Path) -> Vec<String> {
     complete_paths(current_word, cwd)
 }
 
-fn complete_commands(prefix: &str) -> Vec<String> {
+fn complete_commands(prefix: &str, aliases: &BTreeMap<String, String>) -> Vec<String> {
     let mut out = Vec::new();
+    for name in aliases.keys() {
+        if name.starts_with(prefix) {
+            out.push(name.clone());
+        }
+    }
     for builtin in REGISTRY {
         let name = builtin.signature().name;
         if name.starts_with(prefix) {

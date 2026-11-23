@@ -228,7 +228,7 @@ fn run_interactive_repl(force_tsp: bool, read_rc: bool) -> ExitCode {
                     .and_then(|n| n.to_str())
                     .unwrap_or("/")
             );
-            match editor.read_line(&prompt, &session.cwd) {
+            match editor.read_line_with_aliases(&prompt, &session.cwd, &session.aliases) {
                 Ok(ReadLineResult::Eof) => break,
                 Ok(ReadLineResult::Line(raw)) => {
                     let trimmed = raw.trim();

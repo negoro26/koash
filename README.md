@@ -14,7 +14,7 @@ cargo install --git https://github.com/negoro26/koash
 
 ## Use
 
-Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the interactive shell, Up and Down step through history, Ctrl-R searches it, and Tab completes commands and paths. The usual readline keys work: Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, Ctrl-W, Alt-B and Alt-F.
+Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the interactive shell, Up and Down step through history, Ctrl-R searches it, ghost autosuggestions appear from history (Right, End, or Ctrl-E accepts the line; Alt-F accepts one word), and Tab completes commands, aliases, flags, table columns and paths. The usual readline keys work: Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, Ctrl-W, Alt-B and Alt-F.
 
 ```bash
 koa -c 'ls -t | first 5'
@@ -83,7 +83,7 @@ On a terminal a table never runs past the screen. The widest columns are cut fir
 
 ## Aliases and startup file
 
-`alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases are not expanded inside `$(...)` or backticks, and Tab completion does not know alias names yet.
+`alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases highlight in green and complete with Tab in the interactive shell. Aliases are not expanded inside `$(...)` or backticks.
 
 The interactive shell runs `~/.koarc` when it starts. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c`, piped scripts, `--rpc`, `--socket` and `--acp` never read it.
 

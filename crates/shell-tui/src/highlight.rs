@@ -1,9 +1,15 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use shell_builtins::lookup;
 use shell_syntax::{TokenKind, WordPart, tokenize};
 
 pub fn highlight_line(input: &str) -> String {
+    let empty = BTreeMap::new();
+    highlight_line_with_aliases(input, &empty)
+}
+
+pub fn highlight_line_with_aliases(input: &str, aliases: &BTreeMap<String, String>) -> String {
     let Ok(tokens) = tokenize(input) else {
         return input.to_string();
     };
@@ -54,7 +60,7 @@ pub fn highlight_line(input: &str) -> String {
 
                 if expect_cmd {
                     expect_cmd = false;
-                    if command_exists(slice) {
+                    if aliases.contains_key(slice) || command_exists(slice) {
                         out.push_str("\x1b[32m");
                     } else {
                         out.push_str("\x1b[31m");
