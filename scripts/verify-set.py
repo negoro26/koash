@@ -295,7 +295,6 @@ NOTICES = [
     ("set -ex; echo hi", "xtrace"),
     ("set -o monitor; echo hi", "monitor"),
     ("set -euxo pipefail; echo hi", "xtrace"),
-    ("set -C; echo hi", "noclobber"),
     ("set -o allexport -o keyword; echo hi", "allexport, keyword"),
 ]
 for script, name in NOTICES:
@@ -306,6 +305,18 @@ for script, name in NOTICES:
     lines = [l for l in got.stderr.decode().splitlines() if name in l]
     if got.returncode != 0 or got.stdout != b"hi\n" or len(lines) != 1 or len(got.stderr.splitlines()) != 1:
         bad.append(f"{script!r}: want rc 0, stdout 'hi' and one notice naming {name}; got rc={got.returncode} {got.stdout!r} {got.stderr[:120]!r}")
+
+for script in ("set -C; echo hi > a.txt", "set -euC; echo hi > a.txt", "set -o noclobber; echo hi > a.txt"):
+    checked += 1
+    root = fixture()
+    got = run([koa, "-c"], script, root)
+    content = open(os.path.join(root, "a.txt")).read()
+    shutil.rmtree(root)
+    if got.returncode == 0 or content != "":
+        bad.append(f"{script!r}: noclobber is not implemented, so koa must stop before the redirect; got rc={got.returncode}, a.txt={content!r}")
+
+for script in ("set +C; echo hi", "set +o noclobber; echo hi"):
+    compare(script)
 
 print(f"checked {checked} scripts against bash")
 for line in bad:
