@@ -183,6 +183,7 @@ pub struct Stopped {
 #[derive(Debug)]
 pub struct ForegroundOutcome {
     pub watched: Option<i32>,
+    pub exits: Vec<(Pid, i32)>,
     pub stopped: Option<Stopped>,
 }
 
@@ -190,16 +191,19 @@ pub struct ForegroundOutcome {
 pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> ForegroundOutcome {
     let mut alive = pids.to_vec();
     let mut watched = None;
+    let mut exits = Vec::with_capacity(pids.len());
     while !alive.is_empty() {
         match wait_group(pgid, true) {
             Ok(Some(WaitStatus::Exited(pid, code))) => {
                 alive.retain(|&p| p != pid);
+                exits.push((pid, code));
                 if Some(pid) == watch {
                     watched = Some(code);
                 }
             }
             Ok(Some(WaitStatus::Signaled(pid, sig, _))) => {
                 alive.retain(|&p| p != pid);
+                exits.push((pid, 128 + sig as i32));
                 if Some(pid) == watch {
                     watched = Some(128 + sig as i32);
                 }
@@ -207,6 +211,7 @@ pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> Foregroun
             Ok(Some(WaitStatus::Stopped(_, sig))) => {
                 return ForegroundOutcome {
                     watched,
+                    exits,
                     stopped: Some(Stopped {
                         signal: sig as i32,
                         alive,
@@ -219,6 +224,7 @@ pub fn wait_foreground(pgid: Pid, pids: &[Pid], watch: Option<Pid>) -> Foregroun
     }
     ForegroundOutcome {
         watched,
+        exits,
         stopped: None,
     }
 }

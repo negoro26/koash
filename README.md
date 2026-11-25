@@ -89,6 +89,8 @@ On a terminal a table never runs past the screen. The widest columns are cut fir
 
 `alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases are not expanded inside `$(...)` or backticks, and Tab completion does not know alias names yet.
 
+`set -e` (`errexit`) stops a command list on the first unguarded failure, `set -f` (`noglob`) disables pathname expansion, `set -u` (`nounset`) ends a non-interactive shell when a command expands an unset variable, `set -o pipefail` fails a pipeline if any stage fails (evaluated at pipeline start per POSIX.1-2024), `set -o` lists options as a table, `!` negates a pipeline's exit status, and `$PIPESTATUS` records every stage's exit code without exporting it. Flags combine as in bash (`set -euo pipefail`). Bash options koa does not implement (such as `-x`, `-C` or `-a`) print one notice and are ignored. `-n`, `-t` and positional parameters are refused with status 2.
+
 The interactive shell runs `~/.koarc` when it starts. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c`, piped scripts, `--rpc`, `--socket` and `--acp` never read it.
 
 koa runs the file one line at a time, so put each `alias`, `export` or `source` on its own line. A multi-line `if` or function does not work there; write it on one line, or put it in a file and `source` it. A koa syntax error in the file prints `.koarc:LINE:` and the rest of the file still runs. Other errors print without the line number.

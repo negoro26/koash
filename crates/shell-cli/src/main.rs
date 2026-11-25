@@ -43,7 +43,7 @@ BASH TRANSITION QUICK GUIDE:
     from json|csv|tsv|lines, to json|compact|csv|tsv|md.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
-  * Shell state: alias/unalias, history [N], export, unset.
+  * Shell state: alias/unalias, history [N], export, unset, set [-e|+e] [-o|+o pipefail].
   * Sub-kernels & discovery: @sql \"...\", @py \"...\", @js \"...\", discover \"<intent>\".",
         env!("CARGO_PKG_VERSION")
     );
@@ -178,6 +178,7 @@ fn run_oneshot(
     };
     shell_kernel::forward_to_jobs(false);
     session.last_status = last_status.unwrap_or(0);
+    session.unbound_status = 127;
     if let Some(pid) = last_bg {
         session.env.set_last_background(pid);
     }

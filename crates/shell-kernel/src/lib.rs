@@ -23,4 +23,4 @@ pub use job_signals::forward_to_jobs;
 pub use kill::KillSwitch;
 pub use session::{Job, JobState, Preimage, Session, TxRecord};
 pub use undo_store::Snapshot;
-pub use word_expand::{command_word, expand_word, expand_words};
+pub use word_expand::{command_word, expand_word, expand_words, unbound_variable};

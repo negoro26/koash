@@ -45,6 +45,7 @@ mod rm;
 mod rollback;
 mod schema;
 mod select;
+mod set;
 mod skip;
 mod sort_by;
 mod sql;
@@ -103,6 +104,7 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &tee::Tee,
     &from::FromFormat,
     &to::ToFormat,
+    &set::Set,
     &discover::Discover,
     &undo::Undo,
     &redo::Redo,

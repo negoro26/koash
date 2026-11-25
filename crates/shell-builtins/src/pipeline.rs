@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use nix::unistd::Pid;
 use shell_kernel::{
     JobState, Session, command_word, expand_word, expand_words, find_executable,
-    reap_background_jobs,
+    reap_background_jobs, unbound_variable,
 };
 use shell_surface::SurfaceMode;
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
@@ -60,9 +60,39 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
                 return KILLED_STATUS;
             }
             let background = matches!(item.op, Some(ListOp::Background));
-            status = run_pipeline(session, &item.pipeline, background, &program.source, sink);
+            let unbound = session
+                .nounset
+                .then(|| unbound_variable(&item.pipeline, &session.env))
+                .flatten();
+            let fatal = unbound.is_some() && item.pipeline.commands.len() == 1;
+            status = match unbound {
+                Some(name) => {
+                    sink.stderr_line(&format!("koa: {name}: unbound variable"));
+                    match (fatal, session.errexit) {
+                        (true, false) => session.unbound_status,
+                        _ => 1,
+                    }
+                }
+                None => run_pipeline(session, &item.pipeline, background, &program.source, sink),
+            };
             session.last_status = status;
+            if fatal {
+                if !session.interactive {
+                    session.should_exit = Some(status);
+                }
+                break;
+            }
             if session.should_exit.is_some() {
+                break;
+            }
+            if session.errexit
+                && status != 0
+                && !item.pipeline.negated
+                && !matches!(item.op, Some(ListOp::And | ListOp::Or))
+            {
+                if !session.interactive {
+                    session.should_exit = Some(status);
+                }
                 break;
             }
         }
@@ -80,15 +110,20 @@ fn run_pipeline(
     sink: &Sink,
 ) -> i32 {
     if pipeline.commands.is_empty() {
-        return 0;
+        return i32::from(pipeline.negated);
     }
     if !background
         && let [Command::Simple(simple)] = pipeline.commands.as_slice()
         && let Some(status) = run_alone(session, simple, sink)
     {
-        return status;
+        return if pipeline.negated {
+            i32::from(status == 0)
+        } else {
+            status
+        };
     }
 
+    let pipefail = session.pipefail;
     begin_pipeline_tx(session, pipeline);
     let capture = match pipeline.commands.as_slice() {
         [Command::PosixFallback { .. }] if !background => EnvCapture::create(session),
@@ -105,17 +140,17 @@ fn run_pipeline(
             Err(diag) => {
                 sink.diag(&diag);
                 session.finish_tx();
-                return 1;
+                return if pipeline.negated { 0 } else { 1 };
             }
         }
     }
-    let (status, tracked) = std::thread::scope(|scope| {
+    let (mut status, tracked) = std::thread::scope(|scope| {
         let plan = Plan {
             sink,
             scope,
             background,
         };
-        run_stages(session, &stages, &plan)
+        run_stages(session, &stages, &plan, pipefail)
     });
     if let Some(pgid) = tracked {
         session.kill.untrack(pgid);
@@ -123,6 +158,9 @@ fn run_pipeline(
     session.finish_tx();
     if let Some(capture) = capture {
         capture.apply(session);
+    }
+    if pipeline.negated {
+        status = i32::from(status == 0);
     }
     status
 }
@@ -242,13 +280,15 @@ fn build_stages<'a>(
                 } else {
                     "sh"
                 };
+                let mut argv = match capture {
+                    Some(capture) => capture.argv(shell, raw),
+                    None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
+                };
+                argv.splice(1..1, option_flags(session, shell));
                 Stage {
                     kind: StageKind::External,
                     label: raw.clone(),
-                    argv: match capture {
-                        Some(capture) => capture.argv(shell, raw),
-                        None => vec![shell.to_string(), "-c".to_string(), raw.clone()],
-                    },
+                    argv,
                     display: Some(format!("{shell} -c {raw}")),
                     env: capture.map(EnvCapture::env).unwrap_or_default(),
                     redirs: &[],
@@ -313,6 +353,23 @@ fn build_stages<'a>(
     stages
 }
 
+fn option_flags(session: &Session, shell: &str) -> Vec<String> {
+    let mut flags = Vec::new();
+    if session.errexit {
+        flags.push("-e".to_string());
+    }
+    if session.noglob {
+        flags.push("-f".to_string());
+    }
+    if session.nounset {
+        flags.push("-u".to_string());
+    }
+    if session.pipefail && shell == "bash" {
+        flags.extend(["-o".to_string(), "pipefail".to_string()]);
+    }
+    flags
+}
+
 fn summarize(stages: &[Stage]) -> String {
     stages
         .iter()
@@ -321,16 +378,24 @@ fn summarize(stages: &[Stage]) -> String {
         .join(" | ")
 }
 
-fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Option<Pid>) {
+fn run_stages(
+    session: &mut Session,
+    stages: &[Stage],
+    plan: &Plan,
+    pipefail: bool,
+) -> (i32, Option<Pid>) {
     let mut flow = Flow::None;
     let mut launched = Launched::default();
     let mut final_status: Option<i32> = None;
     let mut last_is_launched = false;
+    let mut stage_statuses: Vec<Option<i32>> = vec![None; stages.len()];
+    let mut stage_pids: Vec<Option<Pid>> = vec![None; stages.len()];
 
     for (idx, stage) in stages.iter().enumerate() {
         let last = idx + 1 == stages.len();
         if session.kill.is_killed() {
             final_status = Some(KILLED_STATUS);
+            stage_statuses[idx] = Some(KILLED_STATUS);
             break;
         }
         last_is_launched = false;
@@ -341,13 +406,15 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         match stage.kind {
             StageKind::Assign => {
                 flow = Flow::Value(Value::Empty);
-                final_status = Some(match resolve_redirs(session, stage.redirs) {
+                let code = match resolve_redirs(session, stage.redirs) {
                     Ok(_) => 0,
                     Err(diag) => {
                         plan.sink.diag(&diag);
                         1
                     }
-                });
+                };
+                final_status = Some(code);
+                stage_statuses[idx] = Some(code);
             }
             StageKind::Builtin(builtin) if twin.is_none() => {
                 let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
@@ -356,7 +423,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                 for report in &reports {
                     plan.sink.diag(report);
                 }
-                let soft_failure = i32::from(!reports.is_empty());
+                let soft_failure = i32::from(reports.iter().any(|r| !r.code.starts_with("W_")));
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
@@ -386,6 +453,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                     }
                 };
                 final_status = Some(status);
+                stage_statuses[idx] = Some(status);
             }
             StageKind::Builtin(_) | StageKind::External => {
                 let targets = twin.unwrap_or_default();
@@ -399,11 +467,13 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
                         }
                         last_is_launched = true;
                         final_status = None;
+                        stage_pids[idx] = launched.last_pid;
                     }
                     Err(LaunchError { status, diag }) => {
                         plan.sink.diag(&diag);
                         flow = Flow::Value(Value::Empty);
                         final_status = Some(status);
+                        stage_statuses[idx] = Some(status);
                     }
                 }
             }
@@ -414,7 +484,9 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
     let tracked = launched.tracked;
     let summary = summarize(stages);
     let Some(pgid) = launched.pgid else {
-        return (final_status.unwrap_or(0), tracked);
+        let codes: Vec<i32> = stage_statuses.iter().map(|s| s.unwrap_or(0)).collect();
+        let status = record_pipestatus(session, &codes, final_status.unwrap_or(0), pipefail);
+        return (status, tracked);
     };
     if plan.background {
         let last = launched.last_pid.unwrap_or(pgid);
@@ -431,7 +503,7 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         return (final_status.unwrap_or(0), tracked);
     }
     let watch = last_is_launched.then_some(launched.last_pid).flatten();
-    let waited = finish_foreground(
+    let finished = finish_foreground(
         session,
         plan.sink,
         pgid,
@@ -440,7 +512,46 @@ fn run_stages(session: &mut Session, stages: &[Stage], plan: &Plan) -> (i32, Opt
         &summary,
         None,
     );
-    (final_status.unwrap_or(waited), tracked)
+    let waited = finished.status;
+    let codes: Vec<i32> = stage_statuses
+        .iter()
+        .zip(&stage_pids)
+        .map(|(status, pid)| {
+            status
+                .or_else(|| {
+                    let pid = (*pid)?;
+                    finished
+                        .exits
+                        .iter()
+                        .find(|(p, _)| *p == pid)
+                        .map(|(_, code)| *code)
+                })
+                .unwrap_or(waited)
+        })
+        .collect();
+    let status = record_pipestatus(session, &codes, final_status.unwrap_or(waited), pipefail);
+    (status, tracked)
+}
+
+fn record_pipestatus(session: &mut Session, codes: &[i32], last: i32, pipefail: bool) -> i32 {
+    if !codes.is_empty() {
+        let joined = codes
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        session.env.set_pipestatus(joined);
+    }
+    if pipefail {
+        codes
+            .iter()
+            .rev()
+            .copied()
+            .find(|&c| c != 0)
+            .unwrap_or(last)
+    } else {
+        last
+    }
 }
 
 fn text_twin(

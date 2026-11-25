@@ -423,6 +423,11 @@ pub(crate) fn launch_external(
     Ok(())
 }
 
+pub(crate) struct Finished {
+    pub status: i32,
+    pub exits: Vec<(Pid, i32)>,
+}
+
 pub(crate) fn finish_foreground(
     session: &mut Session,
     sink: &Sink,
@@ -431,7 +436,7 @@ pub(crate) fn finish_foreground(
     watch: Option<Pid>,
     summary: &str,
     existing_job: Option<usize>,
-) -> i32 {
+) -> Finished {
     let outcome = wait_foreground(pgid, pids, watch);
     session.restore_terminal();
     let prior = existing_job
@@ -442,7 +447,10 @@ pub(crate) fn finish_foreground(
         if let Some(id) = existing_job {
             session.remove_job(id);
         }
-        return last_status.unwrap_or(0);
+        return Finished {
+            status: last_status.unwrap_or(0),
+            exits: outcome.exits,
+        };
     };
     let id = match existing_job {
         Some(id) => {
@@ -463,5 +471,8 @@ pub(crate) fn finish_foreground(
         ),
     };
     sink.stderr_line(&format!("\n[{id}]+ Stopped                 {summary}"));
-    128 + stopped.signal
+    Finished {
+        status: 128 + stopped.signal,
+        exits: outcome.exits,
+    }
 }
