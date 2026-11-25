@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use nix::libc;
@@ -164,14 +164,18 @@ pub fn spawn_external(session: &Session, spec: ExternalSpec) -> Result<Child, Sp
 pub fn find_executable(session: &Session, name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
+    let is_executable = |candidate: &Path| {
+        std::fs::metadata(candidate)
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if name.contains('/') {
+        return is_executable(&session.cwd.join(name)).then(|| PathBuf::from(name));
+    }
     let path = session.env.get("PATH")?;
     std::env::split_paths(&path)
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| dir.join(name))
-        .find(|candidate| {
-            std::fs::metadata(candidate)
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
+        .find(|candidate| is_executable(candidate))
 }
 
 #[derive(Debug)]
