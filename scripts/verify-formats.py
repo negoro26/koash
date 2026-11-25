@@ -100,7 +100,7 @@ for label, columns, rows in tables():
         continue
     write_json(os.path.join(root, "t.json"), rows)
     out = run_koa("cat --raw t.json | from json | to md", root).stdout.decode()
-    cell = lambda text: text.replace("|", "\\|").replace("\r", "").replace("\n", " ")
+    cell = lambda text: text.replace("\\", "\\\\").replace("|", "\\|").replace("\r", "").replace("\n", " ")
     want = "".join(
         [
             "| " + " | ".join(columns) + " |\n",
@@ -126,6 +126,15 @@ expect(
 )
 got = koa_json("from csv | to json", root, b"a,b\r\n1,2\r\n3,4")
 expect(got == [{"a": 1, "b": 2}, {"a": 3, "b": 4}], f"crlf and no final newline: koa {got!r}")
+got = koa_json("from csv | to json", root, b"id,n\n12345678901234567890123,-98765432109876543210\n")
+expect(
+    got == [{"id": "12345678901234567890123", "n": "-98765432109876543210"}],
+    f"integers too long for 64 bits stay text: koa {got!r}",
+)
+got = koa_json("from csv | select a | to json", root, b"\xef\xbb\xbfa,b\n1,2\n")
+expect(got == [{"a": 1}], f"a UTF-8 BOM is not part of the first column name: koa {got!r}")
+got = run_koa("from json | to md", root, b'[{"c":"x\\\\|y"}]').stdout.decode()
+expect(got.endswith("| x\\\\\\|y |\n"), f"to md escapes a backslash before a pipe: koa {got!r}")
 
 LINE_INPUTS = [
     b"", b"one", b"one\n", b"one\ntwo\n", b"one\n\nthree\n", b"\n", b"\n\n", b"x\ny", "\u00fcn\u00ef\n\u65e5\u672c\n".encode(),
