@@ -74,7 +74,7 @@ STACK_SCRIPTS = [
     "CDPATH=$PWD/a; pushd c; popd",
 ]
 KOA_ONLY_STACKS = {
-    "pushd a; pushd ../b; rm -r ../a; pushd; dirs": ("$ROOT/b|$ROOT/a $ROOT/b", ["$ROOT/b", "$ROOT/a", "$ROOT"]),
+    "pushd a; pushd ../b; rm -r ../a; pushd": ("$ROOT/b|$ROOT/a $ROOT/b", ["$ROOT/b", "$ROOT/a", "$ROOT"]),
 }
 REFUSED = ["pushd +0", "pushd +1", "pushd -1", "popd +1", "popd -1", "type -a echo", "type -p sh", "type -P sh"]
 NAMES = [
