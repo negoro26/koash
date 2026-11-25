@@ -77,9 +77,9 @@ PIPESTATUS = [
     "set -o pipefail; false | true; echo $PIPESTATUS",
     "cat nonexistent | cat; echo $PIPESTATUS",
     "echo a | sh -c 'exit 5'; echo $PIPESTATUS",
-    "false | true; sh -c 'echo [$PIPESTATUS]'",
+    "false | true; bash -c 'echo [$PIPESTATUS]'",
     "false | true; sh -c 'env | grep -c PIPESTATUS'",
-    "sh -c 'exit 3' | true; PIPESTATUS_PROBE=1 sh -c 'echo [$PIPESTATUS]'",
+    "sh -c 'exit 3' | true; PIPESTATUS_PROBE=1 bash -c 'echo [$PIPESTATUS]'",
 ]
 SETFLAGS = [
     "set -euo pipefail; echo hi",
