@@ -95,6 +95,9 @@ SETFLAGS = [
     "set -Z; echo $?",
     "set -o nonsuch; echo $?",
     "set -o nonsuch; echo $?; false; echo after",
+    "set -o errexit -o nonsuch; echo $?; false; echo after",
+    "set -e -o nonsuch; false; echo after",
+    "set -- ; echo \"$@\" \"\" x",
     "set -ex; echo hi",
     "set -x; echo hi",
     "set -C; echo hi",
@@ -292,6 +295,8 @@ NOTICES = [
     ("set -ex; echo hi", "xtrace"),
     ("set -o monitor; echo hi", "monitor"),
     ("set -euxo pipefail; echo hi", "xtrace"),
+    ("set -C; echo hi", "noclobber"),
+    ("set -o allexport -o keyword; echo hi", "allexport, keyword"),
 ]
 for script, name in NOTICES:
     checked += 1

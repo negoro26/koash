@@ -57,8 +57,9 @@ impl Builtin for Set {
             return Ok(Value::from_batch(rows.finish()?));
         }
 
+        let (changes, deferred) = parse(args)?;
         let mut ignored = Vec::new();
-        for (option, enable) in parse(args)? {
+        for (option, enable) in changes {
             match option.support {
                 Support::Errexit => session.errexit = enable,
                 Support::Noglob => session.noglob = enable,
@@ -76,7 +77,10 @@ impl Builtin for Set {
                 None,
             ));
         }
-        Ok(Value::Empty)
+        match deferred {
+            Some(diag) => Err(diag),
+            None => Ok(Value::Empty),
+        }
     }
 }
 
@@ -105,7 +109,7 @@ const fn opt(name: &'static str, letter: Option<char>, support: Support) -> Shel
 }
 
 static OPTIONS: [ShellOption; 27] = [
-    opt("allexport", Some('a'), Support::Refused),
+    opt("allexport", Some('a'), Support::Ignored),
     opt("braceexpand", Some('B'), Support::Ignored),
     opt("emacs", None, Support::Ignored),
     opt("errexit", Some('e'), Support::Errexit),
@@ -116,9 +120,9 @@ static OPTIONS: [ShellOption; 27] = [
     opt("history", None, Support::Ignored),
     opt("ignoreeof", None, Support::Ignored),
     opt("interactive-comments", None, Support::Ignored),
-    opt("keyword", Some('k'), Support::Refused),
+    opt("keyword", Some('k'), Support::Ignored),
     opt("monitor", Some('m'), Support::Ignored),
-    opt("noclobber", Some('C'), Support::Refused),
+    opt("noclobber", Some('C'), Support::Ignored),
     opt("noexec", Some('n'), Support::Refused),
     opt("noglob", Some('f'), Support::Noglob),
     opt("nolog", None, Support::Ignored),
@@ -128,7 +132,7 @@ static OPTIONS: [ShellOption; 27] = [
     opt("physical", Some('P'), Support::Ignored),
     opt("pipefail", None, Support::Pipefail),
     opt("posix", None, Support::Ignored),
-    opt("privileged", Some('p'), Support::Refused),
+    opt("privileged", Some('p'), Support::Ignored),
     opt("verbose", Some('v'), Support::Ignored),
     opt("vi", None, Support::Ignored),
     opt("xtrace", Some('x'), Support::Ignored),
@@ -136,7 +140,9 @@ static OPTIONS: [ShellOption; 27] = [
 
 const USAGE: &str = "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]";
 
-fn parse(args: &[String]) -> Result<Vec<(&'static ShellOption, bool)>, StructuredDiagnostic> {
+type Changes = Vec<(&'static ShellOption, bool)>;
+
+fn parse(args: &[String]) -> Result<(Changes, Option<StructuredDiagnostic>), StructuredDiagnostic> {
     let mut changes = Vec::new();
     let mut rest = args.iter().map(String::as_str);
     while let Some(arg) = rest.next() {
@@ -156,12 +162,16 @@ fn parse(args: &[String]) -> Result<Vec<(&'static ShellOption, bool)>, Structure
             letters => {
                 for letter in letters.chars() {
                     let option = if letter == 'o' {
-                        let name = rest.next().ok_or_else(|| {
-                            usage_error("set: -o/+o requires an option name", USAGE)
-                        })?;
-                        OPTIONS.iter().find(|o| o.name == name).ok_or_else(|| {
-                            usage_error(format!("set: {name}: invalid option name"), USAGE)
-                        })?
+                        let Some(name) = rest.next() else {
+                            let diag = usage_error("set: -o/+o requires an option name", USAGE);
+                            return Ok((changes, Some(diag)));
+                        };
+                        let Some(option) = OPTIONS.iter().find(|o| o.name == name) else {
+                            let diag =
+                                usage_error(format!("set: {name}: invalid option name"), USAGE);
+                            return Ok((changes, Some(diag)));
+                        };
+                        option
                     } else {
                         OPTIONS
                             .iter()
@@ -182,7 +192,7 @@ fn parse(args: &[String]) -> Result<Vec<(&'static ShellOption, bool)>, Structure
             }
         }
     }
-    Ok(changes)
+    Ok((changes, None))
 }
 
 fn positional_error() -> StructuredDiagnostic {
