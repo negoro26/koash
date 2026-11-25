@@ -5,6 +5,7 @@ use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
 use super::common::resolve_path;
+use super::fs_ops::{describe, fail};
 use crate::args::Args;
 use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
@@ -13,7 +14,7 @@ pub(super) struct Tee;
 static SIGNATURE: Signature = Signature {
     name: "tee",
     aliases: &[],
-    description: "Write piped output to files (undo-tracked) while passing structured data through",
+    description: "Write piped output to files (undo-tracked); tables pass through, text runs GNU tee",
     flags: &[Flag::switch(
         'a',
         "append",
@@ -29,6 +30,11 @@ static SIGNATURE: Signature = Signature {
 impl Builtin for Tee {
     fn signature(&self) -> &'static Signature {
         &SIGNATURE
+    }
+
+    fn text_writes(&self, args: &[String]) -> Option<Vec<String>> {
+        let operands = Args::parse(&SIGNATURE, args).ok()?.operands;
+        Some(operands.into_iter().map(str::to_string).collect())
     }
 
     fn run(
@@ -62,16 +68,10 @@ impl Builtin for Tee {
                 .truncate(!append)
                 .append(append)
                 .open(&path);
-            match file {
-                Ok(mut f) => {
-                    if let Err(e) = f.write_all(&bytes) {
-                        session.report(StructuredDiagnostic::from_io("E_TEE", &e, None));
-                    } else {
-                        session.record_mutation(path.to_string_lossy().to_string());
-                    }
-                }
+            match file.and_then(|mut f| f.write_all(&bytes)) {
+                Ok(()) => session.record_mutation(path.to_string_lossy().to_string()),
                 Err(e) => {
-                    session.report(StructuredDiagnostic::from_io("E_TEE", &e, None));
+                    fail(session, "E_TEE", format!("tee: {raw}: {}", describe(&e)));
                 }
             }
         }

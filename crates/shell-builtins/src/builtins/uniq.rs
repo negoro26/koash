@@ -9,10 +9,12 @@ use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct Uniq;
 
+const COUNT_NAMES: [&str; 2] = ["count", "uniq_count"];
+
 static SIGNATURE: Signature = Signature {
     name: "uniq",
     aliases: &[],
-    description: "Deduplicate structured records by whole row or by column",
+    description: "Deduplicate table rows by whole row or by column; text runs GNU uniq",
     flags: &[Flag::switch(
         'c',
         "count",
@@ -28,6 +30,18 @@ static SIGNATURE: Signature = Signature {
 impl Builtin for Uniq {
     fn signature(&self) -> &'static Signature {
         &SIGNATURE
+    }
+
+    fn text_writes(&self, args: &[String]) -> Option<Vec<String>> {
+        let operands = Args::parse(&SIGNATURE, args).ok()?.operands;
+        Some(
+            operands
+                .get(1)
+                .filter(|out| **out != "-")
+                .map(|out| (*out).to_string())
+                .into_iter()
+                .collect(),
+        )
     }
 
     fn run(
@@ -104,8 +118,17 @@ impl Builtin for Uniq {
             return Ok(Value::from_batch(out.finish()?));
         }
 
+        let Some(count_name) = COUNT_NAMES
+            .into_iter()
+            .find(|name| batch.col_index(name).is_none())
+        else {
+            return Err(usage_error(
+                "uniq -c needs a free column named count or uniq_count",
+                "uniq [-c|--count] [column]",
+            ));
+        };
         let mut cols: Vec<Column> = batch.schema().columns().to_vec();
-        cols.push(Column::new("count"));
+        cols.push(Column::new(count_name));
         let mut out = DynRows::new(Schema::from(cols));
         for (row_idx, count) in unique_rows {
             let row = batch.row(row_idx);

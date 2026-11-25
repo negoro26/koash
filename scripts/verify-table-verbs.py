@@ -92,17 +92,20 @@ for name, count in LINE_COUNTS.items():
     expect(got == want, f"bare skip of {name}: koa {got[:3]}..., tail -n +2 {want[:3]}...")
 
 for name in LINE_COUNTS:
+    for source in (name, f"sorted-{name}"):
+        with open(os.path.join(root, source)) as src, open(os.path.join(root, f"table-{source}.json"), "w") as dst:
+            json.dump([{"text": line} for line in src.read().split()], dst)
     want = [
         (line.split(None, 1)[1], int(line.split(None, 1)[0]))
         for line in gnu_lines(f"uniq -c sorted-{name}", root)
     ]
-    got = [(r["text"], r["count"]) for r in rows(f"cat sorted-{name} | uniq -c text | to json", root)]
+    got = [(r["text"], r["count"]) for r in rows(f"cat --raw table-sorted-{name}.json | from json | uniq -c text | to json", root)]
     expect(got == want, f"uniq -c text on sorted-{name}: koa {got}, uniq -c {want}")
     unsorted = Counter(open(os.path.join(root, name)).read().split())
-    got = {r["text"]: r["count"] for r in rows(f"cat {name} | uniq -c text | to json", root)}
+    got = {r["text"]: r["count"] for r in rows(f"cat --raw table-{name}.json | from json | uniq -c text | to json", root)}
     expect(got == dict(unsorted), f"uniq -c text on {name}: koa {got}, counted {dict(unsorted)}")
     want_unique = gnu_lines(f"sort -u {name} | wc -l", root)[0]
-    got = rows(f"cat {name} | uniq text | count | to json", root)
+    got = rows(f"cat --raw table-{name}.json | from json | uniq text | count | to json", root)
     expect(got and str(got[0]["count"]) == want_unique, f"uniq text on {name}: koa {got}, sort -u says {want_unique}")
 
 def tee_result(tool, name, flag, existing):
@@ -146,6 +149,87 @@ with open(os.path.join(workdir, "keep"), "w") as fh:
     fh.write("original\n")
 run_koa("cat odd | tee -a keep; undo", workdir)
 expect(open(os.path.join(workdir, "keep")).read() == "original\n", "undo did not restore a tee -a target")
+shutil.rmtree(workdir)
+
+with open(os.path.join(root, "aba"), "w") as fh:
+    fh.write("a\nb\na\n")
+with open(os.path.join(root, "w"), "w") as fh:
+    fh.write("b\na\nb\nc\nb\na\n")
+with open(os.path.join(root, "crlf"), "w") as fh:
+    fh.write("a\r\na\r\nb\r\n")
+with open(os.path.join(root, "raw"), "wb") as fh:
+    fh.write(b"\xff\nb\n\xff\n\xff\nlast")
+
+
+def snapshot(workdir):
+    seen = {}
+    for name in sorted(os.listdir(workdir)):
+        if name.startswith("."):
+            continue
+        with open(os.path.join(workdir, name), "rb") as fh:
+            seen[name] = fh.read()
+    return seen
+
+
+def run_both(script):
+    results = []
+    for argv in ([koa, "-c", script], ["bash", "-c", script]):
+        workdir = tempfile.mkdtemp()
+        shutil.copytree(root, workdir, dirs_exist_ok=True)
+        out = subprocess.run(argv, cwd=workdir, capture_output=True, timeout=30)
+        results.append((out.stdout, out.stderr, out.returncode, snapshot(workdir)))
+        shutil.rmtree(workdir)
+    return results
+
+
+TEXT_CASES = [
+    "printf 'a\\nb\\na\\n' | uniq | wc -l",
+    "printf 'a\\nb\\na\\n' | uniq",
+    "sort w | uniq -c | sort -rn",
+    "sort w | uniq -c > counted; od -c counted",
+    "sort w | uniq",
+    "uniq aba",
+    "uniq -c aba",
+    "uniq aba out; od -c out",
+    "uniq -c < aba",
+    "uniq nonexistent",
+    "uniq aba out extra",
+    "cat aba | uniq",
+    "cat aba | uniq -c",
+    "cat aba | uniq | wc -l",
+    "grep a w | uniq -c",
+    "head -n 4 w | uniq -c",
+    "tail -n 4 w | uniq",
+    "uniq -c < crlf | od -c",
+    "uniq -c crlf | od -c",
+    "uniq -c < raw | od -c",
+    "printf '' | uniq -c | od -c",
+    "echo hi | tee /nonexistent/x",
+    "echo hi | tee /nonexistent/x kept",
+    "echo hi | tee kept; od -c kept",
+    "printf 'x\\ny' | tee kept | od -c; od -c kept",
+    "cat aba | tee kept | wc -l; od -c kept",
+    "cat aba | tee kept",
+    "tee kept < crlf | od -c; od -c kept",
+    "cat aba | tee -a w | wc -l; od -c w",
+    "head -n 2 w | tee kept; od -c kept",
+    "grep b w | tee kept",
+    "tee kept < aba; od -c kept",
+    "tee kept",
+    "tee",
+    "echo hi | tee",
+    "echo hi | tee kept /nonexistent/x kept2; echo $?; od -c kept kept2",
+]
+for script in TEXT_CASES:
+    got, want = run_both(script)
+    expect(got == want, f"text through uniq or tee differs from bash: {script!r}\n    koa  {got}\n    bash {want}")
+
+workdir = tempfile.mkdtemp()
+shutil.copy(os.path.join(root, "aba"), workdir)
+with open(os.path.join(workdir, "keep"), "w") as fh:
+    fh.write("original\n")
+run_koa("uniq aba keep; undo", workdir)
+expect(open(os.path.join(workdir, "keep")).read() == "original\n", "undo did not restore a uniq output file")
 shutil.rmtree(workdir)
 
 DATA = [
@@ -194,6 +278,26 @@ expect(len(got) == 4, f"describe alias: {got}")
 got = rows(f"{FROM} | reject lines ratio | to json", root)
 expect(got == [{"lang": r["lang"], "ok": r["ok"]} for r in DATA], f"reject lines ratio: {got}")
 expect(rows(f"{FROM} | reject nope | to json", root) == DATA, "reject on a missing column changed the table")
+
+BIG = [{"n": 9007199254740993}, {"n": 1}, {"n": -9007199254740995}, {"n": 18446744073709551615}]
+with open(os.path.join(root, "big.json"), "w") as fh:
+    json.dump(BIG, fh)
+got = rows("cat --raw big.json | from json | stats n | to json", root)
+values = [r["n"] for r in BIG]
+want = {"count": len(values), "sum": sum(values), "min": min(values), "max": max(values)}
+expect(len(got) == 1 and all(got[0][k] == v for k, v in want.items()), f"stats on integers beyond 2^53: koa {got}, exact {want}")
+
+got = rows(f"{FROM} | group-by lang | uniq -c | to json", root)
+expect(
+    [(r["group"], r["count"], r.get("uniq_count")) for r in got] == [(g, n, 1) for g, n in sorted(by_lang.items(), key=lambda kv: (-kv[1], kv[0]))],
+    f"uniq -c on a table with a count column: {got}",
+)
+
+ls_names = sorted(gnu_lines("ls", root))
+got = rows("ls | uniq name | select name | to json", root)
+expect(sorted(r["name"] for r in got) == ls_names, f"ls | uniq name: koa {got}, ls says {ls_names}")
+got = rows(f"{FROM} | tee kept | count | to json", root)
+expect(got and got[0]["count"] == len(DATA), f"tee on a table does not pass it through: {got}")
 
 shutil.rmtree(root)
 print(f"checked {checked} table verb results against GNU tools and computed expectations")
