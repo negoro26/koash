@@ -89,7 +89,7 @@ On a terminal a table never runs past the screen. The widest columns are cut fir
 
 `alias ll='ls -la'` works as in bash, including an alias whose value ends in a space expanding the next word. `alias` lists your aliases, and `unalias ll` removes one. Aliases are not expanded inside `$(...)` or backticks, and Tab completion does not know alias names yet.
 
-`pushd`, `popd` and `dirs` manage a directory stack, and `type` classifies names as `alias`, `builtin` or `external`.
+`pushd`, `popd` and `dirs` manage a directory stack, and `type` classifies names as `alias`, `builtin` or `external` (`type -t` prints `alias`, `builtin` or `file`). `pushd -` goes to `$OLDPWD` and `pushd DIR` looks `DIR` up through `CDPATH` like `cd`.
 
 The interactive shell runs `~/.koarc` when it starts. Set `KOA_RC` to use another file, or start with `koa --norc` to skip it. `koa -c`, piped scripts, `--rpc`, `--socket` and `--acp` never read it.
 

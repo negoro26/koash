@@ -1,10 +1,12 @@
+use std::borrow::Cow;
+
 use shell_kernel::{Session, find_executable};
 use shell_value::{Record, Rows, StructuredDiagnostic, Value, record};
 
 use super::common::usage_error;
 use super::lookup;
 use crate::args::Args;
-use crate::builtin::{Builtin, InputMode, Placement, Signature, TxPolicy};
+use crate::builtin::{Builtin, Flag, InputMode, Placement, Signature, TxPolicy};
 
 pub(super) struct TypeCmd;
 
@@ -20,7 +22,10 @@ static SIGNATURE: Signature = Signature {
     name: "type",
     aliases: &[],
     description: "Describe how each command name would be interpreted (alias, builtin, external)",
-    flags: &[],
+    flags: &[Flag::short_switch(
+        't',
+        "print only the kind: alias, builtin or file",
+    )],
     columns: <TypeRow<'static> as Record>::COLUMNS,
     input: InputMode::None,
     placement: Placement::Any,
@@ -43,35 +48,38 @@ impl Builtin for TypeCmd {
         if parsed.operands.is_empty() {
             return Err(usage_error("type requires a command name", "type NAME..."));
         }
+        let kinds_only = parsed.has("t");
+        let mut kinds = String::new();
         let mut rows = Rows::<TypeRow<'static>>::with_capacity(parsed.operands.len());
         for &name in &parsed.operands {
-            if let Some(val) = session.aliases.get(name) {
-                rows.push(&TypeRow {
-                    name,
-                    kind: "alias",
-                    detail: val,
-                });
+            let found: Option<(&str, Cow<str>)> = if let Some(val) = session.aliases.get(name) {
+                Some(("alias", Cow::Borrowed(val.as_str())))
             } else if let Some(b) = lookup(name) {
-                rows.push(&TypeRow {
-                    name,
-                    kind: "builtin",
-                    detail: b.signature().description,
-                });
-            } else if let Some(path) = find_executable(session, name) {
-                let text = path.to_string_lossy();
-                rows.push(&TypeRow {
-                    name,
-                    kind: "external",
-                    detail: &text,
-                });
+                Some(("builtin", Cow::Borrowed(b.signature().description)))
             } else {
-                session.report(StructuredDiagnostic::new(
+                find_executable(session, name)
+                    .map(|path| ("external", Cow::Owned(path.to_string_lossy().into_owned())))
+            };
+            match found {
+                Some((kind, _)) if kinds_only => {
+                    kinds.push_str(if kind == "external" { "file" } else { kind });
+                    kinds.push('\n');
+                }
+                Some((kind, detail)) => rows.push(&TypeRow {
+                    name,
+                    kind,
+                    detail: &detail,
+                }),
+                None => session.report(StructuredDiagnostic::new(
                     "E_NOT_FOUND",
                     format!("type: {name}: not found"),
                     None,
                     None,
-                ));
+                )),
             }
+        }
+        if kinds_only {
+            return Ok(Value::from_bytes(kinds.into_bytes()));
         }
         Ok(Value::from_batch(rows.finish_or_empty()?))
     }

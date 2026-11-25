@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use nix::unistd::{AccessFlags, access};
 use shell_kernel::Session;
 use shell_value::{StructuredDiagnostic, Value};
 
@@ -30,6 +31,7 @@ static SIGNATURE: Signature = Signature {
     strict_options: true,
 };
 
+const ENOENT: i32 = 2;
 const ENOTDIR: i32 = 20;
 
 struct Candidate {
@@ -67,50 +69,68 @@ impl Builtin for Cd {
             Some(dir) => (dir.to_string(), true, false),
         };
 
-        let candidates = candidates(session, &dir, search_cdpath);
-        let mut best: Option<io::Error> = None;
-        let mut chosen = None;
-        for candidate in candidates {
-            let normalized = normalize(&candidate.path);
-            match probe(&candidate.path).and_then(|()| probe(&normalized)) {
-                Ok(()) => {
-                    chosen = Some((candidate, normalized));
-                    break;
-                }
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    best.get_or_insert(e);
-                }
-                Err(e) if e.raw_os_error() == Some(ENOTDIR) => best = Some(e),
-                Err(e) => {
-                    best = Some(e);
-                    break;
-                }
-            }
-        }
-        let Some((candidate, normalized)) = chosen else {
-            let reason =
-                best.map_or_else(|| "No such file or directory".to_string(), |e| describe(&e));
-            return Err(cd_error(format!("cd: {dir}: {reason}")));
-        };
-
-        let new_dir = if physical {
-            candidate
-                .path
-                .canonicalize()
-                .map_err(|e| cd_error(format!("cd: {dir}: {}", describe(&e))))?
-        } else {
-            normalized
-        };
-        let old = session.cwd.to_string_lossy().to_string();
-        let text = new_dir.to_string_lossy().to_string();
-        session.env.insert("OLDPWD".to_string(), old);
-        session.env.insert("PWD".to_string(), text.clone());
-        session.cwd = new_dir;
-        if announce || candidate.from_cdpath {
+        let resolved = resolve(session, &dir, search_cdpath, physical)
+            .map_err(|e| cd_error(format!("cd: {dir}: {}", describe(&e))))?;
+        let text = resolved.path.to_string_lossy().to_string();
+        enter(session, resolved.path);
+        if announce || resolved.from_cdpath {
             return Ok(Value::from_bytes(format!("{text}\n").into_bytes()));
         }
         Ok(Value::Empty)
     }
+}
+
+pub(super) struct Resolved {
+    pub(super) path: PathBuf,
+    pub(super) from_cdpath: bool,
+}
+
+pub(super) fn resolve(
+    session: &Session,
+    dir: &str,
+    search_cdpath: bool,
+    physical: bool,
+) -> io::Result<Resolved> {
+    let mut best: Option<io::Error> = None;
+    let mut chosen = None;
+    for candidate in candidates(session, dir, search_cdpath) {
+        let normalized = normalize(&candidate.path);
+        match probe(&candidate.path).and_then(|()| probe(&normalized)) {
+            Ok(()) => {
+                chosen = Some((candidate, normalized));
+                break;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                best.get_or_insert(e);
+            }
+            Err(e) if e.raw_os_error() == Some(ENOTDIR) => best = Some(e),
+            Err(e) => {
+                best = Some(e);
+                break;
+            }
+        }
+    }
+    let Some((candidate, normalized)) = chosen else {
+        return Err(best.unwrap_or_else(|| io::Error::from_raw_os_error(ENOENT)));
+    };
+    let path = if physical {
+        candidate.path.canonicalize()?
+    } else {
+        normalized
+    };
+    Ok(Resolved {
+        path,
+        from_cdpath: candidate.from_cdpath,
+    })
+}
+
+pub(super) fn enter(session: &mut Session, new_dir: PathBuf) {
+    let old = session.cwd.to_string_lossy().to_string();
+    session.env.insert("OLDPWD".to_string(), old);
+    session
+        .env
+        .insert("PWD".to_string(), new_dir.to_string_lossy().to_string());
+    session.cwd = new_dir;
 }
 
 fn cd_error(message: impl Into<String>) -> StructuredDiagnostic {
@@ -118,11 +138,10 @@ fn cd_error(message: impl Into<String>) -> StructuredDiagnostic {
 }
 
 fn probe(path: &Path) -> io::Result<()> {
-    if fs::metadata(path)?.is_dir() {
-        Ok(())
-    } else {
-        Err(io::Error::from_raw_os_error(ENOTDIR))
+    if !fs::metadata(path)?.is_dir() {
+        return Err(io::Error::from_raw_os_error(ENOTDIR));
     }
+    access(path, AccessFlags::X_OK).map_err(io::Error::from)
 }
 
 fn candidates(session: &Session, dir: &str, search_cdpath: bool) -> Vec<Candidate> {

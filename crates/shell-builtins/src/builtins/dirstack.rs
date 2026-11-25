@@ -1,9 +1,7 @@
-use std::fs;
-use std::path::{Component, Path, PathBuf};
-
 use shell_kernel::Session;
 use shell_value::{Record, Rows, StructuredDiagnostic, Value, record};
 
+use super::cd::{enter, resolve};
 use super::common::usage_error;
 use super::fs_ops::describe;
 use crate::args::Args;
@@ -70,7 +68,11 @@ impl Builtin for Pushd {
         let parsed = Args::parse(&PUSHD_SIG, args)?;
         match parsed.operands.as_slice() {
             [] => {
-                let Some(top) = session.dir_stack.pop() else {
+                let Some(top) = session
+                    .dir_stack
+                    .last()
+                    .map(|p| p.to_string_lossy().to_string())
+                else {
                     return Err(StructuredDiagnostic::new(
                         "E_DIRSTACK",
                         "pushd: no other directory",
@@ -79,13 +81,29 @@ impl Builtin for Pushd {
                     ));
                 };
                 let old = session.cwd.clone();
-                change_dir(session, &top)?;
+                change_dir(session, "pushd", &top, false)?;
+                if let Some(slot) = session.dir_stack.last_mut() {
+                    *slot = old;
+                }
+            }
+            [""] => return Err(dir_error("pushd: null directory")),
+            ["-"] => {
+                let Some(previous) = session.env.get("OLDPWD").filter(|d| !d.is_empty()) else {
+                    return Err(dir_error("pushd: OLDPWD not set"));
+                };
+                let old = session.cwd.clone();
+                change_dir(session, "pushd", &previous, false)?;
                 session.dir_stack.push(old);
             }
+            [rotation] if is_rotation(rotation) => {
+                return Err(usage_error(
+                    format!("pushd: {rotation}: stack rotation is not supported"),
+                    "pushd [DIR]",
+                ));
+            }
             [dir] => {
-                let target = resolve_target(&session.cwd, dir)?;
                 let old = session.cwd.clone();
-                change_dir(session, &target)?;
+                change_dir(session, "pushd", dir, true)?;
                 session.dir_stack.push(old);
             }
             _ => return Err(usage_error("pushd: too many arguments", "pushd [DIR]")),
@@ -109,7 +127,11 @@ impl Builtin for Popd {
         if !parsed.operands.is_empty() {
             return Err(usage_error("popd takes no arguments", "popd"));
         }
-        let Some(top) = session.dir_stack.pop() else {
+        let Some(top) = session
+            .dir_stack
+            .last()
+            .map(|p| p.to_string_lossy().to_string())
+        else {
             return Err(StructuredDiagnostic::new(
                 "E_DIRSTACK",
                 "popd: directory stack empty",
@@ -117,7 +139,8 @@ impl Builtin for Popd {
                 None,
             ));
         };
-        change_dir(session, &top)?;
+        change_dir(session, "popd", &top, false)?;
+        session.dir_stack.pop();
         render_stack(session)
     }
 }
@@ -141,53 +164,25 @@ impl Builtin for Dirs {
     }
 }
 
-fn resolve_target(cwd: &Path, raw: &str) -> Result<PathBuf, StructuredDiagnostic> {
-    let joined = if Path::new(raw).is_absolute() {
-        PathBuf::from(raw)
-    } else {
-        cwd.join(raw)
-    };
-    let mut normalized = PathBuf::new();
-    for comp in joined.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other),
-        }
-    }
-    match fs::metadata(&normalized) {
-        Ok(meta) if meta.is_dir() => Ok(normalized),
-        Ok(_) => Err(StructuredDiagnostic::new(
-            "E_CD",
-            format!("pushd: {raw}: Not a directory"),
-            None,
-            None,
-        )),
-        Err(e) => Err(StructuredDiagnostic::new(
-            "E_CD",
-            format!("pushd: {raw}: {}", describe(&e)),
-            None,
-            None,
-        )),
-    }
+fn is_rotation(operand: &str) -> bool {
+    operand
+        .strip_prefix('+')
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
-fn change_dir(session: &mut Session, target: &Path) -> Result<(), StructuredDiagnostic> {
-    if !fs::metadata(target).is_ok_and(|m| m.is_dir()) {
-        return Err(StructuredDiagnostic::new(
-            "E_CD",
-            format!("directory no longer exists: {}", target.display()),
-            None,
-            None,
-        ));
-    }
-    let old = session.cwd.to_string_lossy().to_string();
-    let next = target.to_string_lossy().to_string();
-    session.env.insert("OLDPWD".to_string(), old);
-    session.env.insert("PWD".to_string(), next);
-    session.cwd = target.to_path_buf();
+fn dir_error(message: impl Into<String>) -> StructuredDiagnostic {
+    StructuredDiagnostic::new("E_CD", message, None, None)
+}
+
+fn change_dir(
+    session: &mut Session,
+    who: &str,
+    dir: &str,
+    search_cdpath: bool,
+) -> Result<(), StructuredDiagnostic> {
+    let resolved = resolve(session, dir, search_cdpath, false)
+        .map_err(|e| dir_error(format!("{who}: {dir}: {}", describe(&e))))?;
+    enter(session, resolved.path);
     Ok(())
 }
 
