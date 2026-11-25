@@ -98,6 +98,7 @@ fn parse_lines(bytes: &[u8]) -> Result<Value, StructuredDiagnostic> {
 
 fn parse_delimited(bytes: &[u8], delim: char) -> Result<Value, StructuredDiagnostic> {
     let text = String::from_utf8_lossy(bytes);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let records = split_delimited_records(&text, delim);
     let Some((header, data)) = records.split_first() else {
         return Ok(Value::from_batch(RecordBatch::empty()));
@@ -132,7 +133,8 @@ fn put_inferred(sink: &mut shell_value::RowSink<'_>, raw: &str) {
         sink.put(Datum::UInt(u));
     } else if let Ok(i) = raw.parse::<i64>() {
         sink.put(Datum::Int(i));
-    } else if let Ok(f) = raw.parse::<f64>()
+    } else if raw.contains(['.', 'e', 'E'])
+        && let Ok(f) = raw.parse::<f64>()
         && f.is_finite()
     {
         sink.put(Datum::Float(f));

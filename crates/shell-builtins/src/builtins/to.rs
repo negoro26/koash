@@ -137,6 +137,7 @@ fn format_markdown(batch: &RecordBatch) -> String {
 fn push_md_cell(out: &mut String, text: &str) {
     for ch in text.chars() {
         match ch {
+            '\\' => out.push_str("\\\\"),
             '|' => out.push_str("\\|"),
             '\n' => out.push(' '),
             '\r' => {}
