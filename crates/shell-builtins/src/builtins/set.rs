@@ -57,7 +57,11 @@ impl Builtin for Set {
             return Ok(Value::from_batch(rows.finish()?));
         }
 
-        let (changes, deferred) = parse(args)?;
+        let (changes, deferred) = parse(args).inspect_err(|diag| {
+            if diag.code == "E_NOCLOBBER" && !session.interactive {
+                session.should_exit = Some(2);
+            }
+        })?;
         let mut ignored = Vec::new();
         for (option, enable) in changes {
             match option.support {
@@ -66,7 +70,7 @@ impl Builtin for Set {
                 Support::Nounset => session.nounset = enable,
                 Support::Pipefail => session.pipefail = enable,
                 Support::Ignored => ignored.push(option.name),
-                Support::Refused => {}
+                Support::Refused | Support::RefusedOn => {}
             }
         }
         if !ignored.is_empty() {
@@ -92,6 +96,7 @@ enum Support {
     Pipefail,
     Ignored,
     Refused,
+    RefusedOn,
 }
 
 struct ShellOption {
@@ -122,7 +127,7 @@ static OPTIONS: [ShellOption; 27] = [
     opt("interactive-comments", None, Support::Ignored),
     opt("keyword", Some('k'), Support::Ignored),
     opt("monitor", Some('m'), Support::Ignored),
-    opt("noclobber", Some('C'), Support::Ignored),
+    opt("noclobber", Some('C'), Support::RefusedOn),
     opt("noexec", Some('n'), Support::Refused),
     opt("noglob", Some('f'), Support::Noglob),
     opt("nolog", None, Support::Ignored),
@@ -185,6 +190,14 @@ fn parse(args: &[String]) -> Result<(Changes, Option<StructuredDiagnostic>), Str
                         return Err(usage_error(
                             format!("set: {} is not supported", option.name),
                             USAGE,
+                        ));
+                    }
+                    if enable && option.support == Support::RefusedOn {
+                        return Err(StructuredDiagnostic::new(
+                            "E_NOCLOBBER",
+                            "set: noclobber is not supported; stopping so nothing is overwritten",
+                            None,
+                            None,
                         ));
                     }
                     changes.push((option, enable));
