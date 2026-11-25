@@ -139,6 +139,10 @@ pub trait Builtin: Sync {
         self.signature().input != InputMode::None
     }
 
+    fn text_writes(&self, _args: &[String]) -> Option<Vec<String>> {
+        None
+    }
+
     fn run(
         &self,
         session: &mut Session,
