@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 
 use nix::unistd::Pid;
 use shell_kernel::{
@@ -11,6 +12,7 @@ use shell_value::{StructuredDiagnostic, TaintLevel, Value};
 
 use crate::args::Args;
 use crate::builtin::{Builtin, Placement, TxPolicy};
+use crate::builtins::common::{is_hashline, resolve_path};
 use crate::builtins::lookup;
 use crate::env_capture::EnvCapture;
 use crate::sink::{Sink, diag_status};
@@ -374,6 +376,10 @@ fn run_stages(
             break;
         }
         last_is_launched = false;
+        let twin = match stage.kind {
+            StageKind::Builtin(builtin) => text_twin(session, builtin, stage, &flow),
+            _ => None,
+        };
         match stage.kind {
             StageKind::Assign => {
                 flow = Flow::Value(Value::Empty);
@@ -387,7 +393,7 @@ fn run_stages(
                 final_status = Some(code);
                 stage_statuses[idx] = Some(code);
             }
-            StageKind::Builtin(builtin) => {
+            StageKind::Builtin(builtin) if twin.is_none() => {
                 let input = take_builtin_input(session, builtin, stage, &mut flow, &launched, plan);
                 let result = input.and_then(|value| builtin.run(session, &stage.argv[1..], value));
                 let reports = session.take_reports();
@@ -426,9 +432,16 @@ fn run_stages(
                 final_status = Some(status);
                 stage_statuses[idx] = Some(status);
             }
-            StageKind::External => {
+            StageKind::Builtin(_) | StageKind::External => {
+                let targets = twin.unwrap_or_default();
+                for path in &targets {
+                    session.record_output_target(path);
+                }
                 match launch_external(session, stage, &mut flow, plan, last, &mut launched) {
                     Ok(()) => {
+                        for path in targets {
+                            session.record_mutation(path.to_string_lossy().to_string());
+                        }
                         last_is_launched = true;
                         final_status = None;
                         stage_pids[idx] = launched.last_pid;
@@ -516,6 +529,26 @@ fn record_pipestatus(session: &mut Session, codes: &[i32], last: i32, pipefail: 
     } else {
         last
     }
+}
+
+fn text_twin(
+    session: &Session,
+    builtin: &dyn Builtin,
+    stage: &Stage,
+    flow: &Flow,
+) -> Option<Vec<PathBuf>> {
+    let writes = builtin.text_writes(&stage.argv[1..])?;
+    let reads_table = matches!(flow, Flow::Value(Value::Batch(batch)) if !is_hashline(batch))
+        && !stage.redirs.iter().any(|r| r.kind == RedirectKind::Stdin);
+    if reads_table || find_executable(session, &stage.argv[0]).is_none() {
+        return None;
+    }
+    Some(
+        writes
+            .iter()
+            .map(|raw| resolve_path(session, raw))
+            .collect(),
+    )
 }
 
 fn take_builtin_input(

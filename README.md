@@ -20,11 +20,15 @@ Run `koa` for an interactive shell, or `koa -c '...'` to run one line. In the in
 koa -c 'ls -t | first 5'
 koa -c 'ls | where size > 1000 | sort-by size | select name size'
 koa -c 'find src | where ext == rs | first 5'
+koa -c 'ls | stats size | to md'
+koa -c 'find crates | group-by ext'
 koa -c 'cat notes.txt | where text =~ todo'
 koa -c 'ps | where name == bash | to json'
 ```
 
-`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `sort-by`, `first`, `last` and `to json` work on those tables.
+`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `reject`, `sort-by`, `reverse`, `first`, `last`, `skip`, `count` (`length`), `group-by`, `schema` (`describe`), `stats` (`measure`), `from` (`json`, `csv`, `tsv`, `lines`) and `to` (`json`, `compact`, `csv`, `tsv`, `md`) work on those tables.
+
+`uniq` and `tee` also work on tables such as `ls` or `group-by` output, as in `ls | uniq name`. On text they are GNU `uniq` and `tee`. Text means bytes from a program, `cat`, `grep`, `head` and `tail` rows, and file arguments, so `sort w | uniq -c` and `tee /bad/path` print what bash prints.
 
 Normal programs still work. When a table goes into one, it gets the text bash would send:
 

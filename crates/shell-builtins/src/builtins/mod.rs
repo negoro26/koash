@@ -7,6 +7,7 @@ mod ast;
 mod bg;
 mod cat;
 mod cd;
+mod count;
 mod cp;
 mod diag;
 mod discover;
@@ -19,6 +20,7 @@ mod find;
 mod first;
 mod from;
 mod grep;
+mod group_by;
 mod head;
 mod help;
 mod history;
@@ -36,19 +38,26 @@ mod pwd;
 mod py;
 mod redo;
 mod refs;
+mod reject;
 mod rename;
+mod reverse;
 mod rm;
 mod rollback;
+mod schema;
 mod select;
 mod set;
+mod skip;
 mod sort_by;
 mod sql;
 mod stat;
+mod stats;
 mod tail;
+mod tee;
 mod to;
 mod tx_log;
 mod unalias;
 mod undo;
+mod uniq;
 mod unset;
 mod wait;
 mod where_;
@@ -81,9 +90,18 @@ pub static REGISTRY: &[&dyn Builtin] = &[
     &mv::Mv,
     &where_::Where,
     &select::Select,
+    &reject::Reject,
     &sort_by::SortBy,
+    &reverse::Reverse,
     &first::First,
     &last::Last,
+    &skip::Skip,
+    &count::Count,
+    &uniq::Uniq,
+    &group_by::GroupBy,
+    &schema::SchemaCmd,
+    &stats::Stats,
+    &tee::Tee,
     &from::FromFormat,
     &to::ToFormat,
     &set::Set,

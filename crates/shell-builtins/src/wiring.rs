@@ -16,7 +16,7 @@ use shell_kernel::{
 use shell_syntax::{RedirectKind, Redirection};
 use shell_value::{StructuredDiagnostic, Value};
 
-use crate::pipeline::Stage;
+use crate::pipeline::{Stage, StageKind};
 use crate::sink::{Chunk, Sink};
 
 const STOP_POLL: Duration = Duration::from_millis(50);
@@ -400,7 +400,9 @@ pub(crate) fn launch_external(
             claim_terminal: !plan.background && session.interactive && launched.pgid.is_none(),
         },
     )?;
-    session.mark_opaque(stage.label.clone());
+    if matches!(stage.kind, StageKind::External) {
+        session.mark_opaque(stage.label.clone());
+    }
 
     let pid = Pid::from_raw(child.id() as i32);
     let pgid = *launched

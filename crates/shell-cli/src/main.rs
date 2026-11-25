@@ -36,8 +36,11 @@ BASH TRANSITION QUICK GUIDE:
   * cat/grep/ast output Hashline anchors (file, line, hash, text) for `patch`.
   * Standard bash flags work: grep -rn -i -F -w -l -c --include, find -type/-name,
     head/tail -n N [file], ls -la, mkdir -p, rm -rf, cd -, cat --raw.
-  * Table verbs: where <col op val>, select <cols...>, sort-by [--desc] <col>,
-    first [N], last [N], from json, to json|compact.
+  * Table verbs: where <col op val>, select <cols...>, reject <cols...>,
+    sort-by [--desc] <col>, reverse, first [N], last [N], skip [N],
+    count/length, uniq [-c] [col], group-by [--asc] <col>, schema/describe,
+    stats/measure [cols...], tee [-a] <files...>,
+    from json|csv|tsv|lines, to json|compact|csv|tsv|md.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
   * Shell state: alias/unalias, history [N], export, unset, set [-e|+e] [-o|+o pipefail].
