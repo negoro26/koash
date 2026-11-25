@@ -39,7 +39,8 @@ BASH TRANSITION QUICK GUIDE:
   * Table verbs: where <col op val>, select <cols...>, reject <cols...>,
     sort-by [--desc] <col>, reverse, first [N], last [N], skip [N],
     count/length, uniq [-c] [col], group-by [--asc] <col>, schema/describe,
-    stats/measure [cols...], tee [-a] <files...>, from json, to json|compact.
+    stats/measure [cols...], tee [-a] <files...>,
+    from json|csv|tsv|lines, to json|compact|csv|tsv|md.
   * Undo & code intel: tx-log, undo, redo, rollback <id>, prewalk, ast, diag, refs, rename.
   * Startup file: interactive koa runs ~/.koarc (or $KOA_RC) line by line; -c and --rpc never do.
   * Shell state: alias/unalias, history [N], export, unset.
