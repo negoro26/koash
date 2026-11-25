@@ -176,7 +176,7 @@ def run_both(script):
     for argv in ([koa, "-c", script], ["bash", "-c", script]):
         workdir = tempfile.mkdtemp()
         shutil.copytree(root, workdir, dirs_exist_ok=True)
-        out = subprocess.run(argv, cwd=workdir, capture_output=True, timeout=30)
+        out = subprocess.run(argv, cwd=workdir, capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
         results.append((out.stdout, out.stderr, out.returncode, snapshot(workdir)))
         shutil.rmtree(workdir)
     return results

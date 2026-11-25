@@ -25,9 +25,9 @@ koa -c 'cat notes.txt | where text =~ todo'
 koa -c 'ps | where name == bash | to json'
 ```
 
-`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `reject`, `sort-by`, `reverse`, `first`, `last`, `skip`, `count` (`length`), `uniq`, `group-by`, `schema` (`describe`), `stats` (`measure`), `tee` and `to json` work on those tables.
+`ls`, `find`, `stat`, `ps`, `cat`, `grep` and `env` return tables. `where`, `select`, `reject`, `sort-by`, `reverse`, `first`, `last`, `skip`, `count` (`length`), `group-by`, `schema` (`describe`), `stats` (`measure`) and `to json` work on those tables.
 
-`uniq` and `tee` keep GNU behaviour for text. Bytes from a program, `cat`, `grep`, `head` and `tail` rows, and file arguments run the real `uniq` and `tee`, so `sort w | uniq -c` and `tee /bad/path` print what bash prints. Only other tables, such as `ls | uniq name`, get the table behaviour.
+`uniq` and `tee` also work on tables such as `ls` or `group-by` output, as in `ls | uniq name`. On text they are GNU `uniq` and `tee`. Text means bytes from a program, `cat`, `grep`, `head` and `tail` rows, and file arguments, so `sort w | uniq -c` and `tee /bad/path` print what bash prints.
 
 Normal programs still work. When a table goes into one, it gets the text bash would send:
 
