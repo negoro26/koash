@@ -261,15 +261,27 @@ impl<'a> Parser<'a> {
     fn parse_pipeline(&mut self) -> Result<Pipeline, SyntaxError> {
         let mut negated = false;
         let mut bang_span: Option<Span> = None;
-        if let Some(Token {
+        while let Some(Token {
             kind: TokenKind::Word(word),
             span,
         }) = self.peek()
             && matches!(word.parts.as_slice(), [WordPart::Literal { text, .. }] if text == "!")
         {
-            negated = true;
-            bang_span = Some(*span);
+            negated = !negated;
+            bang_span = Some(bang_span.map_or(*span, |seen: Span| seen.merge(*span)));
             self.advance();
+        }
+        if let Some(span) = bang_span
+            && matches!(
+                self.peek().map(|t| &t.kind),
+                None | Some(TokenKind::Semi | TokenKind::Newline | TokenKind::Eof)
+            )
+        {
+            return Ok(Pipeline {
+                commands: Vec::new(),
+                negated,
+                span,
+            });
         }
         let first = self.parse_command()?;
         let mut span = match bang_span {

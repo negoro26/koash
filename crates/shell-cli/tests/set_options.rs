@@ -54,13 +54,15 @@ fn set_errexit_pipefail_and_pipestatus() {
     let dir = scratch("set");
 
     let rows = json_rows(&koa(&dir, "set -o | to json"));
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows[0]["option"], "errexit");
     assert_eq!(rows[0]["enabled"], false);
     assert_eq!(rows[1]["option"], "noglob");
     assert_eq!(rows[1]["enabled"], false);
-    assert_eq!(rows[2]["option"], "pipefail");
+    assert_eq!(rows[2]["option"], "nounset");
     assert_eq!(rows[2]["enabled"], false);
+    assert_eq!(rows[3]["option"], "pipefail");
+    assert_eq!(rows[3]["enabled"], false);
 
     let out = koa(&dir, "set -e; cat nope; echo should-not-run");
     assert!(!out.status.success());

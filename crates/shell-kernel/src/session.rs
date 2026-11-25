@@ -190,6 +190,8 @@ pub struct Session {
     pub errexit: bool,
     pub pipefail: bool,
     pub noglob: bool,
+    pub nounset: bool,
+    pub unbound_status: i32,
 }
 
 impl Session {
@@ -274,6 +276,8 @@ impl Session {
             errexit: false,
             pipefail: false,
             noglob: false,
+            nounset: false,
+            unbound_status: 1,
         })
     }
 
@@ -337,6 +341,8 @@ impl Session {
             errexit: self.errexit,
             pipefail: self.pipefail,
             noglob: self.noglob,
+            nounset: self.nounset,
+            unbound_status: self.unbound_status,
         }
     }
 
@@ -407,6 +413,8 @@ impl Session {
             errexit: false,
             pipefail: false,
             noglob: false,
+            nounset: false,
+            unbound_status: 1,
         })
     }
 

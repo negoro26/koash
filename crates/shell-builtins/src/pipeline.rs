@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use nix::unistd::Pid;
 use shell_kernel::{
     JobState, Session, command_word, expand_word, expand_words, find_executable,
-    reap_background_jobs,
+    reap_background_jobs, unbound_variable,
 };
 use shell_surface::SurfaceMode;
 use shell_syntax::{Command, ListOp, Pipeline, Program, RedirectKind, Redirection, SimpleCommand};
@@ -60,8 +60,28 @@ pub fn run_program(session: &mut Session, program: &Program, sink: &Sink) -> i32
                 return KILLED_STATUS;
             }
             let background = matches!(item.op, Some(ListOp::Background));
-            status = run_pipeline(session, &item.pipeline, background, &program.source, sink);
+            let unbound = session
+                .nounset
+                .then(|| unbound_variable(&item.pipeline, &session.env))
+                .flatten();
+            let fatal = unbound.is_some() && item.pipeline.commands.len() == 1;
+            status = match unbound {
+                Some(name) => {
+                    sink.stderr_line(&format!("koa: {name}: unbound variable"));
+                    match (fatal, session.errexit) {
+                        (true, false) => session.unbound_status,
+                        _ => 1,
+                    }
+                }
+                None => run_pipeline(session, &item.pipeline, background, &program.source, sink),
+            };
             session.last_status = status;
+            if fatal {
+                if !session.interactive {
+                    session.should_exit = Some(status);
+                }
+                break;
+            }
             if session.should_exit.is_some() {
                 break;
             }
@@ -90,7 +110,7 @@ fn run_pipeline(
     sink: &Sink,
 ) -> i32 {
     if pipeline.commands.is_empty() {
-        return 0;
+        return i32::from(pipeline.negated);
     }
     if !background
         && let [Command::Simple(simple)] = pipeline.commands.as_slice()
@@ -341,6 +361,9 @@ fn option_flags(session: &Session, shell: &str) -> Vec<String> {
     if session.noglob {
         flags.push("-f".to_string());
     }
+    if session.nounset {
+        flags.push("-u".to_string());
+    }
     if session.pipefail && shell == "bash" {
         flags.extend(["-o".to_string(), "pipefail".to_string()]);
     }
@@ -400,7 +423,7 @@ fn run_stages(
                 for report in &reports {
                     plan.sink.diag(report);
                 }
-                let soft_failure = i32::from(!reports.is_empty());
+                let soft_failure = i32::from(reports.iter().any(|r| !r.code.starts_with("W_")));
                 let status = match result {
                     Ok(value) if last => match finish_builtin_output(session, stage, value) {
                         Ok(value) => {
@@ -517,7 +540,7 @@ fn record_pipestatus(session: &mut Session, codes: &[i32], last: i32, pipefail: 
             .map(i32::to_string)
             .collect::<Vec<_>>()
             .join(" ");
-        session.env.insert("PIPESTATUS".to_string(), joined);
+        session.env.set_pipestatus(joined);
     }
     if pipefail {
         codes

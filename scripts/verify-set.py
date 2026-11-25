@@ -94,13 +94,18 @@ SETFLAGS = [
     "set -e -Z; echo $?; false; echo after",
     "set -Z; echo $?",
     "set -o nonsuch; echo $?",
-    "set -o errexit -o nonsuch; echo $?; false; echo after",
+    "set -o nonsuch; echo $?; false; echo after",
     "set -ex; echo hi",
     "set -x; echo hi",
     "set -C; echo hi",
     "set -euxo pipefail; false | true; echo after",
     "set -o posix; echo hi",
-    "set -o noclobber -o pipefail; false | true; echo $?",
+    "set -euo pipefail; false; echo after",
+    "set -u; echo $NOPE; echo after",
+    "set -u; echo ${NOPE:-d}",
+    "set -u; echo ${NOPE:-d}; echo $NOPE; echo after",
+    "set -eu; echo \"$@\" x",
+    "set -u; v=1; echo ${v:-d} ${v-d}",
     "set -o allexport; echo hi; echo $?",
 ]
 NOUNSET = [
@@ -262,7 +267,7 @@ for prefix in OPTION_LISTING:
     checked += 1
     root = fixture()
     sep = "; " if prefix else ""
-    want = run(["bash", "-c"], f"{prefix}{sep}set -o | grep -E '^(errexit|noglob|pipefail)'", root).stdout.decode()
+    want = run(["bash", "-c"], f"{prefix}{sep}set -o | grep -E '^(errexit|noglob|nounset|pipefail)'", root).stdout.decode()
     want = {line.split()[0]: line.split()[1] == "on" for line in want.splitlines()}
     got = run([koa, "-c"], f"{prefix}{sep}set -o | to json", root)
     try:
@@ -285,7 +290,7 @@ for script in BAD_OPTIONS:
 NOTICES = [
     ("set -x; echo hi", "xtrace"),
     ("set -ex; echo hi", "xtrace"),
-    ("set -o noclobber; echo hi", "noclobber"),
+    ("set -o monitor; echo hi", "monitor"),
     ("set -euxo pipefail; echo hi", "xtrace"),
 ]
 for script, name in NOTICES:

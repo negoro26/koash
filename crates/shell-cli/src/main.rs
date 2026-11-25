@@ -178,6 +178,7 @@ fn run_oneshot(
     };
     shell_kernel::forward_to_jobs(false);
     session.last_status = last_status.unwrap_or(0);
+    session.unbound_status = 127;
     if let Some(pid) = last_bg {
         session.env.set_last_background(pid);
     }

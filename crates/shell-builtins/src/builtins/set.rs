@@ -16,7 +16,7 @@ record! {
 static SIGNATURE: Signature = Signature {
     name: "set",
     aliases: &[],
-    description: "Inspect or toggle shell options (-e/+e errexit, -f/+f noglob, -o/+o pipefail)",
+    description: "Inspect or toggle shell options (-e errexit, -f noglob, -u nounset, -o pipefail)",
     flags: &[],
     columns: <OptionRow<'static> as Record>::COLUMNS,
     input: InputMode::None,
@@ -37,7 +37,7 @@ impl Builtin for Set {
         _input: Value,
     ) -> Result<Value, StructuredDiagnostic> {
         if args.is_empty() || (args.len() == 1 && args[0] == "-o") {
-            let mut rows = Rows::<OptionRow<'static>>::with_capacity(3);
+            let mut rows = Rows::<OptionRow<'static>>::with_capacity(4);
             rows.push(&OptionRow {
                 option: "errexit",
                 enabled: session.errexit,
@@ -47,47 +47,144 @@ impl Builtin for Set {
                 enabled: session.noglob,
             });
             rows.push(&OptionRow {
+                option: "nounset",
+                enabled: session.nounset,
+            });
+            rows.push(&OptionRow {
                 option: "pipefail",
                 enabled: session.pipefail,
             });
             return Ok(Value::from_batch(rows.finish()?));
         }
 
-        const USAGE: &str = "set [-e|+e] [-f|+f] [-o|+o errexit|noglob|pipefail]";
-        let mut rest = args.iter().map(String::as_str);
-        while let Some(arg) = rest.next() {
-            let enable = match arg.chars().next() {
-                Some('-') => true,
-                Some('+') => false,
-                _ => return Err(usage_error(format!("set: unsupported flag `{arg}`"), USAGE)),
-            };
-            if arg.len() == 1 {
-                return Err(usage_error(format!("set: unsupported flag `{arg}`"), USAGE));
+        let mut ignored = Vec::new();
+        for (option, enable) in parse(args)? {
+            match option.support {
+                Support::Errexit => session.errexit = enable,
+                Support::Noglob => session.noglob = enable,
+                Support::Nounset => session.nounset = enable,
+                Support::Pipefail => session.pipefail = enable,
+                Support::Ignored => ignored.push(option.name),
+                Support::Refused => {}
             }
-            for letter in arg[1..].chars() {
-                match letter {
-                    'e' => session.errexit = enable,
-                    'f' => session.noglob = enable,
-                    'o' => match rest.next() {
-                        Some("errexit") => session.errexit = enable,
-                        Some("noglob") => session.noglob = enable,
-                        Some("pipefail") => session.pipefail = enable,
-                        Some(other) => {
-                            return Err(usage_error(
-                                format!("set: unknown option `{other}`"),
-                                USAGE,
-                            ));
-                        }
-                        None => {
-                            return Err(usage_error("set: -o/+o requires an option name", USAGE));
-                        }
-                    },
-                    _ => {
-                        return Err(usage_error(format!("set: unsupported flag `{arg}`"), USAGE));
-                    }
-                }
-            }
+        }
+        if !ignored.is_empty() {
+            session.report(StructuredDiagnostic::new(
+                "W_UNSUPPORTED",
+                format!("set: {} not implemented, ignored", ignored.join(", ")),
+                None,
+                None,
+            ));
         }
         Ok(Value::Empty)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Support {
+    Errexit,
+    Noglob,
+    Nounset,
+    Pipefail,
+    Ignored,
+    Refused,
+}
+
+struct ShellOption {
+    name: &'static str,
+    letter: Option<char>,
+    support: Support,
+}
+
+const fn opt(name: &'static str, letter: Option<char>, support: Support) -> ShellOption {
+    ShellOption {
+        name,
+        letter,
+        support,
+    }
+}
+
+static OPTIONS: [ShellOption; 27] = [
+    opt("allexport", Some('a'), Support::Refused),
+    opt("braceexpand", Some('B'), Support::Ignored),
+    opt("emacs", None, Support::Ignored),
+    opt("errexit", Some('e'), Support::Errexit),
+    opt("errtrace", Some('E'), Support::Ignored),
+    opt("functrace", Some('T'), Support::Ignored),
+    opt("hashall", Some('h'), Support::Ignored),
+    opt("histexpand", Some('H'), Support::Ignored),
+    opt("history", None, Support::Ignored),
+    opt("ignoreeof", None, Support::Ignored),
+    opt("interactive-comments", None, Support::Ignored),
+    opt("keyword", Some('k'), Support::Refused),
+    opt("monitor", Some('m'), Support::Ignored),
+    opt("noclobber", Some('C'), Support::Refused),
+    opt("noexec", Some('n'), Support::Refused),
+    opt("noglob", Some('f'), Support::Noglob),
+    opt("nolog", None, Support::Ignored),
+    opt("notify", Some('b'), Support::Ignored),
+    opt("nounset", Some('u'), Support::Nounset),
+    opt("onecmd", Some('t'), Support::Refused),
+    opt("physical", Some('P'), Support::Ignored),
+    opt("pipefail", None, Support::Pipefail),
+    opt("posix", None, Support::Ignored),
+    opt("privileged", Some('p'), Support::Refused),
+    opt("verbose", Some('v'), Support::Ignored),
+    opt("vi", None, Support::Ignored),
+    opt("xtrace", Some('x'), Support::Ignored),
+];
+
+const USAGE: &str = "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]";
+
+fn parse(args: &[String]) -> Result<Vec<(&'static ShellOption, bool)>, StructuredDiagnostic> {
+    let mut changes = Vec::new();
+    let mut rest = args.iter().map(String::as_str);
+    while let Some(arg) = rest.next() {
+        let enable = match arg.chars().next() {
+            Some('-') => true,
+            Some('+') => false,
+            _ => return Err(positional_error()),
+        };
+        match &arg[1..] {
+            "" => break,
+            "-" if enable => {
+                if rest.next().is_some() {
+                    return Err(positional_error());
+                }
+                break;
+            }
+            letters => {
+                for letter in letters.chars() {
+                    let option = if letter == 'o' {
+                        let name = rest.next().ok_or_else(|| {
+                            usage_error("set: -o/+o requires an option name", USAGE)
+                        })?;
+                        OPTIONS.iter().find(|o| o.name == name).ok_or_else(|| {
+                            usage_error(format!("set: {name}: invalid option name"), USAGE)
+                        })?
+                    } else {
+                        OPTIONS
+                            .iter()
+                            .find(|o| o.letter == Some(letter))
+                            .ok_or_else(|| {
+                                let sign = if enable { '-' } else { '+' };
+                                usage_error(format!("set: {sign}{letter}: invalid option"), USAGE)
+                            })?
+                    };
+                    if option.support == Support::Refused {
+                        return Err(usage_error(
+                            format!("set: {} is not supported", option.name),
+                            USAGE,
+                        ));
+                    }
+                    changes.push((option, enable));
+                }
+            }
+        }
+    }
+    Ok(changes)
+}
+
+fn positional_error() -> StructuredDiagnostic {
+    usage_error("set: positional parameters are not supported", USAGE)
 }
