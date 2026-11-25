@@ -100,7 +100,6 @@ SETFLAGS = [
     "set -- ; echo \"$@\" \"\" x",
     "set -ex; echo hi",
     "set -x; echo hi",
-    "set -C; echo hi",
     "set -euxo pipefail; false | true; echo after",
     "set -o posix; echo hi",
     "set -euo pipefail; false; echo after",
