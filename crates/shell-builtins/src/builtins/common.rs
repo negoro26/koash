@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use grep_searcher::Searcher;
 use grep_searcher::sinks::UTF8;
 use shell_kernel::Session;
-use shell_value::{Column, Record, Rows, StructuredDiagnostic, hashline_bytes, record};
+use shell_value::{
+    Column, Record, RecordBatch, Rows, StructuredDiagnostic, hashline_bytes, record,
+};
 
 use crate::args::Args;
 use crate::builtin::Signature;
@@ -42,6 +44,13 @@ record! {
 pub(crate) const HASHLINE_COLUMNS: &[Column] = <HashlineRow<'static> as Record>::COLUMNS;
 
 pub(crate) type HashlineRows = Rows<HashlineRow<'static>>;
+
+pub(crate) fn is_hashline(batch: &RecordBatch) -> bool {
+    batch
+        .schema()
+        .names()
+        .eq(HASHLINE_COLUMNS.iter().map(Column::name))
+}
 
 pub(crate) fn push_hashline_row(rows: &mut HashlineRows, file: &str, line: u64, text: &str) {
     let tag = hashline_bytes(text.as_bytes());
