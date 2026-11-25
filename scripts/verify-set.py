@@ -84,7 +84,7 @@ PIPESTATUS = [
 SETFLAGS = [
     "set -euo pipefail; echo hi",
     "set -eu; echo hi",
-    "set -ue; echo hi",
+    "set -uf; echo hi",
     "set -e -u; echo hi",
     "set -eu -o pipefail; echo hi",
     "set -o errexit -o pipefail; false | true; echo after",
