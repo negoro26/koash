@@ -7,6 +7,7 @@ pub struct SessionEnv {
     overlay: FxHashMap<String, Option<String>>,
     base: Option<BTreeMap<String, String>>,
     last_background: Option<i32>,
+    pipestatus: Option<String>,
 }
 
 impl Default for SessionEnv {
@@ -21,6 +22,7 @@ impl SessionEnv {
             overlay: FxHashMap::default(),
             base: None,
             last_background: None,
+            pipestatus: None,
         }
     }
 
@@ -29,6 +31,7 @@ impl SessionEnv {
             overlay: FxHashMap::default(),
             base: Some(map),
             last_background: None,
+            pipestatus: None,
         }
     }
 
@@ -36,9 +39,18 @@ impl SessionEnv {
         self.last_background = Some(pid);
     }
 
+    pub fn set_pipestatus(&mut self, codes: String) {
+        self.pipestatus = Some(codes);
+    }
+
     pub fn get(&self, key: &str) -> Option<String> {
         if key == "!" {
             return self.last_background.map(|pid| pid.to_string());
+        }
+        if key == "PIPESTATUS"
+            && let Some(codes) = &self.pipestatus
+        {
+            return Some(codes.clone());
         }
         if let Some(entry) = self.overlay.get(key) {
             return entry.clone();

@@ -57,6 +57,6 @@ impl Builtin for Fg {
             Some(job.id),
         );
         session.kill.untrack(job.pgid);
-        status
+        status.status
     }
 }

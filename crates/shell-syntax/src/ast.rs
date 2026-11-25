@@ -27,6 +27,7 @@ pub enum ListOp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pipeline {
     pub commands: Vec<Command>,
+    pub negated: bool,
     pub span: Span,
 }
 

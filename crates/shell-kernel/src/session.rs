@@ -188,6 +188,11 @@ pub struct Session {
     fallback_noticed: HashSet<String>,
     pub aliases: BTreeMap<String, String>,
     pub dir_stack: Vec<PathBuf>,
+    pub errexit: bool,
+    pub pipefail: bool,
+    pub noglob: bool,
+    pub nounset: bool,
+    pub unbound_status: i32,
 }
 
 impl Session {
@@ -270,6 +275,11 @@ impl Session {
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
             dir_stack: Vec::new(),
+            errexit: false,
+            pipefail: false,
+            noglob: false,
+            nounset: false,
+            unbound_status: 1,
         })
     }
 
@@ -331,6 +341,11 @@ impl Session {
             fallback_noticed: HashSet::new(),
             aliases: self.aliases.clone(),
             dir_stack: self.dir_stack.clone(),
+            errexit: self.errexit,
+            pipefail: self.pipefail,
+            noglob: self.noglob,
+            nounset: self.nounset,
+            unbound_status: self.unbound_status,
         }
     }
 
@@ -399,6 +414,11 @@ impl Session {
             fallback_noticed: HashSet::new(),
             aliases: BTreeMap::new(),
             dir_stack: Vec::new(),
+            errexit: false,
+            pipefail: false,
+            noglob: false,
+            nounset: false,
+            unbound_status: 1,
         })
     }
 

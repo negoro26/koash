@@ -1,4 +1,4 @@
-use shell_syntax::{Parser, Word, WordPart};
+use shell_syntax::{Command, Parser, Pipeline, Word, WordPart};
 
 use crate::brace;
 use crate::env::SessionEnv;
@@ -107,6 +107,33 @@ pub fn expand_word(word: &Word, env: &SessionEnv, last_status: i32) -> String {
     Field::new(word, env, last_status).text
 }
 
+pub fn unbound_variable<'a>(pipeline: &'a Pipeline, env: &SessionEnv) -> Option<&'a str> {
+    pipeline.commands.iter().find_map(|command| {
+        let Command::Simple(simple) = command else {
+            return None;
+        };
+        let assigned = simple.assignments.iter().map(|a| &a.value);
+        let redirected = simple.redirections.iter().filter_map(|r| r.target.as_ref());
+        assigned
+            .chain(&simple.words)
+            .chain(redirected)
+            .find_map(|word| unbound_in(&word.parts, env))
+    })
+}
+
+fn unbound_in<'a>(parts: &'a [WordPart], env: &SessionEnv) -> Option<&'a str> {
+    parts.iter().find_map(|part| match part {
+        WordPart::Var { name, .. }
+            if !matches!(name.as_str(), "?" | "$" | "@" | "*" | "#" | "-" | "0" | "_")
+                && env.get(name).is_none() =>
+        {
+            Some(name.as_str())
+        }
+        WordPart::DoubleQuoted { parts, .. } => unbound_in(parts, env),
+        _ => None,
+    })
+}
+
 pub fn expand_words(words: &[Word], session: &Session) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(words.len());
     let sigil = Parser::is_sigil_cmd(words);
@@ -139,7 +166,7 @@ pub fn command_word(words: &[Word], session: &Session) -> Option<String> {
 }
 
 fn push_pathname(syms: &[Sym], keep_empty: bool, session: &Session, out: &mut Vec<String>) {
-    if pathname::has_meta(syms) {
+    if !session.noglob && pathname::has_meta(syms) {
         let matches = pathname::expand(syms, &session.cwd);
         if !matches.is_empty() {
             out.extend(matches);
@@ -153,8 +180,11 @@ fn push_pathname(syms: &[Sym], keep_empty: bool, session: &Session, out: &mut Ve
 }
 
 fn kept_when_empty(part: &WordPart) -> bool {
-    matches!(
-        part,
-        WordPart::SingleQuoted { .. } | WordPart::DoubleQuoted { .. } | WordPart::Tilde { .. }
-    )
+    match part {
+        WordPart::DoubleQuoted { parts, .. } => {
+            !matches!(parts.as_slice(), [WordPart::Var { name, .. }] if name == "@")
+        }
+        WordPart::SingleQuoted { .. } | WordPart::Tilde { .. } => true,
+        _ => false,
+    }
 }
