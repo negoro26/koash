@@ -77,6 +77,53 @@ PIPESTATUS = [
     "set -o pipefail; false | true; echo $PIPESTATUS",
     "cat nonexistent | cat; echo $PIPESTATUS",
     "echo a | sh -c 'exit 5'; echo $PIPESTATUS",
+    "false | true; sh -c 'echo [$PIPESTATUS]'",
+    "false | true; sh -c 'env | grep -c PIPESTATUS'",
+    "sh -c 'exit 3' | true; PIPESTATUS_PROBE=1 sh -c 'echo [$PIPESTATUS]'",
+]
+SETFLAGS = [
+    "set -euo pipefail; echo hi",
+    "set -eu; echo hi",
+    "set -ue; echo hi",
+    "set -e -u; echo hi",
+    "set -eu -o pipefail; echo hi",
+    "set -o errexit -o pipefail; false | true; echo after",
+    "set -euo pipefail; false | true; echo after",
+    "set -euo pipefail; true | false; echo after",
+    "set -euo pipefail; set +eu +o pipefail; false | true; echo after",
+    "set -e -Z; echo $?; false; echo after",
+    "set -Z; echo $?",
+    "set -o nonsuch; echo $?",
+    "set -o errexit -o nonsuch; echo $?; false; echo after",
+    "set -ex; echo hi",
+    "set -x; echo hi",
+    "set -C; echo hi",
+    "set -euxo pipefail; false | true; echo after",
+    "set -o posix; echo hi",
+    "set -o noclobber -o pipefail; false | true; echo $?",
+    "set -o allexport; echo hi; echo $?",
+]
+NOUNSET = [
+    "set -u; echo a; echo $x; echo b",
+    "set -u; echo $x; echo after",
+    "set -u; echo \"$x\"; echo after",
+    "set -u; echo ok; echo $@ $* $?; echo after",
+    "set -u; false && echo $x; echo after",
+    "set -u; true || echo $x; echo after",
+    "set -u; x=$y; echo after",
+    "set -u; x=1; echo $x",
+    "set -u; x=1; unset x; echo $x; echo after",
+    "set -u; export X=1; echo $X",
+    "set -u; echo $x || echo y; echo after",
+    "set -u; set +u; echo $x ok",
+    "set -u; set +o nounset; echo $x ok",
+    "set -o nounset; echo $x; echo after",
+    "set -u; cat $x </dev/null; echo after",
+    "set -u; echo a > $x; echo after",
+    "set -u; echo $HOME > /dev/null; echo ok",
+    "set -eu; echo $x; echo after",
+    "set -u; echo $x | cat; echo after",
+    "set -u; echo ~; echo after",
 ]
 NEGATION = [
     "! true; echo $?",
@@ -99,6 +146,18 @@ NEGATION = [
     "! export NEGATED=1; echo $?",
     "! unset NEGATED; echo $?",
     "set -e; ! cd /nonexistent-dir-xyz 2>/dev/null; echo after",
+    "! ! false; echo $?",
+    "! ! true; echo $?",
+    "! ! ! true; echo $?",
+    "! ! ! false; echo $?",
+    "!; echo next",
+    "!; echo $?",
+    "! !; echo $?",
+    "!\necho after $?",
+    "false; !; echo $?",
+    "set -e; ! ! false; echo after",
+    "set -e; ! ! true; echo after",
+    "set -e; !; echo after",
 ]
 NOGLOB = [
     "set -f; printf '[%s]' *.txt",
@@ -165,6 +224,8 @@ def compare(script, bash_script=None):
 
 for script in ERREXIT + PIPEFAIL + NEGATION + NOGLOB:
     compare(script)
+for script in SETFLAGS + NOUNSET:
+    compare(script)
 for script in PIPESTATUS:
     compare(script, script.replace("$PIPESTATUS", '"${PIPESTATUS[*]}"').replace("echo ", "echo ", 1))
 
@@ -220,6 +281,21 @@ for script in BAD_OPTIONS:
     shutil.rmtree(root)
     if (want == 0) != (got == 0):
         bad.append(f"{script!r}: bash rc={want}, koa rc={got}")
+
+NOTICES = [
+    ("set -x; echo hi", "xtrace"),
+    ("set -ex; echo hi", "xtrace"),
+    ("set -o noclobber; echo hi", "noclobber"),
+    ("set -euxo pipefail; echo hi", "xtrace"),
+]
+for script, name in NOTICES:
+    checked += 1
+    root = fixture()
+    got = run([koa, "-c"], script, root)
+    shutil.rmtree(root)
+    lines = [l for l in got.stderr.decode().splitlines() if name in l]
+    if got.returncode != 0 or got.stdout != b"hi\n" or len(lines) != 1 or len(got.stderr.splitlines()) != 1:
+        bad.append(f"{script!r}: want rc 0, stdout 'hi' and one notice naming {name}; got rc={got.returncode} {got.stdout!r} {got.stderr[:120]!r}")
 
 print(f"checked {checked} scripts against bash")
 for line in bad:
