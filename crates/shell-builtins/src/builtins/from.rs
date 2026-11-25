@@ -99,7 +99,7 @@ fn parse_lines(bytes: &[u8]) -> Result<Value, StructuredDiagnostic> {
 fn parse_delimited(bytes: &[u8], delim: char) -> Result<Value, StructuredDiagnostic> {
     let text = String::from_utf8_lossy(bytes);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let records = split_delimited_records(&text, delim);
+    let records = split_delimited_records(text, delim);
     let Some((header, data)) = records.split_first() else {
         return Ok(Value::from_batch(RecordBatch::empty()));
     };
